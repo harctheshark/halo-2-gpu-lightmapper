@@ -1,0 +1,67 @@
+# title: P3 H2LM_NOWINDOW + payload osoy_launch pin token (dev_AO)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: d12b753aef68eebce1d2e7e814e264f2
+# result-md5: dc4e753edd290da1ddc76ebfac7fafc9
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -352,6 +352,13 @@
+ $W    = if ($env:H2LM_WORK) { $env:H2LM_WORK } else { "$ROOT\GPU Lightmap Work" }
+ $WC   = if ($env:H2LM_CODE) { $env:H2LM_CODE } else { $W }
+ # <<< H2LM P1
++# >>> H2LM P3 (standalone exe): H2LM_NOWINDOW=1 = no console window for any tool_fast run -- osoy_launch.exe gets --nowindow
++# (CREATE_NO_WINDOW) and the three plain Start-Process launches (skeleton, capture, write-back) -WindowStyle Hidden. UNSET (every
++# production caller) = an empty splat and no extra osoy_launch argument: the same command lines as before. Any other value is refused.
++if ($null -ne $env:H2LM_NOWINDOW -and $env:H2LM_NOWINDOW -ne '1') { throw "H2LM: H2LM_NOWINDOW='$($env:H2LM_NOWINDOW)' -- only 1 (or unset) is valid" }
++$h2lmNoWin = $env:H2LM_NOWINDOW -eq '1'
++$h2lmHide  = if ($h2lmNoWin) { @{ WindowStyle = 'Hidden' } } else { @{} }
++# <<< H2LM P3
+ # v371: the files v371 changes are resolved next to THIS script -- the staged copy (_research\scenery\stage, which mirrors the
+ # production layout) runs the staged DLL / fullgpu / guards, the production copy (after apply_v371.py) the production ones.
+ $BIN  = if ($PSScriptRoot) { $PSScriptRoot } else { $W }
+@@ -459,7 +466,10 @@
+ $OSOY        = "$WC\osoyoos"
+ $OSOY_DLL    = "$OSOY\H2ToolHooks.dll"        # = the user's Osoyoos-scenery-build Release\H2ToolHooks.dll (2026-07-19 12:51)
+ $OSOY_LAUNCH = "$OSOY\osoy_launch.exe"        # osoy_launch.c, build_osoy_launch.bat; selftest\selftest.ps1
+-$OSOY_PIN    = [ordered]@{ $OSOY_DLL = '9DEFF656B076EE101B22A7C3623FFE25'; $OSOY_LAUNCH = 'C304184E6DA7D7A0C7BB0E05900B926D' }
++# H2LM P3: relocated code (H2LM_CODE) runs the PAYLOAD's osoy_launch.exe (the --nowindow / --quality-row build), pinned to its own md5,
++# filled in when the payload is built (the OSOY_LAUNCH_MD5 build token, tools\strict_patch.py --set); the production layout keeps
++# the production pin.
++$OSOY_PIN    = [ordered]@{ $OSOY_DLL = '9DEFF656B076EE101B22A7C3623FFE25'; $OSOY_LAUNCH = $(if ($env:H2LM_CODE) { '%%H2LM:OSOY_LAUNCH_MD5%%' } else { 'C304184E6DA7D7A0C7BB0E05900B926D' }) }
+ $osoyOn      = [bool]$PluckerFix -or [bool]$SceneryFix
+ $osoyDesc    = "plucker={0} scenery={1}" -f $(if ($PluckerFix) { "ON" } else { "off" }), $(if ($SceneryFix) { "ON" } else { "off" })
+ # a leftover shell OSOYOOS_* never reaches a tool (osoy_launch.exe strips them anyway; a plain Start-Process run has no H2ToolHooks)
+@@ -480,6 +490,7 @@
+     $la = @()
+     if ($PluckerFix) { $la += '--plucker' }
+     if ($SceneryFix) { $la += '--scenery' }
++    if ($h2lmNoWin) { $la += '--nowindow' }     # H2LM P3: the tool gets CREATE_NO_WINDOW (never DETACHED_PROCESS: H2ToolHooks calls AllocConsole)
+     $la += @('--dll', $OSOY_DLL, '--exe', $TOOL, '--argsfile', $af, '--cwd', $ROOT, '--hold')
+     if ($outFile) { $la += @('--stdout', $outFile, '--stderr', $errFile) }
+     $lo = @(& $OSOY_LAUNCH @la 2>&1 | ForEach-Object { "$_" })
+@@ -654,7 +665,7 @@
+             $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt"
+         } else {
+         $p = Start-Process -FilePath $TOOL -ArgumentList $a -WorkingDirectory $ROOT -PassThru `
+-                -RedirectStandardOutput "$run\tool_stdout.txt" -RedirectStandardError "$run\tool_stderr.txt"
++                -RedirectStandardOutput "$run\tool_stdout.txt" -RedirectStandardError "$run\tool_stderr.txt" @h2lmHide     # H2LM P3
+         $null = $p.Handle     # keeps ExitCode readable after the exit (Start-Process -PassThru)
+         }
+     } finally {
+@@ -843,7 +854,7 @@
+         else { Write-Host "      v372W: CPU-cast process pid $($castProc.Id) started beside the capture (the CPU's own photon cast -> castcpu\)" } }
+     if ($osoyOn) { $p = Start-OsoyTool $a "capture" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven
+     else {
+-    $p = Start-Process -FilePath $TOOL -ArgumentList $a -WorkingDirectory $ROOT -PassThru
++    $p = Start-Process -FilePath $TOOL -ArgumentList $a -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+     }
+     # Settle before the first attempt: inject.exe fails silently against a process whose threads are
+     # not up yet. And capture with a PLAIN ASSIGNMENT -- "$(& $INJ ... 2>&1)" came back empty even on
+@@ -1989,7 +2000,7 @@
+     $aFull = "lightmaps $Scenario $Bsp low -tags_dir tags -data_dir data -game_root_dir ."
+     if ($osoyOn) { $p = Start-OsoyTool $aFull "writeback" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven
+     else {
+-    $p = Start-Process -FilePath $TOOL -ArgumentList $aFull -WorkingDirectory $ROOT -PassThru
++    $p = Start-Process -FilePath $TOOL -ArgumentList $aFull -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+     $null = $p.Handle     # v371 (m2): keeps ExitCode readable after the exit -- the 0x5CE1 refusal is read from it
+     }
+     # Settle before the first attempt: inject.exe fails silently against a process whose threads are

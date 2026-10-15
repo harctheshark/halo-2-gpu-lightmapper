@@ -1,0 +1,37 @@
+# title: N4 ao_seamfix.py: cKDTree.query_ball_point -> ao_ballgrid.ball_pair_keys (no scipy)
+# source: _research/ao/ao_seamfix.py
+# base-md5: 93c2fe8c5ce812358b58b7c2073da030
+# result-md5: 7b239011f1a9d6becbc11ce593398cd6
+--- a/_research/ao/ao_seamfix.py
++++ b/_research/ao/ao_seamfix.py
+@@ -15,7 +15,7 @@
+ in that order.
+ """
+ import numpy as np
+-from scipy.spatial import cKDTree
++import ao_ballgrid             # N4 (H2 GPU Lightmapper standalone, S1.8): exact numpy stand-in for cKDTree.query_ball_point, no scipy
+ 
+ NB8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1))
+ 
+@@ -81,19 +81,10 @@
+ def seam_pairs(ord_, x, y, P, nrm, has, ts, prm, edge=None):
+     """the coupled pairs (a < b), sorted by (a, b): -> a, b, w_ab (weight of b in a's sum), w_ba (weight of a in b's sum). Candidates: texels with a sample."""
+     ok = np.flatnonzero(has)
+-    X = P[ok]; tree = cKDTree(X)
++    X = P[ok]
+     tr = ts[ord_[ok]]; r = np.minimum(prm.radius * prm.w_zero_rd * tr, prm.rcap)
+-    K = []
+     nn_ = np.int64(len(P))
+-    for c0 in range(0, len(ok), 100000):
+-        sl = slice(c0, min(c0 + 100000, len(ok)))
+-        lists = tree.query_ball_point(X[sl], r[sl], workers=1)
+-        cnt = np.fromiter((len(l) for l in lists), np.int64, count=len(lists))
+-        i = ok[np.repeat(np.arange(sl.start, sl.stop), cnt)]
+-        j = ok[np.fromiter((q for l in lists for q in l), np.int64, count=int(cnt.sum()))]
+-        k = i != j; i = i[k]; j = j[k]
+-        K.append(np.minimum(i, j) * nn_ + np.maximum(i, j))
+-    K = np.unique(np.concatenate(K))                       # sorted unique unordered pairs: the deterministic order
++    K = ao_ballgrid.ball_pair_keys(X, r, ok, nn_)         # sorted unique unordered pairs: the deterministic order (== the cKDTree loop, S1.8 A/B)
+     a = K // nn_; b = K % nn_
+     sep = np.linalg.norm(P[a] - P[b], axis=1)
+     same = ord_[a] == ord_[b]

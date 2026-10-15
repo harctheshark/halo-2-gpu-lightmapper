@@ -1,0 +1,48 @@
+# title: N4 ao_denoise.py: cKDTree.query_ball_point -> ao_ballgrid.ball_blocks (no scipy)
+# source: _research/ao/ao_denoise.py
+# base-md5: 5da70c2fe14fbb2decd78ce8902b418a
+# result-md5: 70522fac1d61f372e6c5af358592e7cf
+--- a/_research/ao/ao_denoise.py
++++ b/_research/ao/ao_denoise.py
+@@ -27,7 +27,7 @@
+ """
+ import time
+ import numpy as np
+-from scipy.spatial import cKDTree
++import ao_ballgrid             # N4 (H2 GPU Lightmapper standalone, A1): exact numpy stand-in for cKDTree.query_ball_point, no scipy
+ 
+ 
+ def stacked(sa, sb, eps):
+@@ -64,17 +64,15 @@
+         m = sw > 0; sk = sk[m]; sw = sw[m]; o = np.argsort(sk, kind='stable'); sk = sk[o]; sw = sw[o]
+         sfound = np.zeros(len(sk), bool)
+     ok = np.flatnonzero(has)
+-    X = P[ok]; tree = cKDTree(X)
++    X = P[ok]
+     cut = 1.25 * R; sig = 0.5 * R
+     rad = np.minimum(cut * ts[ord_[ok]], rcap)
+     so = np.zeros(n); sr = np.zeros(n); sq = np.zeros(n); npairs = 0; nstk = 0; t0 = time.time()
+-    for c0 in range(0, len(ok), chunk):
+-        sl = slice(c0, min(c0 + chunk, len(ok)))
+-        lists = tree.query_ball_point(X[sl], rad[sl], workers=workers, return_sorted=True)
+-        cnt = np.fromiter((len(l) for l in lists), np.int64, count=len(lists))
+-        if not cnt.sum(): continue
+-        i = ok[np.repeat(np.arange(sl.start, sl.stop), cnt)]
+-        j = ok[np.concatenate([np.asarray(l, np.int64) for l in lists])]
++    nblk_ = 0; ndone_ = 0
++    for qi_, pj_, nq_ in ao_ballgrid.ball_blocks(X, rad, chunk):       # N4/A1: == tree.query_ball_point(X[sl], rad[sl]) per receiver (every receiver in one block with all its sources)
++        nblk_ += 1; ndone_ += nq_
++        i = ok[qi_]
++        j = ok[pj_]
+         k = i != j; i = i[k]; j = j[k]
+         dP = P[j] - P[i]; sep = np.linalg.norm(dP, axis=1)
+         ni = nu[i]; nj = nu[j]
+@@ -97,7 +95,7 @@
+         o_ = np.lexsort((key[j], i)); i, j, w = i[o_], j[o_], w[o_]
+         so += np.bincount(i, weights=w * occ_raw[j], minlength=n); sr += np.bincount(i, weights=w * rays[j], minlength=n)
+         sq += np.bincount(i, weights=w * w * rays[j], minlength=n)
+-        if log and (c0 // chunk) % 10 == 9: log('   bilateral: %d / %d receivers, %.0f s' % (sl.stop, len(ok), time.time() - t0))
++        if log and nblk_ % 10 == 0: log('   bilateral: %d / %d receivers, %.0f s' % (ndone_, len(ok), time.time() - t0))
+     nleft = 0
+     if seam is not None and len(sk):
+         lk = sk[~sfound]; lw = sw[~sfound]; nleft = len(lk)

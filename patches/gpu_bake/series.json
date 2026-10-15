@@ -1,0 +1,21 @@
+{
+ "format": "h2lm-patch-series/1",
+ "comment": "S1.1+S1.2 gpu_bake.ps1 patches (+ U1 2026-10-15: F24 = review finding 24, lm_tagwriter --tool $TOOL). Applied in order to COPIES of production by tools/patch_series.py. OSOY_LAUNCH_MD5 = the md5 (upper-case hex) of the payload's S1.3 osoy_launch.exe, filled in by the payload builder. U1 UPSTREAMED the whole chain into production with the user's OK: 'upstream' names production's md5 after the upstream and the pinned pre-upstream base (patches/base); production == chain(base) + tokens is verified at every build, so the series is a verified no-op and the payload copies production verbatim.",
+ "tokens": {"OSOY_LAUNCH_MD5": "^[0-9A-F]{32}$"},
+ "targets": [
+  {"path": "engine_v373/gpu_bake.ps1",
+   "base_md5": "eb8e6bf2d26fc3efa3a42b24560fd9ed",
+   "patches": ["P1_paths_engine_v373.patch", "P3_nowindow_engine_v373.patch", "P2_quality_engine_v373.patch", "F24_tagwriter_tool_engine_v373.patch"],
+   "tokens": ["OSOY_LAUNCH_MD5"],
+   "upstream": {"md5": "fe88bd8bd1a0a990222de51ce30a566a", "base_file": "../base/engine_v373/gpu_bake.ps1",
+                "note": "U1 2026-10-15: engine_v373\\gpu_bake.ps1 = this chain with OSOY_LAUNCH_MD5 = E2DBA7AF... (the payload's osoy_launch.exe); pre-upstream backup engine_v373\\_backup_20261015_001416_upstream_p123"}},
+  {"path": "_research/ao/dev_AO/gpu_bake.ps1",
+   "src": "_research/ao/dev_AO2/gpu_bake.ps1",
+   "src_note": "V1 2026-10-14: the payload keeps INST _research/ao/dev_AO as the AO engine dir name; production's current AO engine is dev_AO2 (= engine_v373 TIE1 + the AO additions). Its gpu_bake.ps1 is byte-identical to dev_AO's (the AO hunks on the unchanged eb8e6bf2), so P1/P3 apply as reviewed.",
+   "base_md5": "405570d10d890b5b0ca9505904777a05",
+   "patches": ["P1_paths_dev_AO.patch", "P3_nowindow_dev_AO.patch", "F24_tagwriter_tool_dev_AO.patch"],
+   "tokens": ["OSOY_LAUNCH_MD5"],
+   "upstream": {"md5": "bac932e8cb795191049381cebefdf22d", "base_file": "../base/_research/ao/dev_AO2/gpu_bake.ps1",
+                "note": "U1 2026-10-15: _research\\ao\\dev_AO2\\gpu_bake.ps1 = this chain (P1+P3 as the exe ships it + F24); pre-upstream backup _research\\ao\\dev_AO2\\_backup_20261015_001416_upstream_p13"}}
+ ]
+}

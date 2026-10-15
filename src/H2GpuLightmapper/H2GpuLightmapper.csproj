@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- S2.5: "H2 GPU Lightmapper.exe" = the WPF shell + the same-exe CLI (FINAL_DESIGN section 4). ONE exe: the shell core
+       (S2.1-S2.4), S0.2's Proc and S0.4's DllSlots are compiled in from CoreSources.props (no side DLLs). Builds offline:
+       NuGet.Config here clears every package source; the installed .NET Framework 4.8 targeting pack is used.
+       Payload: when $(PayloadDir)MANIFEST.json exists (S1.9 writes it), MANIFEST.json + every zip there are embedded as
+       payload/<name> (straight to csc /resource, never resgen). Without it the exe still builds (dev: the payload-dir option).
+       S1.9 builds the release exe with: dotnet build -c Release -p:PayloadDir=<its output dir>\ (trailing backslash). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>H2 GPU Lightmapper</AssemblyName>
+    <RootNamespace>H2GpuLightmapper</RootNamespace>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <StartupObject>H2GpuLightmapper.Program</StartupObject>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <Version>0.6.1</Version>
+    <!-- E1 (0.6.1): no absolute build path (the user name, the project folder) inside the exe. /pathmap rewrites the source paths, the
+         generated-code paths and the PDB path in the PE debug directory to /_/ ; the exe stays byte-reproducible from a clean tree
+         whatever folder it is built in. The .pdb itself is a build product, never shipped. -->
+    <PathMap>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '..', '..'))=/_/</PathMap>
+    <Product>H2 GPU Lightmapper</Product>
+    <Company>H2 GPU Lightmapper</Company>
+    <Description>Halo 2 GPU lightmapper (standalone shell)</Description>
+    <PayloadDir Condition="'$(PayloadDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\payload\</PayloadDir>
+    <EmbedPayload Condition="'$(EmbedPayload)' == '' And Exists('$(PayloadDir)MANIFEST.json')">true</EmbedPayload>
+  </PropertyGroup>
+
+  <Import Project="..\H2GpuLightmapper.Core\CoreSources.props" />
+
+  <ItemGroup>
+    <Reference Include="System.Xaml" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="App\*.cs" />
+    <Compile Include="Pipeline\*.cs" />
+    <Compile Include="Cli\*.cs" />
+    <Compile Include="Ui\*.cs" />
+    <Page Include="Ui\DarkTheme.xaml" />
+    <Page Include="MainWindow.xaml" />
+    <Compile Include="MainWindow.xaml.cs" DependentUpon="MainWindow.xaml" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(EmbedPayload)' == 'true'">
+    <EmbeddedResource Include="$(PayloadDir)*.zip" LogicalName="payload/%(Filename)%(Extension)" WithCulture="false" Visible="false" />
+    <EmbeddedResource Include="$(PayloadDir)MANIFEST.json" LogicalName="payload/MANIFEST.json" WithCulture="false" Visible="false" />
+  </ItemGroup>
+</Project>

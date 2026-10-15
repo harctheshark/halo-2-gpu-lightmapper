@@ -1,0 +1,24 @@
+{
+ "format": "h2lm-patch-series/1",
+ "comment": "U2 (2026-10-15) lmw_tagio.py SHORT block elements: the 2004 stock MP scenarios store decorators 'cache blocks' as version 0 with 52-byte elements, tool_fast's field set (and every tool re-save) has 60; tool_fast reads a short file element as the PREFIX of its element with the rest zero (sub_622B11 / sub_622E95 / sub_6231EF; tests/u2_stock_decorators/PROGRESS.md). Applied to COPIES of the three production walkers (engine_v373 and dev_AO2 tag writers, the GLW-root copy the map query and the lp_* scripts import) by tools/patch_series.py. Equal-size elements (every resaved tag) take the old code path byte for byte. 'upstream' is ready for a later install of the same bytes into production (needs the user's go-ahead): production == chain(pinned base) is then verified at every build and copied verbatim.",
+ "tokens": {},
+ "targets": [
+  {"path": "engine_v373/v043-tagwriter/lmw_tagio.py",
+   "base_md5": "52dc580ef26eaf26e370f03470c14804",
+   "patches": ["U2_tagio_short_engine_v373.patch"],
+   "tokens": [],
+   "upstream": {"md5": "b79b25cf305a617346ef5f0296f040f6", "base_file": "../base/engine_v373/v043-tagwriter/lmw_tagio.py"}},
+  {"path": "_research/ao/dev_AO/v043-tagwriter/lmw_tagio.py",
+   "src": "_research/ao/dev_AO2/v043-tagwriter/lmw_tagio.py",
+   "src_note": "the AO engine's production source is dev_AO2 (INST keeps the dir name dev_AO); its lmw_tagio.py is byte-identical to engine_v373's",
+   "base_md5": "52dc580ef26eaf26e370f03470c14804",
+   "patches": ["U2_tagio_short_dev_AO.patch"],
+   "tokens": [],
+   "upstream": {"md5": "b79b25cf305a617346ef5f0296f040f6", "base_file": "../base/engine_v373/v043-tagwriter/lmw_tagio.py"}},
+  {"path": "v043-tagwriter/lmw_tagio.py",
+   "base_md5": "e8aeb703b786b8c995297834abdc73f6",
+   "patches": ["U2_tagio_short_glw.patch"],
+   "tokens": [],
+   "upstream": {"md5": "79673a03383cd0ab9cdfd371dc76598c", "base_file": "../base/v043-tagwriter/lmw_tagio.py"}}
+ ]
+}

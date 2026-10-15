@@ -1,0 +1,41 @@
+# title: P6 gpu_ao.py: H2LM_ROOT overrides H2; trace --quality low|super -> gpu_bake -Quality (not given = pre-P6 argv); stage passes --tool <ROOT>\tool_fast.exe to lm_tagwriter (review finding 24)
+# source: _research/ao/gpu_ao.py
+# base-md5: 04b171cabd16084eff3190de48722f89
+# result-md5: c4a0277f4d20807becd07662f20bccc1
+--- a/_research/ao/gpu_ao.py
++++ b/_research/ao/gpu_ao.py
+@@ -22,7 +22,7 @@
+ 
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ GLW = os.path.abspath(os.path.join(HERE, '..', '..'))                 # ...\GPU Lightmap Work
+-H2 = os.path.abspath(os.path.join(GLW, '..'))                         # ...\H2EKMine
++H2 = os.path.abspath(os.environ.get('H2LM_ROOT') or os.path.join(GLW, '..'))   # ...\H2EKMine (P6: H2LM_ROOT overrides; unset or empty = as before)
+ ENGINE_DEFAULT = os.path.join(HERE, 'dev_AO2')                         # V1 2026-10-14: dev_AO2 = engine_v373 (TIE1) + the AO additions; dev_AO = the pre-tie historical engine
+ FLAGS = 0x08000000 | 0x00004000                                      # CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+ METRES_PER_WU = 3.048                                                # 1 Halo world unit = 10 ft
+@@ -140,6 +140,7 @@
+     if not (1 <= a.rays <= 4096): die('--rays must be in 1..4096')
+     cmd = ['pwsh', '-NoProfile', '-NonInteractive', '-File', os.path.join(engine, 'gpu_bake.ps1'), '-Scenario', a.scenario, '-Bsp', a.bsp,
+            '-Worker', str(a.worker), '-SkipCapture', '-AOOnly', '-AODistance', repr(a.distance), '-AORays', str(a.rays)]
++    if a.quality: cmd += ['-Quality', a.quality]              # P6: the bake's own quality (a LOW bake is ssN 1); not given = gpu_bake's default super, as before
+     if a.plucker_fix: cmd.append('-PluckerFix')
+     if a.scenery_fix: cmd.append('-SceneryFix')
+     if a.shading_normal: cmd.append('-AOShadingNormal')
+@@ -409,7 +410,8 @@
+     if not os.path.isdir(skel): die('no %s (the capture-keyed skeleton the bake cached)' % skel)
+     if os.path.isdir(stage): shutil.rmtree(stage)
+     args = [sys.executable, os.path.join(tw, 'lm_tagwriter.py'), '--run-dir', run_dir, '--skeleton', skel, '--stage', stage, '--bsp', sp['bsp'],
+-            '--scenario', sp['scn'], '--threads', '4', '--lightmap-name', sp['ltmp']]
++            '--scenario', sp['scn'], '--threads', '4', '--lightmap-name', sp['ltmp'],
++            '--tool', os.path.join(H2, 'tool_fast.exe')]          # P6 (finding 24): the defs_pin gate checks THIS root's tool (H2LM_ROOT); without --tool lmw_tagio's hard-coded H2EKMine path; unset: the same file
+     rc, dt = run(args, os.path.join(out, 'tagwriter.log'))
+     if rc: die('lm_tagwriter exit %d (see %s)' % (rc, os.path.join(out, 'tagwriter.log')))
+     rc2, dt2 = run([sys.executable, os.path.join(tw, 'lmw_validate.py'), '--check-set', stage, '--bsp', sp['bsp'], '--json', os.path.join(out, 'tagw_validate.json')],
+@@ -622,6 +624,7 @@
+                    'chronopolis: 64 -> 1024 rays = +10 s GPU kernel, +6 s wall). --rays 64 = the guide / the earlier traces')
+     p.add_argument('--plucker-fix', action='store_true'); p.add_argument('--scenery-fix', action='store_true')
+     p.add_argument('--shading-normal', action='store_true'); p.add_argument('--strict-window', action='store_true', help='layer-0 window t > 1e-5 (default: the gather NEAR0 window t >= -1e-5)'); p.add_argument('--rep', action='store_true', help='write ao_rep.bin (default ON since the seam filter needs it; kept for old command lines)'); p.add_argument('--name', default=None, help='keep this trace as ao\trace_<name> and leave the default trace dir alone (A/B runs)'); p.add_argument('--no-rep', action='store_true', help='do not write ao_rep.bin (the seam filter and `check` then cannot run)')
++    p.add_argument('--quality', choices=('low', 'super'), default=None, metavar='Q', help="gpu_bake -Quality of the bake being traced: low or super (default: not passed = gpu_bake's super, as before P6)")
+     p.set_defaults(params_override=None, f=cmd_trace)
+     p = sub.add_parser('apply'); common(p)
+     p.add_argument('--strength', type=float, default=0.0, help='0..2 (guide cap 1; above 1 multipliers floor at 0), default 0 = OFF'); p.add_argument('--direct', type=float, default=0.5)

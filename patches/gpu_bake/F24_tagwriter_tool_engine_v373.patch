@@ -1,0 +1,18 @@
+# title: F24 lm_tagwriter --tool $TOOL (review finding 24; engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 4722eff6bca25b5d6f8884cb2483ef3d
+# result-md5: 158ddef8bbbd21000ce38bf252829752
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -727,8 +727,10 @@
+     # -> the validated stage folder; throws on any failure (the caller falls back to the tool or stops)
+     Wait-Skeleton $script:skel
+     $stage = "$OUT\tagw_stage"
++    # F24 (H2 GPU Lightmapper review finding 24, upstreamed 2026-10-15): the writer's defs_pin gate checks THIS bake's tool ($TOOL =
++    # $ROOT\tool_fast.exe); without --tool it fell back to lmw_tagio's hard-coded H2EKMine path. H2LM_ROOT unset: the same path.
+     $twArgs = @("$TW\lm_tagwriter.py", "--run-dir", $OUT, "--skeleton", "$OUT\skeleton", "--stage", $stage, "--bsp", $bspLive,
+-                "--scenario", $scnLive, "--threads", "$WriterThreads", "--lightmap-name", "$scenRel\$ltmpName")
++                "--scenario", $scnLive, "--threads", "$WriterThreads", "--lightmap-name", "$scenRel\$ltmpName", "--tool", $TOOL)
+     & py @twArgs 2>&1 | ForEach-Object { Write-Host "      $_" }
+     $twx = $LASTEXITCODE
+     # 2026-10-08 (user): pages may grow to 4096 x 4096; past that the writer exits 6 and the bake STOPS -- never the tool fallback,

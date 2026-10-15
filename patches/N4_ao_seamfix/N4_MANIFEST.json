@@ -1,0 +1,75 @@
+{
+ "id": "N4",
+ "step": "S1.8 + A1",
+ "base": "GPU Lightmap Work",
+ "targets": [
+  {
+   "path": "_research/ao/ao_seamfix.py",
+   "pristine_md5": "93c2fe8c5ce812358b58b7c2073da030",
+   "base_file": "patches/base/_research/ao/ao_seamfix.py",
+   "patch": "ao_seamfix.py.patch",
+   "patch_md5": "1ec73db712e74ceae2787abe332d03f0",
+   "patched_md5": "7b239011f1a9d6becbc11ce593398cd6",
+   "hunks": 2,
+   "apply": "strict: exact context at the stated lines, no fuzz, no offset; CRLF kept"
+  },
+  {
+   "path": "_research/ao/ao_denoise.py",
+   "pristine_md5": "5da70c2fe14fbb2decd78ce8902b418a",
+   "base_file": "patches/base/_research/ao/ao_denoise.py",
+   "patch": "ao_denoise.py.patch",
+   "patch_md5": "df8a81dcc4e5a9fb54977d5b1bb26528",
+   "patched_md5": "70522fac1d61f372e6c5af358592e7cf",
+   "hunks": 3,
+   "apply": "strict: exact context at the stated lines, no fuzz, no offset; CRLF kept"
+  }
+ ],
+ "adds": [
+  {
+   "path": "_research/ao/ao_ballgrid.py",
+   "src": "add/ao_ballgrid.py",
+   "md5": "1ef5e617bfd2ab11d3366e018a0259e6",
+   "size": 11444
+  }
+ ],
+ "gate": {
+  "verdict": "PASS",
+  "date": "2026-10-15 04:07",
+  "results": "tests/a1_ao_fix/results/N4_verdict.json",
+  "canonical_pairs_identical": true,
+  "applied_atlas_out_identical": true,
+  "staged_tags_identical": true,
+  "selftest_pass": true
+ },
+ "ship": true,
+ "bundle_scipy": false,
+ "decision": "v1 ships WITHOUT scipy: ao_seamfix.py + ao_denoise.py patched with ao_ballgrid (N4, A1 re-gate)",
+ "previous": {
+  "S1_8": {
+   "target": {
+    "path": "_research/ao/ao_seamfix.py",
+    "pristine_md5": "7905b9bf8446462b8d623fc68272da44",
+    "patch": "ao_seamfix.py.patch",
+    "patch_md5": "fa4919d4b86114ab3d3b75f04410760b",
+    "patched_md5": "a1444d81478ee1efb53d54b3fc73d9eb",
+    "apply": "strict: exact context at the stated lines, no fuzz, no offset; CRLF kept"
+   },
+   "adds": [
+    {
+     "path": "_research/ao/ao_ballgrid.py",
+     "src": "add/ao_ballgrid.py",
+     "md5": "752798e8202ac832cc6e455f45234673",
+     "size": 7232
+    }
+   ],
+   "gate": {
+    "verdict": "PASS",
+    "date": "2026-10-14 07:08",
+    "results": "tests/S1.8_ao_seamfix/results/S1.8_verdict.json",
+    "canonical_pairs_identical": true,
+    "applied_atlas_out_identical": true,
+    "staged_tags_identical": true
+   }
+  }
+ }
+}

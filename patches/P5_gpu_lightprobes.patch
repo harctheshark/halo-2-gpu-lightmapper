@@ -1,0 +1,52 @@
+# title: P5 gpu_lightprobes.py: --h2-root/--farm/--pwsh(+ -ExecutionPolicy Bypass)/--plucker-fix/--scenery-fix/--photons/--mc-samples passthroughs; defaults = pre-P5 argv
+# source: _research/lightprobes/gpu_lightprobes.py
+# base-md5: 0668095dc7425a6a195a77a226d30ca7
+# result-md5: ffb288d47846b38ed51e0f313761adf3
+--- a/_research/lightprobes/gpu_lightprobes.py
++++ b/_research/lightprobes/gpu_lightprobes.py
+@@ -22,12 +22,31 @@
+ ap.add_argument('--skip-capture', action='store_true'); ap.add_argument('--out', default=None)
+ ap.add_argument('--sever', default=None, help='capture severance (2 or 3); triplicate HANGS at 3 (2026-10-07)')
+ ap.add_argument('--ltmp-src', default=None, help='lightmap tag to write the SH into (default: the live one); e.g. the GPU bake staged tag')
++# P5 (H2 GPU Lightmapper standalone, 2026-10-14): passthroughs. With none of them given, every path and every child argv/env is the pre-P5 one.
++ap.add_argument('--h2-root', default=None, metavar='DIR', help='H2EK root whose tags are read (default: the H2EKMine dev root); the bake gets H2LM_ROOT=DIR')
++ap.add_argument('--farm', default=None, metavar='DIR', help='the farm_wNN dir gpu_bake writes for --worker (default: <h2 root>\\GPU Lightmap Work\\farm_wNN)')
++ap.add_argument('--pwsh', default=None, metavar='EXE', help='pwsh to run gpu_bake.ps1 with (default: pwsh on PATH); given, it also gets -ExecutionPolicy Bypass')
++ap.add_argument('--plucker-fix', action='store_true', help='pass -PluckerFix to gpu_bake (with --skip-capture it must match the capture)')
++ap.add_argument('--scenery-fix', action='store_true', help='pass -SceneryFix to gpu_bake (with --skip-capture it must match the capture)')
++ap.add_argument('--photons', type=int, default=None, metavar='N', help='pass -Photons N to gpu_bake (--quality custom only)')
++ap.add_argument('--mc-samples', type=int, default=None, metavar='N', help='pass -MCSamples N to gpu_bake (--quality custom only)')
+ a = ap.parse_args()
++def _same(p, q): return os.path.normcase(os.path.abspath(p)).rstrip('\\/') == os.path.normcase(os.path.abspath(q)).rstrip('\\/')
++def _under(p, root): return os.path.normcase(os.path.realpath(p)).startswith(os.path.normcase(os.path.realpath(root)).rstrip('\\/') + os.sep)
++if a.h2_root:
++    H2 = os.path.abspath(a.h2_root)
++    if not os.path.isdir(os.path.join(H2, 'tags')): sys.exit('REFUSED: --h2-root %s has no tags folder' % H2)
++    if os.environ.get('H2LM_ROOT') and not _same(os.environ['H2LM_ROOT'], H2): sys.exit('REFUSED: --h2-root %s but H2LM_ROOT=%s' % (H2, os.environ['H2LM_ROOT']))
++    if a.out and _under(a.out, os.path.join(H2, 'tags')): sys.exit('REFUSED: --out is inside the tags tree of %s' % H2)
++if a.farm:
++    if os.path.basename(os.path.abspath(a.farm).rstrip('\\/')).lower() != 'farm_w%02d' % a.worker: sys.exit('REFUSED: --farm %s is not the farm_w%02d gpu_bake writes for --worker %d' % (a.farm, a.worker, a.worker))
++    if os.environ.get('H2LM_WORK') and not _same(os.path.dirname(os.path.abspath(a.farm).rstrip('\\/')), os.environ['H2LM_WORK']): sys.exit('REFUSED: --farm %s is not under H2LM_WORK=%s' % (a.farm, os.environ['H2LM_WORK']))
++if (a.photons is not None or a.mc_samples is not None) and a.quality != 'custom': sys.exit('REFUSED: --photons / --mc-samples need --quality custom')
+ scen_name = a.scenario.replace('/', '\\').split('\\')[-1]
+ OUT = a.out or os.path.join(HERE, 'gpu_lp_%s_%s_%s' % (scen_name, a.bsp, time.strftime('%Y%m%d_%H%M%S')))
+ if os.path.exists(OUT): sys.exit('REFUSED: %s exists' % OUT)
+ os.makedirs(OUT)
+-FARM = os.path.join(H2, 'GPU Lightmap Work', 'farm_w%02d' % a.worker)
++FARM = os.path.abspath(a.farm) if a.farm else os.path.join(H2, 'GPU Lightmap Work', 'farm_w%02d' % a.worker)
+ FLAGS = 0x08000000 | 0x00004000   # CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+ def run(args, log, env=None):
+     t0 = time.time()
+@@ -39,8 +58,11 @@
+ rc, T['probes'] = run([sys.executable, os.path.join(HERE, 'lp_probes.py'), scen_tag, a.bsp, os.path.join(OUT, 'probes.bin')], 'probes.log')
+ if rc: sys.exit('step 1 failed (see %s\\probes.log)' % OUT)
+ env = dict(os.environ); env['GPULM_PROBES'] = os.path.join(OUT, 'probes.bin'); env['GPULM_SKY_HI'] = '1'
+-bake = ['pwsh', '-NoProfile', '-NonInteractive', '-File', os.path.join(a.stage, 'gpu_bake.ps1'), '-Scenario', a.scenario, '-Bsp', a.bsp,
++if a.h2_root: env['H2LM_ROOT'] = H2
++bake = [a.pwsh or 'pwsh', '-NoProfile', '-NonInteractive'] + (['-ExecutionPolicy', 'Bypass'] if a.pwsh else []) + ['-File', os.path.join(a.stage, 'gpu_bake.ps1'), '-Scenario', a.scenario, '-Bsp', a.bsp,
+         '-Worker', str(a.worker), '-Quality', a.quality] + (['-SkipCapture'] if a.skip_capture else []) + (['-Sever', a.sever] if a.sever else [])
++bake += (['-PluckerFix'] if a.plucker_fix else []) + (['-SceneryFix'] if a.scenery_fix else []) + (['-Photons', str(a.photons)] if a.photons is not None else []) + (
++         ['-MCSamples', str(a.mc_samples)] if a.mc_samples is not None else [])
+ rc, T['gpu'] = run(bake, 'gpu_bake.log', env)
+ glog = open(os.path.join(FARM, 'gpu_bake.log'), 'r', errors='replace').read() if os.path.exists(os.path.join(FARM, 'gpu_bake.log')) else ''
+ if 'PROBE: traced' not in glog or not os.path.exists(os.path.join(FARM, 'vertex_out.bin')):

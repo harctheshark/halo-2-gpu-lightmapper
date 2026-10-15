@@ -1,0 +1,148 @@
+# title: P1 H2LM_ROOT/H2LM_WORK/H2LM_CODE overrides + 15 code references to $WC (dev_AO)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: 405570d10d890b5b0ca9505904777a05
+# result-md5: d12b753aef68eebce1d2e7e814e264f2
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -340,8 +340,18 @@
+ # dev_AO: a leftover shell value of the AO switches must never reach a bake (the binary's AO mode is GPULM_AO alone)
+ Clear-Gpulm 'GPULM_AO','GPULM_AO_DIST','GPULM_AO_RAYS','GPULM_AO_NORMAL','GPULM_AO_REP','GPULM_AO_SLICE_RAYS','GPULM_AO_STRICT0'
+ 
+-$ROOT = "G:\SteamLibrary\steamapps\common\H2EKMine"
+-$W    = "$ROOT\GPU Lightmap Work"
++# >>> H2LM P1 (standalone exe, 2026-10-14): H2LM_ROOT / H2LM_WORK / H2LM_CODE override the three roots. UNSET -- every production
++# caller -- they are the production paths, unchanged ($WC = $W). The standalone sets all three: $ROOT = the user's H2EK, $W = its
++# "GPU Lightmap Work" (the WORK side: farm_wNN, _gpulm_skel, _TAGBAK_auto, the write-back gpulm.log), $WC = the payload's mirror of the
++# CODE layout (inject.exe, the root *.py helpers, osoyoos\, the re_owner.bin oracle, soup_flags_store, cleanup_farm.ps1).
++foreach ($h2lmN in 'H2LM_ROOT', 'H2LM_WORK', 'H2LM_CODE') {
++    $h2lmV = [Environment]::GetEnvironmentVariable($h2lmN)
++    if ($null -ne $h2lmV -and -not ([IO.Path]::IsPathFullyQualified($h2lmV) -and $h2lmV -notmatch '[\\/]$' -and (Test-Path -LiteralPath $h2lmV -PathType Container))) {
++        throw "H2LM: $h2lmN='$h2lmV' must be an existing absolute folder with no trailing backslash" } }
++$ROOT = if ($env:H2LM_ROOT) { $env:H2LM_ROOT } else { "G:\SteamLibrary\steamapps\common\H2EKMine" }
++$W    = if ($env:H2LM_WORK) { $env:H2LM_WORK } else { "$ROOT\GPU Lightmap Work" }
++$WC   = if ($env:H2LM_CODE) { $env:H2LM_CODE } else { $W }
++# <<< H2LM P1
+ # v371: the files v371 changes are resolved next to THIS script -- the staged copy (_research\scenery\stage, which mirrors the
+ # production layout) runs the staged DLL / fullgpu / guards, the production copy (after apply_v371.py) the production ones.
+ $BIN  = if ($PSScriptRoot) { $PSScriptRoot } else { $W }
+@@ -357,7 +367,7 @@
+     Get-Content "$OUT\writeback_in_progress.txt" | ForEach-Object { Write-Host "    $_" -ForegroundColor Red } }
+ $TOOL = "$ROOT\tool_fast.exe"
+ $DLL  = "$BIN\v014-inject-estimator\gpulm_estimator.dll"     # v371: $BIN (was $W)
+-$INJ  = "$W\v014-inject-estimator\inject.exe"
++$INJ  = "$WC\v014-inject-estimator\inject.exe"
+ $FULLGPU = "$BIN\v041-fullgpu\fullgpu.exe"                    # v371: $BIN (was the $W copy, named inline in phase 3)
+ # >>> v366 tagwriter vars
+ $TW          = "$PSScriptRoot\v043-tagwriter"   # dev_LP v372R: stage_LP's own writer copy (lighting environments pass-through)
+@@ -446,7 +456,7 @@
+     if ($LASTEXITCODE -ne 0) { throw "GUARD: pipeline_guard.py $($args -join ' ') FAILED (see the line above)" } }
+ 
+ # >>> v370 osoyoos fixes (see the header). With both switches off nothing below changes a single launch.
+-$OSOY        = "$W\osoyoos"
++$OSOY        = "$WC\osoyoos"
+ $OSOY_DLL    = "$OSOY\H2ToolHooks.dll"        # = the user's Osoyoos-scenery-build Release\H2ToolHooks.dll (2026-07-19 12:51)
+ $OSOY_LAUNCH = "$OSOY\osoy_launch.exe"        # osoy_launch.c, build_osoy_launch.bat; selftest\selftest.ps1
+ $OSOY_PIN    = [ordered]@{ $OSOY_DLL = '9DEFF656B076EE101B22A7C3623FFE25'; $OSOY_LAUNCH = 'C304184E6DA7D7A0C7BB0E05900B926D' }
+@@ -980,7 +990,7 @@
+     if ($sf40 -eq 0) { Write-Host "      soup_flags.bin: no receiver carries flag 0x40 -- the stage bp_build.py writes a VERIFIED EMPTY bypass table (SCB3, v372H/I) and the sun cull still runs" }
+     # v359 required files written by THIS capture; stamps capture_id.json. v371: + the scenery capture (DESIGN_FINAL 5.8); the BSP /
+     # tag-io / marker checker are used only if lit scenery issued no per-vertex call (legitimate only under debug lightmap_cull markers)
+-    Guard check $OUT capture --bsp $bspLive --tagio $TW --cullcheck "$W\cull_marker_check.py"
++    Guard check $OUT capture --bsp $bspLive --tagio $TW --cullcheck "$WC\cull_marker_check.py"
+     # v366 tag writer: record the live BSP md5 + lightmap-root md5 + the normalised soup crc with THIS capture, so the writer
+     # can refuse a BSP recompiled (or a root edited) between the capture and phase 4 instead of only warning
+     if ($WriteBackMode -ne "tool") {
+@@ -1004,7 +1014,7 @@
+     $afr = Select-String -Path "$OUT\gpulm.log" -Pattern "\[GPULM v372\] ana_frustum.bin: .*" | Select-Object -Last 1
+     if ($afr) { Write-Host ("      v372 " + ($afr.Line -replace '^\[\s*[0-9.]+s\]\s*', '').Trim()) -ForegroundColor $(if ($afr.Line -match '\*\*\*') { 'Red' } else { 'Gray' })
+                 if ($afr.Line -match '\*\*\*') { throw "PHASE 1: $($afr.Line.Trim())" } }
+-} else { Phase 1 "CAPTURE - skipped (-SkipCapture), reusing $OUT"; Guard check $OUT skipcapture --bsp $bspLive --tagio $TW --cullcheck "$W\cull_marker_check.py"     # v371: + the scenery capture checks
++} else { Phase 1 "CAPTURE - skipped (-SkipCapture), reusing $OUT"; Guard check $OUT skipcapture --bsp $bspLive --tagio $TW --cullcheck "$WC\cull_marker_check.py"     # v371: + the scenery capture checks
+     # v370 the capture's Osoyoos fixes must be the ones asked for now: a capture made without the FP64 edges / the scenery decompress
+     # must never be baked (or written back, which re-imports with the fixes) as if it had them, nor the reverse
+     $ofP = "$OUT\osoyoos_fixes.json"
+@@ -1032,7 +1042,7 @@
+ # (flag 0x10: no indirect outside the marker PVS). Debug-only (user, 2026-10-02) and NOT ported -- a map that has them bakes
+ # those clusters lit, unlike the CPU. Read-only parse of the live BSP; never fatal.
+ if (Test-Path $bspLive) {
+-    $cm = & py "$W\cull_marker_check.py" $bspLive --tagio $TW
++    $cm = & py "$WC\cull_marker_check.py" $bspLive --tagio $TW
+     $cmx = $LASTEXITCODE
+     $cm | ForEach-Object { "      $_" }
+     if ($cmx -eq 4) { Note "this BSP carries DEBUG lightmap_cull / lightmap_cull_pvs markers (0x4B0522) -- NOT ported: those clusters are baked LIT here, unlike the CPU (see the CULLMARK line)" }
+@@ -1065,7 +1075,7 @@
+ # a cube of the wrong sky, a partial cube, or a BLACK verdict over a cube the CPU really evaluated (int_v359).
+ $sgMode = '--per-hit'   # v372V: several cubemap skies / cube + exact-black skies -> per-hit selection (verdict 5)
+ if ($env:GPULM_RESEARCH_SKY_LEGACY -eq '1') { $sgMode = '--allow-mixed-black'; Write-Host "      *** RESEARCH A/B: GPULM_RESEARCH_SKY_LEGACY=1 -- the pre-v372V ONE-cube sky (NOT the CPU's per-hit rule)" -ForegroundColor Yellow }
+-$sg = & py "$W\sky_gate.py" "$OUT" $sgMode
++$sg = & py "$WC\sky_gate.py" "$OUT" $sgMode
+ $sgx = $LASTEXITCODE
+ $sg | ForEach-Object { "      $_" }
+ if ($sgx -ne 0) { throw "PHASE 2: sky_gate.py refused this capture's sky (exit $sgx) -- see the line above" }
+@@ -1074,9 +1084,9 @@
+ # pwsh, so a crashed build_surf_gpu.py used to leave the PREVIOUS map's table (farm_w06 holds cyclotron's 317 lights)
+ # for phase 3 to read.
+ Remove-Item "$OUT\surf_gpu.bin","$OUT\sky_gpu.bin","$OUT\sky_gpu_keys.bin","$OUT\re_owner.bin" -ErrorAction SilentlyContinue
+-& py "$W\build_surf_gpu.py" "$OUT\surface_lights.bin" "$OUT\surf_gpu.bin" | Out-Null
++& py "$WC\build_surf_gpu.py" "$OUT\surface_lights.bin" "$OUT\surf_gpu.bin" | Out-Null
+ if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$OUT\surf_gpu.bin")) { throw "PHASE 2: build_surf_gpu.py failed (exit $LASTEXITCODE)" }
+-$skyOut = & py "$W\build_sky_gpu.py"  "$OUT\sky_grid.bin"       "$OUT\sky_gpu.bin"
++$skyOut = & py "$WC\build_sky_gpu.py"  "$OUT\sky_grid.bin"       "$OUT\sky_gpu.bin"
+ if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$OUT\sky_gpu.bin") -or -not (Test-Path "$OUT\sky_gpu_keys.bin")) { throw "PHASE 2: build_sky_gpu.py failed (exit $LASTEXITCODE)" }
+ # EXACTSUN: v2 writes per-record grid dims + ctx and resolves every sky record's own light key; surface its warnings.
+ $skyOut | Select-String -Pattern "\*\*\*|manager 0 in cast order|keys resolved|EMPTY table" | ForEach-Object { "      [sky] $_" }
+@@ -1106,10 +1116,10 @@
+ #   * v359 capture: the derived CPU partition. When the oracle table has this capture's surface count (cyclotron), the
+ #     derived partition is CHECKED against it (derive_owner_table.py --check-ref); a DIFFERENT result means the live
+ #     item+0x1C read is wrong -- the oracle table is promoted instead and the run ends with a warning.
+-$oracle = "$W\v041-fullgpu\re_owner.bin"
++$oracle = "$WC\v041-fullgpu\re_owner.bin"
+ if (-not $OwnerMerged) {
+     if (-not (Test-Path "$OUT\re_surfclus.bin")) {
+-        $ow = & py "$W\promote_owner_table.py" "$OUT\re_owner.bin" $oracle
++        $ow = & py "$WC\promote_owner_table.py" "$OUT\re_owner.bin" $oracle
+         if ($ow) { Write-Host ("      " + ($ow -join "`n      ")) }
+     } elseif (Test-Path $oracle) {
+         $nRef = [BitConverter]::ToUInt32([IO.File]::ReadAllBytes($oracle), 0)
+@@ -1123,7 +1133,7 @@
+                 # the promoter requires the oracle to REFINE the table it replaces: rebuild the merged one first
+                 & py "$BIN\derive_owner_table.py" "$OUT" --static merged | Select-String "OWNER: wrote" | ForEach-Object { "      $_" }
+                 if ($LASTEXITCODE -ne 0) { throw "PHASE 2: derive_owner_table.py --static merged failed (exit $LASTEXITCODE)" }
+-                $ow = & py "$W\promote_owner_table.py" "$OUT\re_owner.bin" $oracle
++                $ow = & py "$WC\promote_owner_table.py" "$OUT\re_owner.bin" $oracle
+                 if ($ow) { Write-Host ("      " + ($ow -join "`n      ")) }
+             } elseif ($ckx -ne 0) { throw "PHASE 2: derive_owner_table.py --check-ref failed (exit $ckx)" }
+         }
+@@ -1150,7 +1160,7 @@
+         Note "no soup_topo.bin (a pre-v359 capture) -- seam lists cannot be built; re-capture with the v359+ DLL" }
+     elseif (-not $haveSeam) {
+         # v372S2 the native seam builder (seamfast.dll beside it; md5-identical seam_lists.bin on ec1 / lt2 / cyclotron, ec1 85 s -> 2 s)
+-        $seamPy = if (Test-Path "$BIN\build_seam_lists_fast.py") { "$BIN\build_seam_lists_fast.py" } else { "$W\build_seam_lists.py" }
++        $seamPy = if (Test-Path "$BIN\build_seam_lists_fast.py") { "$BIN\build_seam_lists_fast.py" } else { "$WC\build_seam_lists.py" }
+         $sl = & py $seamPy "$OUT" --adj topo
+         $slx = $LASTEXITCODE; $sl | Select-String "SEAM-BUILD" | ForEach-Object { "      $_" }
+         if ($slx -ne 0) { throw "PHASE 2: build_seam_lists.py failed (exit $slx) -- a pre-v359 capture has no soup_topo.bin" }
+@@ -1182,7 +1192,7 @@
+ if ($NoSunCull) { Note "-NoSunCull: the sun photon-radius cull (0x4A7068, +0.056 pp on cyclotron) is OFF" }
+ else {
+     $bpArgs = @("$BIN\bp_build.py", "$OUT", "--flags", "$OUT")   # v372I: the stage-local bp_build (SCB3 verified-empty table), never production's root file
+-    foreach ($d in @(Get-ChildItem "$W\v043-suncull\soup_flags_store" -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
++    foreach ($d in @(Get-ChildItem "$WC\v043-suncull\soup_flags_store" -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
+         $bpArgs += @("--flags", $d.FullName) }
+     if ($env:GPULM_SEAM_LISTS -eq "1") { $bpArgs += @("--seam", "$OUT\seam_lists.bin") }
+     $bp = & py @bpArgs
+@@ -1807,7 +1817,7 @@
+ # alone -- no CPU-bake grids, no scratchpad caches -- in ~2 s, and stamps h[3] = crc32(atlas_out.bin) so phase 4 can
+ # prove the directions belong to the atlas it injects (the hand flow used to pair a new atlas with the previous vertdir).
+ if (-not $env:GPULM_SKIP_GATHER) {
+-    & py "$W\build_vertdir.py" "$OUT" --stamp --quiet | ForEach-Object { "      $_" }
++    & py "$WC\build_vertdir.py" "$OUT" --stamp --quiet | ForEach-Object { "      $_" }
+     if ($LASTEXITCODE -ne 0) { throw "PHASE 3b: build_vertdir.py failed (exit $LASTEXITCODE)" }
+     Guard check $OUT bake
+ }
+@@ -2048,4 +2058,4 @@
+ # farm_wNN may be exactly what someone is mid-way through inspecting, and silently deleting it would
+ # be worse than the disk it saves. cpu_ground_truth.ps1 runs the sweep automatically instead, because
+ # there the dumps are a guaranteed by-product of the run that just finished.
+-if ($Cleanup) { & (Join-Path $W 'cleanup_farm.ps1') -Active ("farm_w{0:D2}" -f $Worker) }
++if ($Cleanup) { & (Join-Path $WC 'cleanup_farm.ps1') -Active ("farm_w{0:D2}" -f $Worker) }

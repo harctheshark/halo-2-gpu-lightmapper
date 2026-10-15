@@ -1,0 +1,24 @@
+<Project>
+  <!-- S2.1-S2.4: every source file of the shell core, in ONE list. Imported by H2GpuLightmapper.Core.csproj (the library the
+       tests reference) and by the S2.5 exe, which compiles the same files straight in so the shipped exe stays a single
+       file (no side DLLs). Needs EnableDefaultCompileItems=false in the importing project.
+       Sources: this folder (Core), ..\Proc (S0.2 JobProcess runner), ..\H2GpuLightmapper.DllSlots (S0.4 slot patcher).
+       Framework references needed: System.IO.Compression, System.Runtime.Serialization. -->
+  <PropertyGroup>
+    <H2LmCoreDir>$(MSBuildThisFileDirectory)</H2LmCoreDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(H2LmCoreDir)Payload\*.cs" Link="Core\Payload\%(Filename)%(Extension)" />
+    <Compile Include="$(H2LmCoreDir)Discovery\*.cs" Link="Core\Discovery\%(Filename)%(Extension)" />
+    <Compile Include="$(H2LmCoreDir)Preflight\*.cs" Link="Core\Preflight\%(Filename)%(Extension)" />
+    <Compile Include="$(H2LmCoreDir)Run\*.cs" Link="Core\Run\%(Filename)%(Extension)" />
+    <Compile Include="$(H2LmCoreDir)Safety\*.cs" Link="Core\Safety\%(Filename)%(Extension)" />
+    <Compile Include="$(H2LmCoreDir)Util\*.cs" Link="Core\Util\%(Filename)%(Extension)" />
+    <Compile Include="$(H2LmCoreDir)..\Proc\*.cs" Link="Proc\%(Filename)%(Extension)" />
+    <Compile Include="$(H2LmCoreDir)..\H2GpuLightmapper.DllSlots\*.cs" Link="DllSlots\%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+</Project>

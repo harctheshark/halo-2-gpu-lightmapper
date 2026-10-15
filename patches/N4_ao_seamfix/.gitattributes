@@ -1,0 +1,2 @@
+# Byte-exact: the .patch carries CRLF context lines (production ao_seamfix.py is CRLF) and N4_MANIFEST.json records md5s.
+* -text

@@ -1,0 +1,231 @@
+--- a/osoyoos/osoy_launch.c
++++ b/osoyoos/osoy_launch.c
+@@ -17,6 +17,23 @@
+    --test-seed-stock  SELF-TEST ONLY: writes the stock tool_fast prologue bytes of the five sites into a dummy target (a fake
+                image at 0x400000) before injecting, so the real DLL's install path can be exercised without running the tool.
+ 
++   P4 (H2 GPU Lightmapper standalone, 2026-10-14; both switches are OFF by default, and with both off every launch is the v370 one):
++   --nowindow  create the child with CREATE_NO_WINDOW instead of CREATE_NEW_CONSOLE: it gets its own console, with no window.
++               NEVER DETACHED_PROCESS: H2ToolHooks' DllMain calls AllocConsole(), which would then open a visible console; under
++               CREATE_NO_WINDOW the process already owns a (windowless) console, so that AllocConsole is a no-op.
++   --quality-row <P> <MC>   Custom quality without any shared conf file. While the child is still SUSPENDED and after the
++               H2ToolHooks proof (when a fix is requested): find tool_fast's hidden 'cuban' quality row by its STOCK signature
++               {"cuban",1,1,0,50000,0,1.0f,0} (exactly one 4-aligned match in the image's initialized non-code sections;
++               0xA30970 in tool_fast 3a889d37), VirtualProtectEx it writable, write {4, MC, 0, P, 0, 4.0f, 0} KEEPING the name
++               pointer, restore the protection and read the 32 bytes back. Not found / write / restore / read-back mismatch ->
++               the child is TERMINATED (it never ran) and the exit code is 4. P = 1..100000000 photons, MC = 1..64 (plain decimal),
++               else exit 2. The tool's `cuban` quality is then super's row with P and MC substituted (subpixel 4, gather quality
++               4.0), so `--quality-row 20000000 8` + quality `cuban` IS super. Without --plucker/--scenery no DLL is injected
++               and the row is written before the loader runs (row-only mode; --dll is then optional).
++               Prints `OSOYROW QUALITY cuban photons=<P> mc=<MC> ss=4 gq=4.0 READBACK OK ...` on success.
++   --test-terminate  SELF-TEST ONLY: do everything (inject + prove, row write + read-back) but NEVER resume: dump the quality
++               table (OSOYTABLE lines) and TERMINATE the still-suspended child -- not one tool instruction runs. Exit 0.
++
+    Mechanism (mirrors the Osoyoos launcher's DLLInjector early mode, EarlyProcessInject): CreateProcess(CREATE_SUSPENDED |
+    CREATE_NEW_CONSOLE) -> a remote thread runs ntdll!LdrLoadDll(full path) -- that thread performs the process's loader
+    initialisation first, then loads the DLL, whose DllMain installs the hooks -- -> the helper waits for that thread, checks the
+@@ -30,8 +47,9 @@
+ 
+    Exit codes: 0 ok (child running, PID printed + written to --pidfile), 2 usage, 3 launch failed, 4 child image not stock at a
+    site, 5 injection failed, 6 hook() did not report success (event), 7 a requested hook is not installed / an unrequested one
+-   is, 8 resume failed.
+-   Build: build_osoy_launch.bat (vcvarsall x86, cl /O2 /MT). */
++   is, 8 resume failed. P4: 4 also = --quality-row could not find / write / read back the stock 'cuban' row (child terminated).
++   Build: build_osoy_launch.bat (vcvarsall x86, cl /O2 /MT). P4 build: H2 GPU Lightmapper\native\osoy_launch\build_osoy_launch_p4.bat
++   (same flags, output into H2 GPU Lightmapper\build\out\ only -- never over the production osoyoos\osoy_launch.exe). */
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
+ #include <stdarg.h>
+@@ -99,15 +117,102 @@
+     return h;
+ }
+ 
++/* ===== P4 --quality-row: tool_fast's quality preset row (lm_quality_setup 0x4AE9A8 parses the table @0xA30950, stride 0x20) =====
++   +0 name ptr | +4 subpixel (supersamples per axis) | +8 secondary monte-carlo | +0xC is_draft | +0x10 photon budget |
++   +0x14 unknown/farm-hidden | +0x18 gather quality (f32; kNN radius x sqrt(1/gq)) | +0x1C is_checkerboard  (= Osoyoos lightmap_settings) */
++#define TOOL_IMAGE_BASE 0x400000u
++static void row_fields(const unsigned char* r, LONG f[8]) { memcpy(f, r, 32); }
++static void row_fmt(const unsigned char* r, char* out, size_t cap)
++{
++    LONG f[8]; float gq; row_fields(r, f); memcpy(&gq, &f[6], 4);
++    char nm[24] = "?"; SIZE_T got = 0;
++    if (ReadProcessMemory(g_proc, (LPCVOID)(ULONG_PTR)(DWORD)f[0], nm, sizeof(nm) - 1, &got)) nm[sizeof(nm) - 1] = 0; else strcpy_s(nm, sizeof(nm), "?");
++    for (char* p = nm; *p; p++) if ((unsigned char)*p < 0x20 || (unsigned char)*p > 0x7E) { *p = 0; break; }
++    char hex[65]; for (int i = 0; i < 32; i++) sprintf_s(hex + 2 * i, 3, "%02x", r[i]);
++    sprintf_s(out, cap, "name=%s ss=%ld mc=%ld is_draft=%ld photons=%ld unknown=%ld gather_quality=%.6f checkerboard=%ld bytes=%s",
++              nm, f[1], f[2], f[3], f[4], f[5], (double)gq, f[7], hex);
++}
++static DWORD find_cuban_row(void)
++{
++    /* the stock signature, exactly what Osoyoos' PATCH_QUALITY scans for: {"cuban", 1, 1, 0, 50000, 0, 1.0f, 0} */
++    LONG tail[7] = { 1, 1, 0, 50000, 0, 0, 0 }; float one = 1.0f; memcpy(&tail[5], &one, 4);
++    IMAGE_DOS_HEADER dh; IMAGE_NT_HEADERS32 nh;
++    if (!rpm(TOOL_IMAGE_BASE, &dh, sizeof(dh)) || dh.e_magic != IMAGE_DOS_SIGNATURE ||
++        !rpm(TOOL_IMAGE_BASE + dh.e_lfanew, &nh, sizeof(nh)) || nh.Signature != IMAGE_NT_SIGNATURE)
++        die(4, "--quality-row: no PE image at 0x%08X in the child", TOOL_IMAGE_BASE);
++    DWORD secTab = TOOL_IMAGE_BASE + dh.e_lfanew + FIELD_OFFSET(IMAGE_NT_HEADERS32, OptionalHeader) + nh.FileHeader.SizeOfOptionalHeader;
++    int nfound = 0; DWORD found = 0;
++    for (int s = 0; s < nh.FileHeader.NumberOfSections && s < 96; s++) {
++        IMAGE_SECTION_HEADER sh;
++        if (!rpm(secTab + s * (DWORD)sizeof(sh), &sh, sizeof(sh))) die(4, "--quality-row: cannot read section header %d", s);
++        if ((sh.Characteristics & IMAGE_SCN_MEM_EXECUTE) || !(sh.Characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA)) continue;
++        DWORD n = sh.Misc.VirtualSize < sh.SizeOfRawData ? sh.Misc.VirtualSize : sh.SizeOfRawData;   /* file-backed bytes only */
++        if (n < 32) continue;
++        if (n > 0x4000000) die(4, "--quality-row: section %d is %lu bytes -- not tool_fast", s, n);
++        unsigned char* buf = (unsigned char*)malloc(n);
++        if (!buf || !rpm(TOOL_IMAGE_BASE + sh.VirtualAddress, buf, n)) die(4, "--quality-row: cannot read section %d (%lu bytes)", s, n);
++        for (DWORD o = 0; o + 32 <= n; o += 4) {
++            if (memcmp(buf + o + 4, tail, 28)) continue;
++            char nm[6]; DWORD np; memcpy(&np, buf + o, 4);
++            if (rpm(np, nm, 6) && !memcmp(nm, "cuban", 6)) { nfound++; found = TOOL_IMAGE_BASE + sh.VirtualAddress + o; }
++        }
++        free(buf);
++    }
++    if (nfound != 1)
++        die(4, "--quality-row: the STOCK 'cuban' quality row {\"cuban\",1,1,0,50000,0,1.0f,0} was found %d time(s), want exactly 1 "
++               "-- not the stock tool_fast, or the row was already rewritten (Osoyoos PATCH_QUALITY?)", nfound);
++    return found;
++}
++static void write_quality_row(DWORD va, DWORD photons, DWORD mc)
++{
++    unsigned char before[32], want[32], back[32]; char line[400];
++    if (!rpm(va, before, 32)) die(4, "--quality-row: cannot read the cuban row at 0x%08lX", va);
++    row_fmt(before, line, sizeof(line)); printf("OSOYROW stock   va=0x%08lX %s\n", va, line);
++    LONG f[8]; float gq = 4.0f;
++    memcpy(&f[0], before, 4);                                          /* KEEP the name pointer: the tool still parses "cuban" */
++    f[1] = 4; f[2] = (LONG)mc; f[3] = 0; f[4] = (LONG)photons; f[5] = 0; memcpy(&f[6], &gq, 4); f[7] = 0;
++    memcpy(want, f, 32);
++    MEMORY_BASIC_INFORMATION mi; DWORD protBefore = 0, protAfter = 0, old = 0, tmp = 0;
++    if (VirtualQueryEx(g_proc, (LPCVOID)(ULONG_PTR)va, &mi, sizeof(mi))) protBefore = mi.Protect;
++    if (!VirtualProtectEx(g_proc, (LPVOID)(ULONG_PTR)va, 32, PAGE_READWRITE, &old))
++        die(4, "--quality-row: VirtualProtectEx(0x%08lX, RW) failed (%lu)", va, GetLastError());
++    SIZE_T w = 0; BOOL okw = WriteProcessMemory(g_proc, (LPVOID)(ULONG_PTR)va, want, 32, &w); DWORD werr = GetLastError();
++    BOOL okp = VirtualProtectEx(g_proc, (LPVOID)(ULONG_PTR)va, 32, old, &tmp); DWORD perr = GetLastError();
++    if (!okw || w != 32) die(4, "--quality-row: WriteProcessMemory(0x%08lX) failed (%lu, %lu bytes)", va, werr, (unsigned long)w);
++    if (!okp) die(4, "--quality-row: could not restore protection 0x%02lX at 0x%08lX (%lu)", old, va, perr);
++    if (VirtualQueryEx(g_proc, (LPCVOID)(ULONG_PTR)va, &mi, sizeof(mi))) protAfter = mi.Protect;
++    if (!rpm(va, back, 32)) die(4, "--quality-row: cannot read the cuban row back at 0x%08lX", va);
++    row_fmt(back, line, sizeof(line)); printf("OSOYROW written va=0x%08lX %s\n", va, line);
++    if (memcmp(back, want, 32)) die(4, "--quality-row: READ-BACK MISMATCH at 0x%08lX -- the row is not {4, %lu, 0, %lu, 0, 4.0f, 0}", va, mc, photons);
++    printf("OSOYROW QUALITY cuban photons=%lu mc=%lu ss=4 gq=4.0 READBACK OK (va 0x%08lX, protection 0x%02lX -> RW -> 0x%02lX restored, now 0x%02lX)\n",
++           photons, mc, va, protBefore, old, protAfter);
++}
++static int parse_dec(const char* s, unsigned long lo, unsigned long hi, DWORD* out)
++{
++    if (!s || !*s || strlen(s) > 9) return 0;
++    for (const char* p = s; *p; p++) if (*p < '0' || *p > '9') return 0;
++    unsigned long v = strtoul(s, NULL, 10);
++    if (v < lo || v > hi) return 0;
++    *out = (DWORD)v; return 1;
++}
++
+ int main(int argc, char** argv)
+ {
+     int plucker = 0, scenery = 0, seed = 0, waitChild = 0, hold = 0; DWORD timeout = 60000, resumePid = 0;
+     const char *dll = NULL, *exe = NULL, *argsf = NULL, *cwd = NULL, *outf = NULL, *errf = NULL, *pidf = NULL;
++    int nowindow = 0, qrow = 0, testTerm = 0; DWORD qPhotons = 0, qMc = 0;   /* P4 */
+     for (int i = 1; i < argc; i++) {
+         const char* a = argv[i];
+ #define NEXT() ((i + 1 < argc) ? argv[++i] : (die(2, "%s needs a value", a), (char*)0))
+         if (!strcmp(a, "--plucker")) plucker = 1;
+         else if (!strcmp(a, "--scenery")) scenery = 1;
++        else if (!strcmp(a, "--nowindow")) nowindow = 1;
++        else if (!strcmp(a, "--test-terminate")) testTerm = 1;
++        else if (!strcmp(a, "--quality-row")) {
++            const char* sp = NEXT(); const char* sm = NEXT();
++            if (!parse_dec(sp, 1, 100000000, &qPhotons)) die(2, "--quality-row: photons '%s' is not a plain decimal 1..100000000", sp);
++            if (!parse_dec(sm, 1, 64, &qMc)) die(2, "--quality-row: MC samples '%s' is not a plain decimal 1..64", sm);
++            qrow = 1; }
+         else if (!strcmp(a, "--test-seed-stock")) seed = 1;
+         else if (!strcmp(a, "--wait")) waitChild = 1;
+         else if (!strcmp(a, "--hold")) hold = 1;
+@@ -133,12 +238,16 @@
+         printf("OSOYLAUNCH resumed pid %lu (%s)\n", resumePid, img);
+         return 0;
+     }
+-    if (!dll || !exe || !argsf) die(2, "usage: osoy_launch [--plucker] [--scenery] --dll D --exe E --argsfile F [--cwd C] [--stdout O --stderr R] [--pidfile P]");
+-    if (!plucker && !scenery) die(2, "no fix requested -- launch the tool the normal way (this helper exists only to inject H2ToolHooks.dll)");
++    int fixes = plucker || scenery;
++    if ((fixes && !dll) || !exe || !argsf)
++        die(2, "usage: osoy_launch [--plucker] [--scenery] --dll D --exe E --argsfile F [--cwd C] [--stdout O --stderr R] [--pidfile P] "
++               "[--nowindow] [--quality-row PHOTONS MC] (--dll is required with --plucker/--scenery)");
++    if (!fixes && !qrow) die(2, "no fix requested -- launch the tool the normal way (this helper exists only to inject H2ToolHooks.dll / write --quality-row)");
+     if ((outf == NULL) != (errf == NULL)) die(2, "--stdout and --stderr go together");
++    if (testTerm && (hold || waitChild)) die(2, "--test-terminate never resumes the child: it does not go with --hold / --wait");
+ 
+-    char dllFull[MAX_PATH], exeFull[MAX_PATH];
+-    if (!GetFullPathNameA(dll, MAX_PATH, dllFull, NULL) || GetFileAttributesA(dllFull) == INVALID_FILE_ATTRIBUTES) die(2, "no DLL %s", dll);
++    char dllFull[MAX_PATH] = "", exeFull[MAX_PATH];
++    if (dll && (!GetFullPathNameA(dll, MAX_PATH, dllFull, NULL) || GetFileAttributesA(dllFull) == INVALID_FILE_ATTRIBUTES)) die(2, "no DLL %s", dll);
+     if (!GetFullPathNameA(exe, MAX_PATH, exeFull, NULL) || GetFileAttributesA(exeFull) == INVALID_FILE_ATTRIBUTES) die(2, "no exe %s", exe);
+     char* args = read_args_file(argsf); if (!args) die(2, "cannot read %s", argsf);
+ 
+@@ -162,7 +271,10 @@
+        Now an explicit PROC_THREAD_ATTRIBUTE_HANDLE_LIST passes exactly the two output files; stdin is not handed over. */
+     STARTUPINFOEXA six; PROCESS_INFORMATION pi; memset(&six, 0, sizeof(six)); memset(&pi, 0, sizeof(pi));
+     six.StartupInfo.cb = sizeof(six.StartupInfo);
+-    BOOL inherit = FALSE; DWORD cflags = CREATE_SUSPENDED | CREATE_NEW_CONSOLE;
++    /* P4 --nowindow: CREATE_NO_WINDOW (own console, no window) replaces CREATE_NEW_CONSOLE -- never DETACHED_PROCESS (see the header) */
++    BOOL inherit = FALSE; DWORD cflags = CREATE_SUSPENDED | (nowindow ? CREATE_NO_WINDOW : CREATE_NEW_CONSOLE);
++    /* P4 self-test only: a private tool copy whose loader init fails must not raise a hard-error box (the child inherits the mode) */
++    if (testTerm) SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+     LPPROC_THREAD_ATTRIBUTE_LIST alist = NULL; HANDLE hlist[2];
+     if (outf) {
+         six.StartupInfo.dwFlags |= STARTF_USESTDHANDLES; six.StartupInfo.hStdInput = NULL;
+@@ -181,6 +293,7 @@
+     if (outf) { CloseHandle(six.StartupInfo.hStdOutput); CloseHandle(six.StartupInfo.hStdError);
+                 DeleteProcThreadAttributeList(alist); HeapFree(GetProcessHeap(), 0, alist); }
+     printf("OSOYLAUNCH child pid %lu created SUSPENDED: %s\n", pi.dwProcessId, cmd);
++    if (nowindow) printf("OSOYLAUNCH --nowindow: CREATE_NO_WINDOW (the child owns a console with no window; never DETACHED_PROCESS)\n");
+ 
+     /* ---- the image must be the stock tool at every site (also proves base 0x400000) ---- */
+     for (int s = 0; s < NSITES; s++) {
+@@ -193,6 +306,9 @@
+         if (memcmp(b, SITES[s].stock, SITES[s].len)) die(4, "0x%06lX is not the stock tool_fast prologue -- refusing to inject", SITES[s].va);
+     }
+     printf("OSOYLAUNCH pre-inject: all %d patch sites carry the STOCK tool_fast bytes%s\n", NSITES, seed ? " (SEEDED: self-test)" : "");
++    if (!fixes) {   /* P4 row-only mode: nothing to inject; the row is written below, before the loader ever runs */
++        printf("OSOYLAUNCH no Osoyoos fix requested: H2ToolHooks.dll is NOT injected (--quality-row only)\n");
++        goto p4_quality_row; }
+ 
+     /* ---- remote LdrLoadDll(NULL, NULL, &name, &handle) ---- */
+     FARPROC ldr = GetProcAddress(GetModuleHandleA("ntdll.dll"), "LdrLoadDll");   /* same WOW64 ntdll base in every process */
+@@ -265,10 +381,36 @@
+     }
+     if (bad) die(7, "%d patch site(s) wrong -- see the OSOYHOOK lines", bad);
+ 
++p4_quality_row:
++    /* ---- P4 --quality-row: the child is still SUSPENDED (and, with a fix, its hooks are proven): rewrite the 'cuban' row ---- */
++    if (qrow || testTerm) {
++        DWORD rowVa = find_cuban_row();
++        if (qrow) write_quality_row(rowVa, qPhotons, qMc);
++        else { unsigned char r[32]; char line[400];
++               if (!rpm(rowVa, r, 32)) die(4, "cannot read the cuban row at 0x%08lX", rowVa);
++               row_fmt(r, line, sizeof(line)); printf("OSOYROW stock   va=0x%08lX %s\n", rowVa, line); }
++        if (testTerm) {   /* SELF-TEST ONLY: dump the whole preset table (cuban is row 1 in tool_fast 3a889d37), then kill the child */
++            for (int t = 0; t < 11; t++) {
++                unsigned char r[32]; char line[400]; DWORD va = rowVa - 0x20 + 0x20 * (DWORD)t;
++                if (!rpm(va, r, 32)) { printf("OSOYTABLE [%d] va=0x%08lX unreadable\n", t, va); continue; }
++                row_fmt(r, line, sizeof(line)); printf("OSOYTABLE [%d] va=0x%08lX %s\n", t, va, line); }
++            fflush(stdout);
++            TerminateProcess(g_proc, 0xDEAD); WaitForSingleObject(g_proc, 10000);
++            DWORD tec = 0; GetExitCodeProcess(g_proc, &tec); g_proc = NULL;
++            printf("OSOYLAUNCH --test-terminate: child pid %lu TERMINATED while still SUSPENDED (exit code 0x%08lX) -- it never ran a tool instruction\n",
++                   pi.dwProcessId, tec);
++            CloseHandle(pi.hThread); CloseHandle(pi.hProcess); CloseHandle(ev);
++            return 0; }
++    }
++
+     /* ---- go ---- */
+     if (pidf) { FILE* f = NULL; if (!fopen_s(&f, pidf, "w") && f) { fprintf(f, "%lu\n", pi.dwProcessId); fclose(f); } }
+-    printf("OSOYOOS HOOKS INSTALLED BEFORE THE FIRST TOOL INSTRUCTION: plucker=%s scenery=%s  (pid %lu, %s)\n",
+-           plucker ? "ON" : "off", scenery ? "ON" : "off", pi.dwProcessId, hold ? "HELD suspended for --resume" : "resuming");
++    if (fixes)
++        printf("OSOYOOS HOOKS INSTALLED BEFORE THE FIRST TOOL INSTRUCTION: plucker=%s scenery=%s  (pid %lu, %s)\n",
++               plucker ? "ON" : "off", scenery ? "ON" : "off", pi.dwProcessId, hold ? "HELD suspended for --resume" : "resuming");
++    else
++        printf("OSOYLAUNCH QUALITY ROW WRITTEN BEFORE THE FIRST TOOL INSTRUCTION, no Osoyoos hooks  (pid %lu, %s)\n",
++               pi.dwProcessId, hold ? "HELD suspended for --resume" : "resuming");
+     fflush(stdout);
+     if (hold) {        /* the caller opens its own handle first (no exit race), then runs `osoy_launch --resume <pid>` */
+         g_proc = NULL;

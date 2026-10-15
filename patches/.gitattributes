@@ -1,0 +1,5 @@
+# Engine patches are byte-exact (strict_patch.py pins base/result md5; gpu_ao.py is CRLF, gpu_lightprobes.py is LF).
+# core.autocrlf=true on this PC would rewrite their line endings on commit/checkout, so git must treat them as binary text.
+*.patch -text
+# pristine base copies of the patched production files (md5-pinned in the patch headers): keep their bytes exactly
+base/** -text

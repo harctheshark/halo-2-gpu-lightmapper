@@ -1,0 +1,210 @@
+<Window x:Class="H2GpuLightmapper.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="H2 GPU Lightmapper" Width="760" Height="700" MinWidth="680" MinHeight="600"
+        Background="#FF1E1E1E" Foreground="#FFE6E6E6" FontFamily="Segoe UI" FontSize="12.5"
+        WindowStartupLocation="CenterScreen" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <!-- S2.5: FINAL_DESIGN section 4. 1 Halo 2 Editing Kit, 2 Map, 3 Quality, 4 Mode, 5 Ambient Occlusion, 6 Reuse capture,
+         7 Advanced (collapsed), 8 buttons, 9 progress. The bake options are NOT remembered: every launch starts at Super /
+         Lightmap Standard / AO off (1.0, 0.5) / a new capture; root and map are remembered. -->
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Ui/DarkTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*" MinHeight="90"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===================================================== options: two columns (scroll when the window is short) -->
+        <ScrollViewer x:Name="OptionsScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+        <Grid x:Name="OptionsPanel">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <!-- 1. Halo 2 Editing Kit -->
+                <GroupBox Header="Halo 2 Editing Kit">
+                    <StackPanel>
+                        <DockPanel>
+                            <Button x:Name="BrowseBtn" DockPanel.Dock="Right" Content="Browse…" Margin="6,0,0,0" Click="BrowseBtn_Click"
+                                    ToolTip="Pick the H2EK folder (the one with tool_fast.exe and tags\)"/>
+                            <ComboBox x:Name="RootCombo" SelectionChanged="RootCombo_SelectionChanged" DisplayMemberPath="Display"
+                                      ToolTip="Steam libraries, Osoyoos profiles and folders used before"/>
+                        </DockPanel>
+                        <TextBlock x:Name="ToolStatus" Margin="0,4,0,0" TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource FgDim}" Text="Looking for the H2EK…"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- 2. Map -->
+                <GroupBox Header="Map">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Scenario"/>
+                        <ComboBox x:Name="ScenarioCombo" Grid.Column="1" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True" MaxDropDownHeight="320"
+                                  SelectionChanged="ScenarioCombo_SelectionChanged" ToolTip="Type to filter, e.g. cyclotron"/>
+                        <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="BSP" Margin="0,5,8,0"/>
+                        <ComboBox x:Name="BspCombo" Grid.Row="1" Grid.Column="1" Margin="0,5,0,0" SelectionChanged="BspCombo_SelectionChanged"/>
+                        <TextBlock x:Name="MapInfo" Grid.Row="2" Grid.ColumnSpan="2" Margin="0,5,0,0" Style="{StaticResource Dim}" Text=""/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- 3. Quality -->
+                <GroupBox Header="Quality">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton x:Name="QLow" GroupName="Q" Content="Low" Checked="Option_Changed"
+                                         ToolTip="Production Low (quick structural checks)"/>
+                            <RadioButton x:Name="QSuper" GroupName="Q" Content="Super" IsChecked="True" Checked="Option_Changed"
+                                         ToolTip="The validated product: SS 4, 20,000,000 photons, MC 8"/>
+                            <RadioButton x:Name="QCustom" GroupName="Q" Content="Custom (Experimental)" Checked="Option_Changed" Visibility="Collapsed"
+                                         ToolTip="Experimental. Photons and gather rays of your choice (the tool's 'cuban' row, rewritten in memory). Only Super's own values are validated; large values bake for hours."/>
+                        </StackPanel>
+                        <StackPanel x:Name="CustomPanel" Visibility="Collapsed" Margin="0,4,0,0">
+                        <TextBlock x:Name="CustomNote" TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource Warn}" Margin="0,0,0,5"
+                                   Text="Experimental. Only Super's own values (20,000,000 photons, 8 rays) are validated; anything else is untested. Large values mean very long bakes: 100,000,000 photons with 64 rays took about 1.4 hours on cyclotron on an RTX 4090, and bigger maps take longer. It also needs a lot more video memory (mainmenu at 50,000,000 / 16 peaked at 21.8 GB in use on a 24 GB card)."/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Photons"/>
+                            <TextBox x:Name="PhotonsBox" Grid.Column="1" Width="96" VerticalAlignment="Center" Text="50,000,000" TextChanged="Number_Changed" LostFocus="PhotonsBox_LostFocus"
+                                     ToolTip="1,000,000 - 100,000,000 (default 50,000,000)"/>
+                            <TextBlock Grid.Column="2" Margin="6,0,0,0" Style="{StaticResource Dim}" VerticalAlignment="Center" Text="1,000,000 – 100,000,000"/>
+                            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Margin="0,5,8,0" MaxWidth="128" TextWrapping="Wrap" Text="Gather rays (Monte-Carlo samples)"/>
+                            <TextBox x:Name="RaysBox" Grid.Row="1" Grid.Column="1" Width="44" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,5,0,0" Text="16" TextChanged="Number_Changed"
+                                     ToolTip="1 - 64 (default 16): the tool's secondary MC; rays per gather call = 2 x MC²"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" Margin="6,5,0,0" Style="{StaticResource Dim}" VerticalAlignment="Center" Text="1 – 64"/>
+                            <TextBlock x:Name="RaysLine" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,4,0,0" TextWrapping="Wrap" Style="{StaticResource Dim}"/>
+                            <TextBlock x:Name="CostLine" Grid.Row="3" Grid.ColumnSpan="3" Margin="0,2,0,0" TextWrapping="Wrap" Style="{StaticResource Dim}"/>
+                            <TextBlock Grid.Row="4" Grid.ColumnSpan="3" Margin="0,3,0,0" FontSize="11.5">
+                                <Hyperlink x:Name="ResetCustom" Click="ResetCustom_Click" Foreground="{StaticResource Accent}">Reset to 50M / 16</Hyperlink>
+                            </TextBlock>
+                        </Grid>
+                        </StackPanel>
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+
+            <StackPanel Grid.Column="2">
+                <!-- 4. Mode -->
+                <GroupBox Header="Mode">
+                    <StackPanel>
+                        <RadioButton x:Name="MStandard" GroupName="M" IsChecked="True" Checked="Option_Changed"
+                                     Content="Lightmap Standard — lightmaps + light probes if this BSP has probes"/>
+                        <RadioButton x:Name="MProbes" GroupName="M" Checked="Option_Changed" Content="Lightmap Lightprobes — probes only"/>
+                        <RadioButton x:Name="MLightmap" GroupName="M" Checked="Option_Changed" Content="Lightmap Only"/>
+                        <TextBlock x:Name="ModeNotice" Margin="20,2,0,0" Style="{StaticResource Dim}" Foreground="{StaticResource Warn}" Visibility="Collapsed"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- 5. Ambient Occlusion -->
+                <GroupBox Header="Ambient Occlusion">
+                    <StackPanel>
+                        <CheckBox x:Name="AoCheck" Content="Bake ambient occlusion" Checked="Option_Changed" Unchecked="Option_Changed"/>
+                        <StackPanel x:Name="AoPanel" Orientation="Horizontal" Margin="20,3,0,0" IsEnabled="False">
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Strength"/>
+                            <TextBox x:Name="AoStrengthBox" Width="48" Text="1.0" TextChanged="Number_Changed" ToolTip="0.01 - 2.0 (default 1.0)"/>
+                            <TextBlock Style="{StaticResource FieldLabel}" Margin="14,0,8,0" Text="Exponent"/>
+                            <TextBox x:Name="AoExponentBox" Width="48" Text="0.5" TextChanged="Number_Changed" ToolTip="0.1 - 8 (default 0.5)"/>
+                        </StackPanel>
+                        <TextBlock x:Name="AoNote" Margin="20,3,0,0" Style="{StaticResource Dim}" Text="An artistic layer, not CPU-faithful."/>
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- 6. Reuse existing capture -->
+                <GroupBox Header="Capture">
+                    <StackPanel>
+                        <CheckBox x:Name="ReuseCheck" Content="Reuse existing capture" IsEnabled="False" Checked="Option_Changed" Unchecked="Option_Changed"
+                                  ToolTip="Off = create a new capture (the default)"/>
+                        <TextBlock x:Name="ReuseReason" Margin="20,1,0,0" Style="{StaticResource Dim}" Text="No capture of this map yet."/>
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- 7. Advanced -->
+                <Expander x:Name="AdvancedExpander" Header="Advanced" IsExpanded="False">
+                    <StackPanel>
+                        <CheckBox x:Name="StageOnlyCheck" Content="Stage only (don't write tags)" Checked="Option_Changed" Unchecked="Option_Changed"/>
+                        <DockPanel Margin="0,4,0,0">
+                            <TextBlock DockPanel.Dock="Left" Style="{StaticResource FieldLabel}" Text="Work folder"/>
+                            <Button x:Name="OpenWorkBtn" DockPanel.Dock="Right" Content="Open" Margin="6,0,0,0" Padding="8,1" Click="OpenWorkBtn_Click"/>
+                            <TextBox x:Name="WorkBox" IsReadOnly="True" FontSize="11.5"/>
+                        </DockPanel>
+                        <TextBlock x:Name="GpuLine" Margin="0,4,0,0" Style="{StaticResource Dim}" Text="GPU: not checked yet"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                            <Button x:Name="UndoInstallBtn" Content="Undo last install" Padding="8,1" Click="UndoInstallBtn_Click"
+                                    ToolTip="Put back the files this app's last install of this BSP replaced (lmw_install restore)"/>
+                            <Button x:Name="RepairBtn" Content="Repair runtime" Padding="8,1" Margin="6,0,0,0" Click="RepairBtn_Click"
+                                    ToolTip="Full md5 check of the extracted runtime and engine; re-extracts anything damaged"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
+            </StackPanel>
+        </Grid>
+        </ScrollViewer>
+
+        <!-- ===================================================== 8. buttons -->
+        <DockPanel Grid.Row="1" Margin="0,8,0,6" LastChildFill="False">
+            <Button x:Name="BakeBtn" Style="{StaticResource AccentButton}" Content="Bake" MinWidth="90" Click="BakeBtn_Click"/>
+            <Button x:Name="CancelBtn" Content="Cancel" MinWidth="80" Margin="6,0,0,0" IsEnabled="False" Click="CancelBtn_Click"/>
+            <Button x:Name="RestoreBtn" Content="Restore previous lightmap…" Margin="6,0,0,0" Click="RestoreBtn_Click"/>
+            <Button x:Name="LogsBtn" Content="Open logs" Margin="6,0,0,0" Click="LogsBtn_Click"/>
+        </DockPanel>
+
+        <!-- ===================================================== 9. progress -->
+        <StackPanel Grid.Row="2">
+            <ItemsControl x:Name="StepList" Focusable="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="0,0,4,4" Padding="6,1" CornerRadius="9" BorderThickness="1" BorderBrush="{Binding Edge}" Background="{Binding Fill}">
+                            <TextBlock Text="{Binding Name}" Foreground="{Binding Text}" FontSize="11.5"/>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <DockPanel Margin="0,2,0,0">
+                <TextBlock x:Name="EtaText" DockPanel.Dock="Right" Margin="8,0,0,0" Style="{StaticResource Dim}" VerticalAlignment="Center" Text=""/>
+                <ProgressBar x:Name="Bar" Minimum="0" Maximum="1000" Value="0"/>
+            </DockPanel>
+            <TextBlock x:Name="StatusLine" Margin="0,4,0,4" TextWrapping="Wrap" Text="Ready."/>
+        </StackPanel>
+
+        <ListBox x:Name="LogList" Grid.Row="3" Background="{StaticResource LogBg}" BorderBrush="{StaticResource Edge}" FontFamily="Consolas" FontSize="11.5"
+                 VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Text}" Foreground="{Binding Brush}"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </Grid>
+</Window>

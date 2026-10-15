@@ -1,0 +1,167 @@
+# title: P2 quality block as independent ifs (B1) + -Quality custom -Photons -MCSamples (engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 61d20d45723dff8af63728ae3d57658a
+# result-md5: 4722eff6bca25b5d6f8884cb2483ef3d
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -116,7 +116,8 @@
+     [string]$Scenario = "scenarios\multi\cyclotron\cyclotron",
+     [string]$Bsp      = "cyclotron",
+     # int_v359: default SUPER (the validated product). LOW remains for quick structural checks.
+-    [ValidateSet("low","super")][string]$Quality = "super",
++    # H2LM P2: custom = the tool's 'cuban' row rewritten by osoy_launch.exe --quality-row (-Photons / -MCSamples, the last parameters)
++    [ValidateSet("low","super","custom")][string]$Quality = "super",
+     # v350 the CPU CAPTURE phase's own quality token. DEFAULT = FOLLOW -Quality (empty here means "same
+     # as -Quality"). MEASURED: MSCL/MRAD ARE quality-dependent -- a super capture writes budget 20,000,000
+     # and r.e. search radius 0.5 where low writes 5,000,000 and 1.0 -- and baking super on low's values
+@@ -303,7 +304,14 @@
+     # dev_SPD (2026-10-07, user: mainmenu 36 min "wayyy too long"): DEFAULT 64 -- the probe cost 731 s of mainmenu's 36 min. The rescue's
+     # stream is the GPU's own RNG (the allowed-RNG exception: the CPU's gate directions cannot be replayed), so a constant salt is as faithful
+     # as rDone+1; it only changes which valid noise draw the few rescued texels get. -RescueSalt 0 = the old probe path (A/B only).
+-    [ValidateRange(0,64)][int]$RescueSalt = 64
++    [ValidateRange(0,64)][int]$RescueSalt = 64,
++    # >>> H2LM P2 (standalone exe, 2026-10-14) CUSTOM QUALITY: -Quality custom -Photons P -MCSamples MC. The capture and the tool
++    # write-back go through osoy_launch.exe --quality-row P MC, which rewrites the tool's 'cuban' quality row in memory (tool still
++    # suspended) to {subpixel 4, MC, draft 0, P photons, 0, search 4.0, 0} -- super with only the photon budget and the secondary MC
++    # changed, so Custom(20000000, 8) IS super -- and the capture token is 'cuban'. Both are required with custom, refused without it.
++    [ValidateRange(1000000,100000000)][int]$Photons = 0,
++    [ValidateRange(1,64)][int]$MCSamples = 0
++    # <<< H2LM P2
+ )
+ $ErrorActionPreference = "Stop"
+ 
+@@ -346,6 +354,12 @@
+ $h2lmNoWin = $env:H2LM_NOWINDOW -eq '1'
+ $h2lmHide  = if ($h2lmNoWin) { @{ WindowStyle = 'Hidden' } } else { @{} }
+ # <<< H2LM P3
++# >>> H2LM P2 the custom-quality arguments, checked before anything runs
++if ($Quality -eq "custom") {
++    if (-not $Photons -or -not $MCSamples) { throw "-Quality custom needs -Photons <1000000..100000000> and -MCSamples <1..64>" }
++    if ($CaptureQuality) { throw "-Quality custom: -CaptureQuality is not allowed (the capture runs the custom row itself, token 'cuban')" }
++} elseif ($Photons -or $MCSamples) { throw "-Photons / -MCSamples are only valid with -Quality custom" }
++# <<< H2LM P2
+ # v371: the files v371 changes are resolved next to THIS script -- the staged copy (_research\scenery\stage, which mirrors the
+ # production layout) runs the staged DLL / fullgpu / guards, the production copy (after apply_v371.py) the production ones.
+ $BIN  = if ($PSScriptRoot) { $PSScriptRoot } else { $W }
+@@ -453,11 +467,12 @@
+ # the production pin.
+ $OSOY_PIN    = [ordered]@{ $OSOY_DLL = '9DEFF656B076EE101B22A7C3623FFE25'; $OSOY_LAUNCH = $(if ($env:H2LM_CODE) { '%%H2LM:OSOY_LAUNCH_MD5%%' } else { 'C304184E6DA7D7A0C7BB0E05900B926D' }) }
+ $osoyOn      = [bool]$PluckerFix -or [bool]$SceneryFix
++$osoyLaunch  = $osoyOn -or $Quality -eq "custom"     # H2LM P2: a custom capture / write-back runs through osoy_launch.exe (--quality-row) even with both fixes off
+ $osoyDesc    = "plucker={0} scenery={1}" -f $(if ($PluckerFix) { "ON" } else { "off" }), $(if ($SceneryFix) { "ON" } else { "off" })
+ # a leftover shell OSOYOOS_* never reaches a tool (osoy_launch.exe strips them anyway; a plain Start-Process run has no H2ToolHooks)
+ function Clear-Osoyoos { Get-ChildItem Env: | Where-Object { $_.Name -like 'OSOYOOS_*' } | ForEach-Object { Remove-Item "Env:$($_.Name)" -ErrorAction SilentlyContinue } }
+ Clear-Osoyoos
+-if ($osoyOn) {
++if ($osoyLaunch) {     # H2LM P2 (was $osoyOn; identical with low / super): the pins are checked whenever osoy_launch.exe will run
+     foreach ($osoyK in $OSOY_PIN.Keys) {
+         if (-not (Test-Path $osoyK)) { throw "v370: MISSING $osoyK -- -PluckerFix / -SceneryFix need it" }
+         $osoyH = (Get-FileHash $osoyK -Algorithm MD5).Hash
+@@ -473,6 +488,7 @@
+     if ($PluckerFix) { $la += '--plucker' }
+     if ($SceneryFix) { $la += '--scenery' }
+     if ($h2lmNoWin) { $la += '--nowindow' }     # H2LM P3: the tool gets CREATE_NO_WINDOW (never DETACHED_PROCESS: H2ToolHooks calls AllocConsole)
++    if ($Quality -eq "custom" -and $runTag -ne "skeleton") { $la += @('--quality-row', "$Photons", "$MCSamples") }     # H2LM P2: 'cuban' = {4, MC, 0, P, 0, 4.0, 0}; the skeleton stays 'low'
+     $la += @('--dll', $OSOY_DLL, '--exe', $TOOL, '--argsfile', $af, '--cwd', $ROOT, '--hold')
+     if ($outFile) { $la += @('--stdout', $outFile, '--stderr', $errFile) }
+     $lo = @(& $OSOY_LAUNCH @la 2>&1 | ForEach-Object { "$_" })
+@@ -508,6 +524,24 @@
+     if ($sm.Count) { throw "v370 [$runTag]: our gpulm DLL refused $($sm.Count) hook site(s) beside the Osoyoos hooks: $($sm[0].Line.Trim())" }
+     Write-Host "      [$runTag] v370: our gpulm DLL installed every hook beside the Osoyoos ones (no SIG MISMATCH in $(Split-Path $log -Leaf))" -ForegroundColor Green }
+ # <<< v370 osoyoos fixes
++# >>> H2LM P2 a custom capture's own record of its quality, checked after phase 1 (and on -SkipCapture): a 'cuban' row the tool never
++# got (the stock row {1, 1, 0, 50000, 0, 1.0, 0}: ssN 1, MC 1, 50,000 photons) or another quality's capture must never bake as custom
++function Assert-CustomCapture([string]$dir) {
++    foreach ($f in "$dir\gather_dims.bin", "$dir\raster_globals.bin", "$dir\gpulm.log") {
++        if (-not (Test-Path $f)) { throw "CUSTOM: $f is missing -- the capture's quality cannot be verified" } }
++    $gd = [IO.File]::ReadAllBytes("$dir\gather_dims.bin")
++    $rg = [IO.File]::ReadAllBytes("$dir\raster_globals.bin")
++    $bad = @()
++    if ($gd.Length -ne 12 -or [BitConverter]::ToUInt32($gd, 0) -ne 2) { $bad += "gather_dims.bin is not {u32 2, i32 main, i32 sec}" }
++    elseif ([BitConverter]::ToInt32($gd, 4) -ne 2 * $MCSamples -or [BitConverter]::ToInt32($gd, 8) -ne $MCSamples) {
++        $bad += ("gather_dims ({0}, {1}) is not ({2}, {3})" -f [BitConverter]::ToInt32($gd, 4), [BitConverter]::ToInt32($gd, 8), (2 * $MCSamples), $MCSamples) }
++    if ($rg.Length -lt 28) { $bad += "raster_globals.bin is shorter than 7 floats" }
++    elseif ([BitConverter]::ToSingle($rg, 24) -ne 4.0) { $bad += "raster ssN $([BitConverter]::ToSingle($rg, 24)) is not 4" }
++    $bv = @(Select-String -Path "$dir\gpulm.log" -Pattern "g_photon_budget=(\d+)" | ForEach-Object { [long]$_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
++    if ($bv.Count -ne 1 -or $bv[0] -ne $Photons) { $bad += "photon budget in gpulm.log: $(if ($bv.Count) { $bv -join ', ' } else { 'no g_photon_budget line' }) (expected $Photons)" }
++    if ($bad.Count) { throw ("CUSTOM: the capture in {0} is NOT custom P {1} / MC {2}: {3}" -f $dir, $Photons, $MCSamples, ($bad -join '; ')) }
++    Write-Host ("      custom capture verified: gather_dims ({0}, {1}), raster ssN 4, photon budget {2:n0}" -f (2 * $MCSamples), $MCSamples, $Photons) -ForegroundColor Green }
++# <<< H2LM P2
+ 
+ # >>> v371 scenery helpers (see the header)
+ function Get-SceneryK1([string]$dir) {
+@@ -800,7 +834,7 @@
+     # CPU's own run-to-run control: 1.6%), and substituting the CPU's OWN lattice HALVES the
+     # per-chart DC oracle (0.522 -> 0.264 pp) while being a worse bake overall.
+     # Default stays "low" so nothing silently changes; -CaptureQuality super runs the A/B.
+-    $capQ = if ($CaptureQuality) { $CaptureQuality } else { $Quality }
++    $capQ = if ($CaptureQuality) { $CaptureQuality } elseif ($Quality -eq "custom") { "cuban" } else { $Quality }     # H2LM P2: custom captures on the rewritten 'cuban' row
+     Write-Host "      CPU capture quality: '$capQ' (follows -Quality unless -CaptureQuality is given)"
+     $a = "lightmaps-farm-worker $Scenario $Bsp $capQ $Worker $($Worker+1) -tags_dir tags -data_dir data -game_root_dir ."
+     # ***** v372W CAST-ONLY PROCESS (user 2026-10-07: "look at how the cpu does multi skies"). build_one_light_emitter 0x4B1E62 makes one
+@@ -812,6 +846,7 @@
+     $castProc = $null
+     if ($env:GPULM_RESEARCH_NO_CASTCPU -eq '1') { Write-Host "      *** RESEARCH A/B: GPULM_RESEARCH_NO_CASTCPU=1 -- no CPU-cast process" -ForegroundColor Yellow }
+     elseif ($osoyOn) { Write-Host "      v372W: the Osoyoos hooks are ON -- the CPU-cast process is not supported with them yet (statistical suns keep the GPU lottery)" -ForegroundColor Yellow }
++    elseif ($Quality -eq "custom") { Write-Host "      v372W: -Quality custom -- the CPU-cast process is not run (a plain launch has no --quality-row: it would cast the stock 'cuban' row); statistical suns keep the GPU lottery" -ForegroundColor Yellow }     # H2LM P2
+     else {
+         # the SAME worker index (its farm_wNN dir) but a different farm COUNT: two tools with an identical (index, count) collide -- the
+         # second exits 127 at "building table" (measured 2026-10-07). The count only partitions the texels; the cast is the same, and
+@@ -834,7 +869,7 @@
+         if (-not $castInj) { if (-not $castProc.HasExited) { $castProc.Kill() }; $castProc = $null
+                              Write-Host "      *** v372W: CPU-cast process injection FAILED -- statistical suns keep the GPU lottery" -ForegroundColor Red }
+         else { Write-Host "      v372W: CPU-cast process pid $($castProc.Id) started beside the capture (the CPU's own photon cast -> castcpu\)" } }
+-    if ($osoyOn) { $p = Start-OsoyTool $a "capture" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven
++    if ($osoyLaunch) { $p = Start-OsoyTool $a "capture" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch)
+     else {
+     $p = Start-Process -FilePath $TOOL -ArgumentList $a -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+     }
+@@ -876,6 +911,7 @@
+                 Write-Host ("      v372W: $nSunCap suns -- CPU-cast process exit {0} after {1:n1}s more ({2})" -f $castProc.ExitCode, $tw.Elapsed.TotalSeconds, $(if ($ok) { 'castcpu\ ready' } else { '*** INCOMPLETE -- statistical suns keep the GPU lottery' })) -ForegroundColor $(if ($ok) { 'Gray' } else { 'Red' })
+                 $cl | ForEach-Object { Write-Host "        $_" } } } }
+     Assert-NoHookCollision "$OUT\gpulm.log" "capture"     # v370 (a no-op with the switches off)
++    if ($Quality -eq "custom") { Assert-CustomCapture $OUT }     # H2LM P2
+     $soup = (Select-String -Path "$OUT\gpulm.log" -Pattern "wrote soup: (\d+) charts, (\d+)" | Select-Object -Last 1)
+     Write-Host ("      {0}   {1:n1}s" -f $(if($soup){$soup.Matches[0].Value}else{"(soup line not found)"}), $sw.Elapsed.TotalSeconds)
+     # v371: echo the scenery census (the last line of each kind; pipeline_guard.py check capture below decides)
+@@ -1030,6 +1066,7 @@
+             # v371 (DESIGN_FINAL 5.9, risk 4): the decompressed scenery geometry depends on the bounds DB -- a changed DB is another capture
+             throw "v371 -SkipCapture -SceneryFix: h2v_scenery_bounds.db is now $(Get-SceneryBoundsMd5) but this capture was made with '$($of.scenery_bounds_db_md5)' -- the scenery geometry would not be the captured one; re-capture" }
+         else { Write-Host "      v370: the capture's Osoyoos fixes ($capDesc) match this bake" } } }
++if ($SkipCapture -and $Quality -eq "custom") { Assert-CustomCapture $OUT }     # H2LM P2: a reused capture must be this custom P / MC too
+ # ***** v369 (guards12) WARN ONLY: the DEBUG lightmap-cull markers. parse_cluster_cull_markers 0x4B0522 scans the BSP marker block
+ # (sbsp+340/+344, 60-byte records) for markers named exactly 'lightmap_cull' (flag 0x20: cluster unlit) / 'lightmap_cull_pvs'
+ # (flag 0x10: no indirect outside the marker PVS). Debug-only (user, 2026-10-02) and NOT ported -- a map that has them bakes
+@@ -1488,12 +1525,22 @@
+ # regression to the mean. On a selection-free metric (per-chart means) the ratio is 0.9795 median and
+ # every brightness decile is <= 1.0 -- we are slightly DARK, never 2x bright.
+ # Matching the ray count makes the two bakes' sampling identical and cuts gather cost ~4x.
++# >>> H2LM P2 THE QUALITY BLOCK AS INDEPENDENT IFS (fixes B1: the low-quality `else` used to hang off the SURF_SAMPCHUNK `if` below, so a
++# SUPER bake started with GPULM_SURF_SAMPCHUNK already in the environment lost SS_N / RAY_MULT / 16 8 4096 and baked at fullgpu's
++# RAY_MULT default 2 = 512 rays/call, 4x the CPU). With GPULM_SURF_SAMPCHUNK unset -- the launcher (run_bake.ps1) clears every GPULM_*,
++# the standalone builds the environment from scratch -- low and super set exactly what the two old lines set.
++# custom: the super settings with the gather dims of MC -- main 2*MC, sec MC (= the capture's gather_dims.bin, verified after phase 1)
++# -- and a fixed chunk of 524288 rays per dispatch clamped to 64..4096 calls: 16 8 4096 at MC 8 (= super), 32 16 1024 at MC 16, 128 64 64 at 64.
+ if ($Quality -eq "super") { $env:GPULM_SS_N="4"; $env:GPULM_RAY_MULT="1"; $args2=@(16,8,4096) }
++if ($Quality -eq "custom") { $env:GPULM_SS_N="4"; $env:GPULM_RAY_MULT="1"
++    $args2=@((2 * $MCSamples), $MCSamples, [Math]::Min(4096, [Math]::Max(64, [int][Math]::Floor(524288.0 / (2 * $MCSamples * $MCSamples))))) }
++if ($Quality -eq "low") { Clear-Gpulm 'GPULM_SS_N','GPULM_RAY_MULT'; $args2=@() }
++# <<< H2LM P2
+ # v373 (2026-10-09) SURFACE SAMPLE CHUNK 16 (was the binary default 64 at super): the compact surface pass was LATENCY-bound --
+ # each thread ran up to 64 samples per round, so a ~100 ms dispatch held only ~4k threads. Chunk 16 = 4x more threads per
+ # dispatch. Exact by the v286 continuation (only WHEN work is submitted changes). earthcity_4: SURFCULL 741 s -> 26.3 s,
+ # max dispatch 639 -> 131 ms, every product keyed-identical (_research/v372/ll_ab/ec4_chunk16.log). An explicit value in the shell wins.
+-if (-not (Test-Path Env:GPULM_SURF_SAMPCHUNK) -and $Quality -eq "super") { $env:GPULM_SURF_SAMPCHUNK = "16" } else { Clear-Gpulm 'GPULM_SS_N','GPULM_RAY_MULT'; $args2=@() }
++if (-not (Test-Path Env:GPULM_SURF_SAMPCHUNK) -and $Quality -ne "low") { $env:GPULM_SURF_SAMPCHUNK = "16" }     # H2LM P2: super + custom; NO else (B1)
+ # ***** v358 the r.e. HARNESS hooks (parity tests) must never reach a production bake from a leftover shell.
+ # int_v359: + the estimator set's KX trace-budget knob and the exact sun's split/budget knobs (they change only how the
+ # work is split, never a draw -- cleared anyway so a leftover test value cannot slow or starve a product bake).
+@@ -1920,7 +1967,7 @@
+     } else { Write-Host "      no existing lightmap tag to back up ($tagDir\$tagPfx*) -- first bake of this BSP" }
+     Set-Content "$OUT\writeback_in_progress.txt" ("started {0}; previous tags: {1} ({2} files from {3}\{4}*). Copy them back if the new tag is broken." -f (Get-Date), $tagBak, $tagFiles.Count, $tagDir, $tagPfx)
+     $aFull = "lightmaps $Scenario $Bsp low -tags_dir tags -data_dir data -game_root_dir ."
+-    if ($osoyOn) { $p = Start-OsoyTool $aFull "writeback" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven
++    if ($osoyLaunch) { $p = Start-OsoyTool $aFull "writeback" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch)
+     else {
+     $p = Start-Process -FilePath $TOOL -ArgumentList $aFull -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+     $null = $p.Handle     # v371 (m2): keeps ExitCode readable after the exit -- the 0x5CE1 refusal is read from it

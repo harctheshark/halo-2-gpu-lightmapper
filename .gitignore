@@ -1,0 +1,25 @@
+# build outputs
+bin/
+obj/
+build/out/
+build/payload/
+build/s19/
+cache/
+*.exe
+*.dll
+*.pdb
+*.obj
+*.zip
+
+# editor, tool and backup leftovers
+.vs/
+__pycache__/
+*.pyc
+*.bak
+*.bak_*
+*.tmp_*
+
+# test sandboxes and run output
+tests/**/results/
+build/s2/
+build/s25/

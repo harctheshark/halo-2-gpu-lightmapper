@@ -1,0 +1,35 @@
+--- a/gather.cpp
++++ b/gather.cpp
+@@ -4,4 +4,5 @@
+ #include <windows.h>
+ #include <d3d11.h>
++#include "n3_palloc_guard.h"   // N3 (H2 GPU Lightmapper standalone): palloc uint32 overflow FATAL + NvOptimusEnablement / AmdPowerXpressRequestHighPerformance exports
+ #include <cstdio>
+ #include <cstdint>
+@@ -3982,5 +3983,5 @@
+                                     //    emissive colour, not the count.
+                                     for(size_t j=0;j<mgv.size();j++) if(mgv[j]==ko && ixv[j]==kt){
+-                                        found=true; if(pwv[j]>0.0f) cnt=(uint32_t)((float)alv[j]/pwv[j]); break; }
++                                        found=true; if(pwv[j]>0.0f){ const float n3q=(float)alv[j]/pwv[j]; if(!n3_cnt_fits(n3q)){ n3_palloc_fatal_light("surface",i,n3q); fclose(lf); return 9; } cnt=(uint32_t)n3q; } break; }   // N3 guard: FATAL instead of a uint32 wrap
+                                     if(!found) ++unmatched;
+                                     palloc[i]=(uint32_t)run; run+=cnt; }
+@@ -4009,5 +4010,5 @@
+                                     uint32_t cnt=0; bool found=false;
+                                     for(size_t j=0;j<mgv.size();j++) if(mgv[j]==ap.keyOrd && ixv[j]==ap.keyTag){
+-                                        found=true; if(pwv[j]>0.0f) cnt=(uint32_t)((float)alv[j]/pwv[j]); break; }   // v208 alv IS the count -- see the surface join above
++                                        found=true; if(pwv[j]>0.0f){ const float n3q=(float)alv[j]/pwv[j]; if(!n3_cnt_fits(n3q)){ n3_palloc_fatal_light("analytic",i,n3q); fclose(lf); return 9; } cnt=(uint32_t)n3q; } break; }   // v208 alv IS the count -- see the surface join above (N3 guard: FATAL instead of a uint32 wrap)
+                                     if(!found) ++unmatchedAna;
+                                     palloc.push_back((uint32_t)run); run+=cnt;
+@@ -4094,5 +4095,5 @@
+                                             for(size_t j=0;j<mgv.size();j++) if(mgv[j]==ko && ixv[j]==kt){
+                                                 fnd=true;
+-                                                if(pwv[j]>0.0f) c1=(uint32_t)((float)alv[j]/pwv[j]); break; }  // v210 attempts
++                                                if(pwv[j]>0.0f){ const float n3q=(float)alv[j]/pwv[j]; if(!n3_cnt_fits(n3q)){ n3_palloc_fatal_light("sky",e,n3q); fclose(lf); return 9; } c1=(uint32_t)n3q; } break; }  // v210 attempts (N3 guard: FATAL instead of a uint32 wrap)
+                                             if(!fnd) ++skyUnmatched;
+                                             // ⚠ v219a THE EMIT KEY IS NOT THE JOIN KEY. photon_cast_all_lights
+@@ -4139,4 +4140,5 @@
+                                     " light_powers entry -- they will emit ZERO\n",unmatched,nSrfLights);
+                                 if(!(cullR>0.0f)) cullR=1.0f;
++                                if(!n3_run_fits(run)){ n3_palloc_fatal_total((unsigned long long)run,nCastLights); fclose(lf); return 9; }   // N3 guard: palloc holds uint32 offsets
+                                 lpOk=(run>0);
+                                 printf("DIRECT: GPU CAST %llu photon candidates over %u lights, cull r=%.4f\n",
