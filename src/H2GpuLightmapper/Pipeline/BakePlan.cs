@@ -104,6 +104,8 @@ namespace H2GpuLightmapper.Pipeline
         public string Out, OutProbe;
         public int ProbePoints;
         public bool ProbePointsAssumed;
+        /// <summary>X1: what gpu_bake gets for this adapter (-MaxCallsPerPart / -BufCapMB); null = not decided (nothing passed).</summary>
+        public GpuLimits Limits;
         public bool ProbePath, Install;
         public bool ReuseLightmapCapture, ReuseProbeCapture;
         public string LightmapReuseNote, ProbeReuseNote;
@@ -203,6 +205,8 @@ namespace H2GpuLightmapper.Pipeline
                 .Add("probeWorker", ProbeWorker.HasValue ? (object)(long)ProbeWorker.Value : null).Add("probeWorkerNote", ProbeWorkerNote)
                 .Add("out", Out).Add("outProbe", OutProbe)
                 .Add("probePoints", (long)ProbePoints).Add("probePointsAssumed", ProbePointsAssumed).Add("probePath", ProbePath)
+                .Add("gpuLimits", Limits == null || !Limits.VramBytes.HasValue ? null : new JObj().Add("vramBytes", Limits.VramBytes.Value).Add("source", Limits.Source)
+                    .Add("rowsFit", Limits.RowsFit).Add("maxCallsPerPart", Limits.MaxCallsPerPart).Add("bufCapMB", (long)Limits.BufCapMB))
                 .Add("reuseLightmapCapture", ReuseLightmapCapture).Add("reuseProbeCapture", ReuseProbeCapture)
                 .Add("lightmapReuseNote", LightmapReuseNote).Add("probeReuseNote", ProbeReuseNote)
                 .Add("install", Install).Add("installStage", InstallStage).Add("finalStage", FinalStage).Add("installBackupDir", InstallBackupDir).Add("lmwInstallPy", LmwInstallPy).Add("marker", Marker)
@@ -229,6 +233,9 @@ namespace H2GpuLightmapper.Pipeline
                           + "   probe " + (ProbeWorker.HasValue ? "farm_w" + ProbeWorker.Value.ToString("D2", CultureInfo.InvariantCulture) + (ProbeWorkerNote != null ? " (" + ProbeWorkerNote + ")" : "") : "-"));
             sb.AppendLine("  probes    " + ProbePoints + " point(s)" + (ProbePointsAssumed ? " ASSUMED (dry run: pass --probe-points N; a real run queries the scenario)" : "")
                           + (ProbePath ? " -> light probes are baked" : " -> no light probes"));
+            if (Limits != null && Limits.VramBytes.HasValue)
+                sb.AppendLine("  gpu mem   " + (Limits.VramBytes.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB (" + Limits.Source + ") -> "
+                              + (Limits.Changes ? "gpu_bake gets" + (Limits.MaxCallsPerPart > 0 ? " -MaxCallsPerPart " + Limits.MaxCallsPerPart : "") + (Limits.BufCapMB > 0 ? " -BufCapMB " + Limits.BufCapMB : "") : "nothing extra (the production argv)"));
             if (LightmapReuseNote != null) sb.AppendLine("  capture   lightmap: " + LightmapReuseNote);
             if (ProbeReuseNote != null) sb.AppendLine("  capture   probes: " + ProbeReuseNote);
             sb.AppendLine("  run dir   " + RunDir + (RunDirPredicted ? "   (would be created)" : ""));

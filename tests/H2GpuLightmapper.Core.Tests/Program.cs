@@ -54,6 +54,7 @@ namespace H2GpuLightmapper.Core.Tests
             tests.AddRange(RecoveryTests.All());
             tests.AddRange(ReviewFixTests.All());
             tests.AddRange(RulesTests.All());
+            tests.AddRange(SceneryFixTests.All());
 
             int pass = 0, fail = 0, skip = 0;
             var sw = Stopwatch.StartNew();

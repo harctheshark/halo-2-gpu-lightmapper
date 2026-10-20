@@ -40,7 +40,7 @@ namespace H2GpuLightmapper.Core.Payload
         }
 
         /// <summary>WORK = ROOT\GPU Lightmap Work (the REAL path; H2LM_WORK; never the DLL-slot alias). A drive root keeps its
-        /// backslash ("D:" alone would be the drive's CURRENT folder); such a root is refused anyway (<see cref="IsDriveRoot"/>).</summary>
+        /// backslash ("D:" alone would be the drive's CURRENT folder, and "D:" + "GPU Lightmap Work" is drive-relative).</summary>
         public static string WorkOf(string root)
         {
             string full = Path.GetFullPath(root);
@@ -49,9 +49,10 @@ namespace H2GpuLightmapper.Core.Payload
         }
 
         /// <summary>
-        /// Review fix (finding 23): an H2EK at the root of a drive ("D:\") cannot bake -- gpu_bake's P1 needs H2LM_ROOT fully
-        /// qualified AND without a trailing backslash, which no spelling of a drive root satisfies, and "D:" alone is relative.
-        /// The shell refuses it before anything is written (exit 2).
+        /// Is this the root of a volume ("D:\", or a UNC share root)? Review fix (finding 23) refused such an H2EK because gpu_bake's
+        /// P1 needed H2LM_ROOT without a trailing backslash, which no spelling of a drive root satisfies, and "D:" alone is relative.
+        /// X1: the shell keeps the root as "D:\" (<see cref="NormalizeRoot"/>) and a payload whose gpu_bake.ps1 has the P1b handling
+        /// (MANIFEST features.driveRoot) bakes it; a payload without that record still refuses it (exit 2).
         /// </summary>
         public static bool IsDriveRoot(string path)
         {
@@ -62,7 +63,16 @@ namespace H2GpuLightmapper.Core.Payload
             return !string.IsNullOrEmpty(pr) && string.Equals(pr.TrimEnd('\\'), full.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
         }
 
-        public const string DriveRootMessage = "the H2EK is at the root of a drive; the bake scripts need it inside a folder (they cannot be given a drive root) -- move the Halo 2 Editing Kit into a folder, e.g. D:\\H2EK";
+        /// <summary>The full path of an H2EK root as the shell carries it: every root loses a trailing backslash EXCEPT the root of a
+        /// volume, which keeps it ("D:\"): "D:" alone is the drive's current folder and Path.Combine("D:", "tags") is the
+        /// drive-relative "D:tags". Always join with Path.Combine on the result.</summary>
+        public static string NormalizeRoot(string path)
+        {
+            string full = Path.GetFullPath(path.Trim().Trim('"'));
+            return IsDriveRoot(full) ? Path.GetPathRoot(full) : full.TrimEnd('\\');
+        }
+
+        public const string DriveRootMessage = "the H2EK is at the root of a drive; this build's bake scripts need it inside a folder (they cannot be given a drive root) -- move the Halo 2 Editing Kit into a folder, e.g. D:\\H2EK";
         /// <summary>WORK\_runtime (INST parent).</summary>
         public static string InstParentOf(string work) { return Path.Combine(work, RuntimeFolderName); }
         /// <summary>WORK\standalone (workers.json, runs\, history.json, current_run.json).</summary>

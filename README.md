@@ -8,9 +8,10 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: pre-release (0.6.1).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: pre-release (0.6.2).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
-[Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map.
+[Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in 0.6.2 is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 
@@ -43,6 +44,9 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   only), Lightmap Only.
 - **Ambient occlusion** (optional, off by default): a GPU AO pass for an extra artistic look. It is *not* CPU-faithful.
 - **Capture reuse.** Skip the slow `tool_fast` capture step when you re-bake the same map.
+- **Custom scenery just works.** The scenery fix needs each scenery model's compression bounds. Before every bake the app scans
+  the scenery your scenario places and adds any model that is missing to `SceneryFixDependencies.db` in your H2EK folder (the
+  log says so); **Advanced > Scan and Build Scenery Fix Dependencies** scans your whole tags folder on demand.
 - **Safe by design.** Every install is backed up and md5-verified first; Restore and Undo are built in; a crash or power loss
   is recovered at the next start.
 
@@ -99,8 +103,9 @@ one PC. Another GPU will be slower or faster, and a card slower than an RTX 4090
   `3a889d370a7be537af47ff8035acd201`). Other builds are refused, because the GPU hooks are address-specific.
 - **The H2EK's own prerequisites** (the app checks them and names any that is missing; it never installs anything): a `data`
   folder, `libfbxsdk.dll`, the x86 Visual C++ 2015-2022 runtime and the DirectX End-User Runtime (June 2010).
-- An **NTFS** drive with at least 8 GB free, and about 3 GB per map for the work folders. The H2EK folder must not be at the root
-  of a drive, must use plain ANSI characters, and the working paths must stay under 240 characters.
+- An **NTFS** drive with at least 8 GB free, and about 3 GB per map for the work folders. The H2EK folder may be at the root of a
+  drive (new in 0.6.2, not yet tested with a real bake there), must use plain ANSI characters, and the working paths must stay
+  under 240 characters.
 
 ## Download and first start
 
@@ -137,7 +142,8 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
 6. **Reuse existing capture** (off by default = make a new capture). Offered only when the map's last capture matches the
    same quality and binaries. If your tags changed since the capture, the app lists them and asks first.
 7. **Advanced:** Stage only (bake without touching your tags), the work folder, the GPU line, **Undo last install**, **Repair
-   runtime**.
+   runtime**, **Scan and Build Scenery Fix Dependencies** (adds every render model of your tags folder to
+   `SceneryFixDependencies.db`; bakes already do this automatically for the scenery of their own scenario).
 8. **Bake**, **Cancel**, **Restore previous lightmap...**, **Open logs**.
 
 **Before you bake:** close the map in Sapien and Guerilla. A bake that will install is refused while one of its lightmap files is
@@ -198,29 +204,29 @@ Measurements come from one RTX 4090 PC; anything about other hardware is extrapo
 | Question | Short answer | Kind |
 |---|---|---|
 | Geometry in a BSP | Whatever `tool_fast` can import (512 clusters, 32,767 vertices and 65,535 triangles per section, 1,024 instances...). Largest tested: 98,314 traced triangles, 620 instances. | HARD (Halo 2's) |
-| BSP width | Keep the solid geometry under about **510 x R** world units per axis, R being the photon search radius (at least 255 wu at Super). Past it, light leaks through walls **silently**. | HARD, silent |
+| BSP width | No fixed limit since 0.6.2: past about 510 x R world units per axis (R = the photon search radius) the occlusion grid grows its cells instead of dropping walls, and the log says so. No map that wide has been baked yet. | SOFT |
 | Lightmap texels | No fixed limit; the work is split into parts automatically. Largest tested: 10.9 M covered texels (mainmenu, 11.4 min). | SOFT |
 | One chart | At Super about 1.73 M covered texels (about 1,713 x 1,713 grid); bigger is refused with a message. | HARD |
 | Photons | Low 5 M, Super 20 M, Custom 1-100 M. | HARD |
 | Gather rays | Per shading call: Low 72, Super 128, Custom 2 x MC^2 (MC 1-64). | HARD |
 | Lights | Halo 2 allows 500 lights, 500 fixtures, 32 skies per scenario. | HARD |
-| Light probes | About 280 probe points per BSP; more are refused, but only after the whole lightmap bake has run. | HARD |
-| Video memory | 24 GB held every tested map. The bake does **not** adapt to your VRAM. | SOFT, not tested below 24 GB |
+| Light probes | 281 probe points per BSP at the default buffer cap. A BSP above that is refused before anything runs, with a message to use Lightmap Only. | HARD |
+| Video memory | 24 GB held every tested map. Since 0.6.2 the app sizes its work parts from your card's VRAM; on 24 GB nothing changes. | SOFT, not tested below 24 GB |
 | Bake time | Super: 22 s to 17.4 min on the tested maps (RTX 4090). | SOFT |
-| GPU timeout (TDR) | The slowest GPU step takes 1.5-1.8 s against Windows' 2 s limit; a slower GPU can time out. | SOFT |
+| GPU timeout (TDR) | The slowest GPU step is now split into smaller submissions: on cyclotron the worst one went from about 1.45 s to 0.67 s against Windows' 2 s limit. A GPU about 3x slower than an RTX 4090 can still time out. | SOFT |
 
 ## Known issues (fix in progress)
 
-These are open problems in this build; fixes are planned for the next release.
+These are open problems in this build.
 
-1. **GPU-timeout risk on GPUs slower than an RTX 4090.** The slowest single GPU step (the photon lattice) takes 1.5-1.8 s on the
-   tested maps against Windows' 2 s timeout (TDR). A slower card can be reset by Windows in the middle of a bake.
-2. **VRAM is not planned.** The bake does not size its work to the card's memory and was tested only on 24 GB. 12 GB and 16 GB
-   cards can run out of memory on big maps.
-3. **Very wide BSPs leak light silently.** A BSP wider than about 510 x the photon search radius per axis lets light through
-   walls in the photon pass, with no error message.
-4. **More than about 280 light-probe points per BSP** stops the probe step with a clean refusal (`BUFCAP: FATAL`, exit 10). The
-   app has no early check, so it happens only after the whole lightmap bake has run, and nothing is installed.
+1. **GPU-timeout risk on much slower GPUs.** 0.6.2 splits the photon-lattice step so its worst single submission on cyclotron
+   is about 0.67 s (was 1.45 s) against Windows' 2 s timeout (TDR), but one step cannot be split further, so a card about 3x
+   slower than an RTX 4090 can still be reset by Windows in the middle of a bake. Only cyclotron was measured.
+2. **VRAM sizing is untested below 24 GB.** The app now sizes its work parts from your card's memory, but this has only been
+   checked by calculation, not on a 12 or 16 GB card, and the photon-lattice step is not sized by it.
+3. **Light probes need 281 points or fewer per BSP.** A BSP with more is now refused up front (use Lightmap Only); the limit
+   itself is unchanged.
+4. **Drive-root H2EK folders** (for example `D:\`) are accepted since 0.6.2 but no real bake has been run from one yet.
 5. **Per-vertex lighting on the stock Steam cyclotron.** Measured on that one map only (8,706 per-vertex records of an
    unmodified Steam H2EK): the records the app stages match `tool_fast`'s own write-back of the same bake for about 84.6% of the
    colours and about 90.2% of the directions. The lightmap bitmaps are identical. The cause is not known; other stock maps have

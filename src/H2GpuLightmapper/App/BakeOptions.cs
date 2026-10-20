@@ -87,7 +87,7 @@ namespace H2GpuLightmapper.App
             if (Path.IsPathRooted(s))
             {
                 if (root == null) return null;
-                string tags = Path.Combine(Path.GetFullPath(root).TrimEnd('\\'), "tags") + "\\";
+                string tags = Path.Combine(H2GpuLightmapper.Core.Payload.ShellPaths.NormalizeRoot(root), "tags") + "\\";   // X1: a drive root stays "D:\"
                 string full = Path.GetFullPath(s);
                 if (!full.StartsWith(tags, StringComparison.OrdinalIgnoreCase)) return null;
                 s = full.Substring(tags.Length);

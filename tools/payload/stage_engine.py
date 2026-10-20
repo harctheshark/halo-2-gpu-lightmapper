@@ -382,6 +382,26 @@ class Stager:
             self.warnings.append('AO DISABLED in this payload: ' + rec['reason'])
         return rec
 
+    # ------------------------------------------------------------------ drive-root H2EK (X1 item 7)
+    def check_driveroot(self):
+        """X1 (2026-10-19): an H2EK at the root of a drive ("D:\\") bakes only when EVERY gpu_bake.ps1 this payload ships (the lightmap
+        engine, engine_custom, dev_AO's AO trace) carries the P1b handling: H2LM_ROOT may be a drive root and every "$ROOT\\sub" join is
+        written "$RP\\sub". features.driveRoot.enabled records that; without it the shell keeps refusing a drive root (exit 2)."""
+        marker = 'H2LM P1b'
+        joins = ('$RP\\tool_fast.exe', '$RP\\tags')
+        gbs = sorted(d for d in self.entries if d.endswith('/gpu_bake.ps1'))
+        bad = []
+        for gb in gbs:
+            data = open(os.path.join(self.inst, *gb.split('/')), 'rb').read().decode('utf-8', errors='replace')
+            if marker not in data or not all(j in data for j in joins):
+                bad.append(gb)
+        rec = {'enabled': bool(gbs) and not bad, 'checked': gbs, 'missing': bad,
+               'reason': None if gbs and not bad else ('no gpu_bake.ps1 in the payload' if not gbs
+                                                         else 'no P1b drive-root handling in: ' + ', '.join(bad))}
+        if not rec['enabled']:
+            self.notes.append('drive-root H2EK disabled in this payload (features.driveRoot): ' + rec['reason'])
+        return rec
+
     # ------------------------------------------------------------------ light probes (V5, gate T4)
     def check_probes(self):
         """V5 (2026-10-14): the light-probe pipeline (Standard on a probe BSP, Lightprobes only) is released only by gate T4
@@ -693,6 +713,7 @@ def main(argv=None):
             custom = st.stage_custom()
             ao = st.check_ao_engine()
             probes = st.check_probes()
+            driveroot = st.check_driveroot()
             st.tag_roles()
             refs = st.check_gpu_bake_refs()
             imps = st.check_imports()
@@ -717,9 +738,10 @@ def main(argv=None):
             'engine': {k: st.entries[k]['md5'] for k in ('engine_v373/gpu_bake.ps1', 'engine_v373/v041-fullgpu/fullgpu.exe',
                                                           '_research/ao/dev_AO/gpu_bake.ps1', '_research/ao/dev_AO/v041-fullgpu/fullgpu.exe',
                                                           'osoyoos/osoy_launch.exe') if k in st.entries},
-            'custom_engine': custom, 'ao_engine': ao, 'probes_gate': probes,
+            'custom_engine': custom, 'ao_engine': ao, 'probes_gate': probes, 'driveroot': driveroot,
             'features': {'ao': {'enabled': ao['enabled'], 'reason': ao['reason']},
-                         'probes': {'enabled': probes['enabled'], 'reason': probes['reason']}},
+                         'probes': {'enabled': probes['enabled'], 'reason': probes['reason']},
+                         'driveRoot': {'enabled': driveroot['enabled'], 'reason': driveroot['reason']}},
             'gpu_bake_refs': refs, 'imports': imps, 'pe': pe,
             'engine_manifest_drift': drift, 'notes': st.notes, 'warnings': st.warnings,
             'sources': {k: st.sources[k] for k in sorted(st.sources)},     # every input read (md5 at read time == at the end)

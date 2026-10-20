@@ -1,0 +1,77 @@
+# title: P1b drive-root H2EK: H2LM_ROOT may be D:\ ; every "$ROOT\sub" join is "$RP\sub" (X1 2026-10-19; dev_AO)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: e356a08c29cbc7b01dac6b8b9a12fa35
+# result-md5: 0e22b6a2b08623476000cb2462df5513
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -346,10 +346,13 @@
+ # CODE layout (inject.exe, the root *.py helpers, osoyoos\, the re_owner.bin oracle, soup_flags_store, cleanup_farm.ps1).
+ foreach ($h2lmN in 'H2LM_ROOT', 'H2LM_WORK', 'H2LM_CODE') {
+     $h2lmV = [Environment]::GetEnvironmentVariable($h2lmN)
+-    if ($null -ne $h2lmV -and -not ([IO.Path]::IsPathFullyQualified($h2lmV) -and $h2lmV -notmatch '[\\/]$' -and (Test-Path -LiteralPath $h2lmV -PathType Container))) {
+-        throw "H2LM: $h2lmN='$h2lmV' must be an existing absolute folder with no trailing backslash" } }
++    if ($null -ne $h2lmV -and -not ([IO.Path]::IsPathFullyQualified($h2lmV) -and ($h2lmV -notmatch '[\\/]$' -or ($h2lmN -eq 'H2LM_ROOT' -and [IO.Path]::GetPathRoot($h2lmV) -eq $h2lmV)) -and (Test-Path -LiteralPath $h2lmV -PathType Container))) {
++        throw "H2LM: $h2lmN='$h2lmV' must be an existing absolute folder with no trailing backslash (H2LM_ROOT alone may be a drive root such as D:\)" } }
+ $ROOT = if ($env:H2LM_ROOT) { $env:H2LM_ROOT } else { "G:\SteamLibrary\steamapps\common\H2EKMine" }
+-$W    = if ($env:H2LM_WORK) { $env:H2LM_WORK } else { "$ROOT\GPU Lightmap Work" }
++# H2LM P1b (X1, 2026-10-19): $RP = $ROOT as the prefix of every "$RP\sub" join. Identical to $ROOT unless $ROOT is a drive root (H2LM_ROOT=D:\),
++# where "$ROOT\tags" would be "D:\\tags": $RP is then "D:" (never used alone: "D:" is the drive's CURRENT folder); $ROOT stays "D:\" for cwd / --cwd.
++$RP   = if ([IO.Path]::GetPathRoot($ROOT) -eq $ROOT) { $ROOT.TrimEnd('\') } else { $ROOT }
++$W    = if ($env:H2LM_WORK) { $env:H2LM_WORK } else { "$RP\GPU Lightmap Work" }
+ $WC   = if ($env:H2LM_CODE) { $env:H2LM_CODE } else { $W }
+ # <<< H2LM P1
+ # >>> H2LM P3 (standalone exe): H2LM_NOWINDOW=1 = no console window for any tool_fast run -- osoy_launch.exe gets --nowindow
+@@ -372,7 +375,7 @@
+ if (Test-Path "$OUT\writeback_in_progress.txt") {
+     Write-Host "*** THE LAST WRITE-BACK INTO THIS RUN DIR DID NOT FINISH -- the lightmap tag may be half-written:" -ForegroundColor Red
+     Get-Content "$OUT\writeback_in_progress.txt" | ForEach-Object { Write-Host "    $_" -ForegroundColor Red } }
+-$TOOL = "$ROOT\tool_fast.exe"
++$TOOL = "$RP\tool_fast.exe"
+ $DLL  = "$BIN\v014-inject-estimator\gpulm_estimator.dll"     # v371: $BIN (was $W)
+ $INJ  = "$WC\v014-inject-estimator\inject.exe"
+ $FULLGPU = "$BIN\v041-fullgpu\fullgpu.exe"                    # v371: $BIN (was the $W copy, named inline in phase 3)
+@@ -381,7 +384,7 @@
+ $SKDLL       = "$TW\dll\gpulm_estimator.dll"          # the SKELETON-mode build of the estimator (not the production DLL)
+ $scenLeaf    = Split-Path $Scenario -Leaf             # cyclotron
+ $scenRel     = Split-Path $Scenario                   # scenarios\multi\cyclotron
+-$tagDirLive  = "$ROOT\tags\$scenRel"
++$tagDirLive  = "$RP\tags\$scenRel"
+ $ltmpName    = "{0}_{1}_lightmap" -f $scenLeaf, $Bsp
+ $bspLive     = "$tagDirLive\$Bsp.scenario_structure_bsp"
+ $scnLive     = "$tagDirLive\$scenLeaf.scenario"
+@@ -546,7 +549,7 @@
+     return [BitConverter]::ToUInt32($b, 12) }
+ function Get-SceneryBoundsMd5 {
+     # v371 (DESIGN_FINAL 5.9): the -SceneryFix bounds DB the Osoyoos hook reads through its cwd fallback (osoyoos_fixes RESULT.txt)
+-    $f = "$ROOT\h2v_scenery_bounds.db"
++    $f = "$RP\h2v_scenery_bounds.db"
+     if (Test-Path $f) { return (Get-FileHash $f -Algorithm MD5).Hash } else { return "absent" } }
+ function Assert-PerVertexServe($proc, [string]$wbLog, [string]$tagDir, [string]$tagPfx, [string]$tagBak, [int]$nBefore, [string]$marker) {
+     # v371 C1 (DESIGN_FINAL 5.1 C / 5.9): the DLL stops the tool BEFORE the save (TerminateProcess 0x5CE1, F20) on any scenery OR poop
+@@ -587,7 +590,7 @@
+     # live lightmap set (the tool keeps the root scalars), so the tool never has a path to save over a live file.
+     $ov = "$SKW\tags"
+     New-Item -ItemType Directory -Force -Path $ov | Out-Null
+-    $liveCur = "$ROOT\tags"; $ovCur = $ov
++    $liveCur = "$RP\tags"; $ovCur = $ov
+     foreach ($next in @($scenRel -split '\\' | Where-Object { $_ })) {
+         if ((Get-Item $ovCur).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "skeleton overlay: $ovCur must be a REAL directory" }
+         Get-ChildItem $liveCur -Directory | Where-Object { $_.Name -ne $next } | ForEach-Object {
+@@ -694,7 +697,7 @@
+     # under live tags\ written since the launch (phase 3 writes none). A breach stops the bake -- never a silent fallback.
+     $now = Get-LiveTagHashes
+     $chg = @($sk.Live.Keys | Where-Object { $now[$_] -ne $sk.Live[$_] }) + @($now.Keys | Where-Object { -not $sk.Live.ContainsKey($_) })
+-    $hits = @(Get-ChildItem "$ROOT\tags" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $sk.T0 })
++    $hits = @(Get-ChildItem "$RP\tags" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $sk.T0 })
+     if ($chg.Count -or $hits.Count) {
+         $script:skelBreach = $true
+         throw ("*** THE SKELETON RUN WROTE LIVE TAGS -- changed: {0} | written since its launch: {1}. Restore them before anything else." -f `
+@@ -1989,7 +1992,7 @@
+             throw "PHASE 4: v371 -SceneryFix write-back: h2v_scenery_bounds.db is $(Get-SceneryBoundsMd5) but the capture recorded '$($ofW.scenery_bounds_db_md5)' -- the write-back would import other scenery geometry than the capture; re-capture" } }
+     # ***** v361 TAG SAFETY. The tool rewrites the lightmap tags IN PLACE; a shutdown or crash mid-save can leave them
+     # truncated. Keep the previous tags next to this run and a marker that is removed only after the write-back is proven.
+-    $tagDir = Split-Path "$ROOT\tags\$Scenario"; $tagPfx = "{0}_{1}_lightmap" -f (Split-Path $Scenario -Leaf), $Bsp
++    $tagDir = Split-Path "$RP\tags\$Scenario"; $tagPfx = "{0}_{1}_lightmap" -f (Split-Path $Scenario -Leaf), $Bsp
+     $tagFiles = @(Get-ChildItem "$tagDir\$tagPfx*" -File -ErrorAction SilentlyContinue)
+     $tagBak = "$OUT\tag_backup_before_writeback"
+     if ($tagFiles.Count) {

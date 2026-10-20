@@ -58,6 +58,8 @@ namespace H2GpuLightmapper.Core.Payload
         public string LmwInstallPy;
         /// <summary>The shipped h2v_scenery_bounds.db in INST (null if the payload has none).</summary>
         public string BoundsDb;
+        /// <summary>INST\standalone\scan_scenery_bounds.py (the Scenery Fix Dependencies scanner; null if the payload has none).</summary>
+        public string ScanSceneryPy;
         /// <summary>INST gpucheck.exe (null if absent).</summary>
         public string GpuCheckExe;
 
@@ -386,6 +388,7 @@ namespace H2GpuLightmapper.Core.Payload
                 GpuBakePs1 = instFile("engine_v373/gpu_bake.ps1"),
                 LmwInstallPy = instFile("engine_v373/v043-tagwriter/lmw_install.py"),
                 BoundsDb = bdb == null ? null : Path.Combine(inst, bdb.Path.Replace('/', '\\')),
+                ScanSceneryPy = instFile("standalone/scan_scenery_bounds.py"),
                 GpuCheckExe = gc == null ? null : Path.Combine(inst, gc.Path.Replace('/', '\\')),
             };
         }

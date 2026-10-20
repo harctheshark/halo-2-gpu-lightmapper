@@ -47,7 +47,7 @@ namespace H2GpuLightmapper.Tests
     {
         public const string LmwInstallMd5 = "4608af880327453b6e07844d6e7e95b9";
         public const string TagIoMd5 = "e8aeb703b786b8c995297834abdc73f6";
-        public const string ProdDllMd5 = "aaf10a0fbc1b78ddefebe8248acddcca";
+        public const string ProdDllMd5 = "b2370477f36db8c74e6749d5389f2a57";      // W1 2026-10-20: the promoted engine_v373 DLL (was aaf10a0f)
         public const string SkelDllMd5 = "f0fb73ac9cd42f8f716f26b64584759b";
 
         public string Project, Exe, PwshDir, PyDir, MineRoot, FixturesDir, SandboxParent, ShortParent;
@@ -116,7 +116,7 @@ namespace H2GpuLightmapper.Tests
 
         /// <param name="customEngine">E1 (0.6.1): the INST carries engine_custom/gpu_bake.ps1 (the N3 guarded Custom engine), so Custom is offered
         /// with no dev switch.</param>
-        public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false)
+        public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null)
         {
             var rnd = new Random(25);
             Func<int, byte[]> blob = n => { var b = new byte[n]; rnd.NextBytes(b); return b; };
@@ -143,6 +143,7 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "_research/ao/dev_AO/gpu_bake.ps1", Data = txt("throw 'the test dev_AO gpu_bake is never run directly'\n") },
                     new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")) },
                     new F { Path = "standalone/sh_stage.py", Data = File.ReadAllBytes(Fixture("fake_sh_stage.py")) },
+                    new F { Path = "standalone/scan_scenery_bounds.py", Data = File.ReadAllBytes(Fixture("fake_scan_scenery_bounds.py")) },
                     new F { Path = "v043-tagwriter/lmw_tagio.py", Data = File.ReadAllBytes(FxTagIo) },
                     new F { Path = "v043-tagwriter/lmw_defs.json", Data = File.ReadAllBytes(FxTagDefs) },
                 }),
@@ -173,11 +174,12 @@ namespace H2GpuLightmapper.Tests
                     .Add("totalBytes", files.Sum(f => (long)f.Data.Length)).Add("maxPathLen", (long)files.Max(f => f.Path.Length)).Add("files", fl));
             }
             var man = new JObj().Add("format", 1L).Add("appVersion", "0.5.0-test").Add("components", carr);
-            if (aoFeature.HasValue || probesFeature.HasValue)
+            if (aoFeature.HasValue || probesFeature.HasValue || driveRootFeature.HasValue)
             {
                 var feats = new JObj();
                 if (aoFeature.HasValue) feats.Add("ao", new JObj().Add("enabled", aoFeature.Value).Add("reason", aoFeature.Value ? null : "the test payload's AO engine is out of sync"));
                 if (probesFeature.HasValue) feats.Add("probes", new JObj().Add("enabled", probesFeature.Value).Add("reason", probesFeature.Value ? null : "the test payload's T4 proof does not cover its engine"));
+                if (driveRootFeature.HasValue) feats.Add("driveRoot", new JObj().Add("enabled", driveRootFeature.Value).Add("reason", driveRootFeature.Value ? null : "the test payload's gpu_bake has no P1b"));
                 man.Add("features", feats);
             }
             File.WriteAllText(Path.Combine(dir, "MANIFEST.json"), Core.Util.Json.Write(man, true), new UTF8Encoding(false));

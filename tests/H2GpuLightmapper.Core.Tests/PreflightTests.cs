@@ -47,7 +47,10 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.Eq(CheckLevel.Ok, r.Get("path.ascii").Level, "ASCII");
             Assert.Eq(SlotBaseKind.Direct, r.SlotPlan.Kind, "ProdRoot WORK fits the slot");
             Assert.Eq(DllSlotPatcher.PristineBase, r.SlotPlan.SlotBase, "slot base == the pristine string (no-op patch)");
-            Assert.Eq(CheckLevel.Ok, r.Get("boundsdb").Level, "bounds DB 6814f29a present");
+            // SF1 2026-10-20: the live DB has since been extended by the scenery scanner (no longer the shipped 6814f29a); an existing
+            // DB is kept as is and reported as Info, which is the rule under test
+            bool shippedDb = SafeFs.Md5File(Path.Combine(C.MineRoot, "h2v_scenery_bounds.db")).StartsWith("6814f29a", StringComparison.Ordinal);
+            Assert.Eq(shippedDb ? CheckLevel.Ok : CheckLevel.Info, r.Get("boundsdb").Level, "bounds DB present (" + (shippedDb ? "the shipped 6814f29a" : "an extended one, kept as is") + ")");
             Assert.True(r.Get("fs.writable") == null && r.Get("tool.smoke") == null, "no write probe / no tool run on production");
             Assert.Eq(listing, Directory.GetFileSystemEntries(C.MineRoot).Length, "nothing created in the production root");
             Assert.Contains(r.ToJson(), "\"ok\": true", "json");
@@ -136,6 +139,13 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.Eq(Path.Combine(sysDrive, "GPU Lightmap Work"), ShellPaths.WorkOf(sysDrive), "WorkOf keeps the drive root's backslash (never the relative 'C:GPU Lightmap Work')");
             var dr = PreflightChecks.Run(sysDrive, ReadOnly());
             Assert.True(dr.Get("path.root") != null && dr.Get("path.root").Level == CheckLevel.Fail, "a drive-root H2EK is refused: " + string.Join(" | ", dr.Items));
+            // X1: a payload whose gpu_bake has the P1b handling (features.driveRoot) lets the same root through (an info, not a failure)
+            var allow = ReadOnly(); allow.AllowDriveRoot = true;
+            var dok = PreflightChecks.Run(sysDrive, allow);
+            Assert.True(dok.Get("path.root") != null && dok.Get("path.root").Level == CheckLevel.Info, "a drive-root H2EK is allowed with AllowDriveRoot: " + string.Join(" | ", dok.Items));
+            Assert.Eq(sysDrive, ShellPaths.NormalizeRoot(sysDrive), "NormalizeRoot keeps the drive root's backslash");
+            Assert.Eq(sysDrive, ShellPaths.NormalizeRoot(sysDrive.TrimEnd('\\') + "/"), "... from D:/ too");
+            Assert.Eq(C.MineRoot.TrimEnd('\\'), ShellPaths.NormalizeRoot(C.MineRoot.TrimEnd('\\') + @"\"), "a folder loses its trailing backslash");
         }
 
         private static void Budget()

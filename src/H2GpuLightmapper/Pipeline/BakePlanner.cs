@@ -52,6 +52,10 @@ namespace H2GpuLightmapper.Pipeline
         public string WorkerNote, ProbeWorkerNote;
         public int ProbePoints;
         public bool ProbePointsAssumed;
+        /// <summary>X1: the adapter limits decided by the session (null = nothing passed: the production argv).</summary>
+        public GpuLimits Limits;
+        /// <summary>X1: the probe-count preflight found the BSP close to the GPU probe pass's limit.</summary>
+        public string ProbeWarning;
         public bool ReuseLightmap, ReuseProbe;
         public string LightmapReuseNote, ProbeReuseNote;
     }
@@ -78,7 +82,7 @@ namespace H2GpuLightmapper.Pipeline
         public static string FarmDir(string work, int w) { return Path.Combine(work, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture)); }
 
         /// <summary>gpu_bake's own arguments in run_bake.ps1's order (+ the P2 custom parameters last).</summary>
-        public static List<string> GpuBakeArgs(BakeOptions o, int worker, bool writeBack, bool skipCapture)
+        public static List<string> GpuBakeArgs(BakeOptions o, int worker, bool writeBack, bool skipCapture, GpuLimits limits = null)
         {
             var a = new List<string> { "-Scenario", o.ScenarioRel, "-Bsp", o.Bsp, "-Worker", worker.ToString(CultureInfo.InvariantCulture), "-Quality", o.QualityToken };
             if (writeBack) a.Add("-WriteBack");
@@ -90,6 +94,9 @@ namespace H2GpuLightmapper.Pipeline
                 a.Add("-Photons"); a.Add(o.Photons.ToString(CultureInfo.InvariantCulture));
                 a.Add("-MCSamples"); a.Add(o.Rays.ToString(CultureInfo.InvariantCulture));
             }
+            // X1: sized for the adapter's VRAM. Both are 0 on a 24 GB card (the planner's own cap binds first), so that argv is unchanged.
+            if (limits != null && limits.MaxCallsPerPart > 0) { a.Add("-MaxCallsPerPart"); a.Add(limits.MaxCallsPerPart.ToString(CultureInfo.InvariantCulture)); }
+            if (limits != null && limits.BufCapMB > 0) { a.Add("-BufCapMB"); a.Add(limits.BufCapMB.ToString(CultureInfo.InvariantCulture)); }
             return a;
         }
 
@@ -129,6 +136,13 @@ namespace H2GpuLightmapper.Pipeline
             if (o.Quality == Quality.Custom) p.CustomGuarded = engineRel == InstLayout.GpuBakeCustom;
             if (o.Quality == Quality.Custom && engineRel == InstLayout.GpuBake)
                 p.Warnings.Add("UNGUARDED Custom (dev --dev-custom-unguarded): this payload has no engine_custom with the N3 palloc guard, so Custom runs engine_v373's fullgpu -- a uint32 photon-count wrap would NOT be caught; evidence from this run is marked guarded=false");
+            p.Limits = pi.Limits;
+            if (pi.Limits != null)
+                foreach (var ln in pi.Limits.Notes)
+                {
+                    if (ln.StartsWith("WARNING ", StringComparison.Ordinal)) p.Warnings.Add(ln.Substring(8)); else p.Notes.Add(ln);
+                }
+            if (!string.IsNullOrEmpty(pi.ProbeWarning)) p.Warnings.Add(pi.ProbeWarning);
             if (!o.Fixes) p.Warnings.Add("the Plücker and Scenery fixes are OFF (dev flag): this is not the validated configuration");
             string runDir = pi.RunDir;
             string work = rt.Work;
@@ -157,7 +171,7 @@ namespace H2GpuLightmapper.Pipeline
                 // stage (the [4b] command, with Retry); gpu_bake -WriteBack (the production argv) runs only as the tool write-back
                 // fallback. Before U3 that plan ran gpu_bake -WriteBack, whose [4b] lmw_install failed the whole run on a held file.
                 bool shellInstallsLightmap = p.Install && !o.Ao && !p.ProbePath;
-                var args = GpuBakeArgs(o, n, false, pi.ReuseLightmap);
+                var args = GpuBakeArgs(o, n, false, pi.ReuseLightmap, pi.Limits);
                 var spec = PwshInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);   // refuses -?, -Cleanup, a worker outside 200-299 / 149
                 var g = p.Add(new PlanStep
                 {
@@ -169,7 +183,7 @@ namespace H2GpuLightmapper.Pipeline
                 if (shellInstallsLightmap)
                     g.Params.Add("shellInstalls", true)
                             .Add("ifDirectWriterCannotRun", "gpu_bake refuses a stage-only bake up front when the direct writer cannot run at all; the production "
-                                 + "-WriteBack argv switches to the tool write-back there, so the shell then runs it: " + string.Join(" ", GpuBakeArgs(o, n, true, pi.ReuseLightmap)));
+                                 + "-WriteBack argv switches to the tool write-back there, so the shell then runs it: " + string.Join(" ", GpuBakeArgs(o, n, true, pi.ReuseLightmap, pi.Limits)));
                 rest = Path.Combine(outN, "tagw_stage");
 
                 if (!p.Install && !o.Ao && !p.ProbePath)
@@ -191,7 +205,7 @@ namespace H2GpuLightmapper.Pipeline
                     f.Params.Add("report", Path.Combine(outN, "tagw_stage", "tagw_report.json"))
                             .Add("else", "the direct tag writer made no stage: gpu_bake -WriteBack (the production argv) with -SkipCapture on this capture runs [4a] again and "
                                  + "then the tool write-back [4], as production falls back; it installs itself (no Retry there) and the run ends after its Verify")
-                            .Add("fallbackArgs", GpuBakeArgs(o, n, true, true).Cast<object>().ToList());
+                            .Add("fallbackArgs", GpuBakeArgs(o, n, true, true, pi.Limits).Cast<object>().ToList());
                 }
                 if (o.Ao || p.ProbePath)
                 {
@@ -337,7 +351,7 @@ namespace H2GpuLightmapper.Pipeline
             {
                 AppVersion = rt.AppVersion, Root = rt.Root, Work = rt.Work, InstDir = rt.InstDir, SlotBase = rt.SlotBase,
                 PwshDir = rt.PwshDir, PwshExe = rt.PwshExe, PyDir = rt.PyDir, PyExe = rt.PyExe, GpuBakePs1 = script,
-                LmwInstallPy = rt.LmwInstallPy, BoundsDb = rt.BoundsDb, GpuCheckExe = rt.GpuCheckExe,
+                LmwInstallPy = rt.LmwInstallPy, BoundsDb = rt.BoundsDb, ScanSceneryPy = rt.ScanSceneryPy, GpuCheckExe = rt.GpuCheckExe,
             };
         }
 

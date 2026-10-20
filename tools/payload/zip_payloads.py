@@ -228,7 +228,11 @@ SECTIONS = """1. PowerShell {pwsh_version} -- Copyright (c) Microsoft Corporatio
 5. Osoyoos Launcher -- Copyright (c) 2017 num0005, Copyright (c) 2022 Osoyoos Launcher Contributors -- MIT License
    osoyoos\\H2ToolHooks.dll is built from the Osoyoos launcher's H2ToolHooks source (the Halo 2 tool fixes this program
    turns on). standalone\\h2v_scenery_bounds.db is the scenery bounds database the Osoyoos scenery fix reads; it is copied
-   into your H2EK folder only when that folder has none.
+   into your H2EK folder only when that folder has none. SceneryFixDependencies.db (0.6.2) is the per-model dependency
+   database the same scenery fix reads in its newer form (one line per render_model tag name and section key); it is built and
+   extended in your H2EK folder by this program's scanner (standalone\\scan_scenery_bounds.py, the "Scan and Build Scenery
+   Fix Dependencies" button and the automatic scan before a bake) in the format of the Osoyoos database, so it falls under the
+   same MIT notice. The scanner keeps h2v_scenery_bounds.db in step, after a timestamped backup.
    File: licenses\\Osoyoos\\LICENSE.md"""
 
 
@@ -345,6 +349,8 @@ def main(argv=None):
         man = {'format': 1, 'appVersion': ver, 'components': [c_pwsh, c_py, c_not, c_inst],
                'features': {'ao': {k: v for k, v in feats['ao'].items() if v is not None},
                             'probes': {k: v for k, v in feats['probes'].items() if v is not None}}}
+        if isinstance(feats.get('driveRoot'), dict) and isinstance(feats['driveRoot'].get('enabled'), bool):     # X1: optional (an older stage report has none)
+            man['features']['driveRoot'] = {k: v for k, v in feats['driveRoot'].items() if v is not None}
         if not feats['ao']['enabled']:
             print('  WARNING: AO is DISABLED in this payload: %s' % feats['ao'].get('reason'))
         if not feats['probes']['enabled']:

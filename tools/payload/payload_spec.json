@@ -22,8 +22,8 @@
               "v043-tagwriter/lmw_vertex.py", "v043-tagwriter/lmw_defs.json", "v043-tagwriter/lmw_scen_defs.json",
               "v043-tagwriter/lmw_foliage_fitted.json", "v043-tagwriter/bin/p8group.exe", "v043-tagwriter/bin/packfast.dll",
               "v043-tagwriter/dll/gpulm_estimator.dll"]},
-   {"id": "dev_AO", "from": "GLW:_research/ao/dev_AO2", "to": "_research/ao/dev_AO",
-    "comment": "the AO trace engine (gpu_ao trace --engine); its own fullgpu (AO kernels) and ao_merge_parts.py. V1 2026-10-14: the production source is _research/ao/dev_AO2 (= engine_v373 after the TIE1 promotion + exactly dev_AO's AO additions, fullgpu rebuilt on the current headers); the INST dir keeps the name _research/ao/dev_AO (the shell's InstLayout.AoEngineDir; the shell always passes gpu_ao --engine). _research/ao/dev_AO itself is the historical pre-tie engine and is no longer shipped.",
+   {"id": "dev_AO", "from": "GLW:_research/ao/dev_AO4", "to": "_research/ao/dev_AO",
+    "comment": "the AO trace engine (gpu_ao trace --engine); its own fullgpu (AO kernels) and ao_merge_parts.py. W1 2026-10-20: the production source is now _research/ao/dev_AO4 = the PROMOTED engine_v373 (gpu_bake 15771590, fullgpu 48553d9e) + exactly dev_AO2's AO additions (tests/w1_rebuild_062/make_dev_ao4.py); dev_AO2 is the pre-promotion AO engine. V1 2026-10-14: the production source is _research/ao/dev_AO2 (= engine_v373 after the TIE1 promotion + exactly dev_AO's AO additions, fullgpu rebuilt on the current headers); the INST dir keeps the name _research/ao/dev_AO (the shell's InstLayout.AoEngineDir; the shell always passes gpu_ao --engine). _research/ao/dev_AO itself is the historical pre-tie engine and is no longer shipped.",
     "files": ["pipeline_guard.py", "derive_owner_table.py", "bp_build.py", "build_objgrids.py", "build_seam_lists_fast.py",
               "seamfast.dll", "merge_parts_seg.py", "ao_merge_parts.py",
               "v014-inject-estimator/gpulm_estimator.dll",
@@ -79,16 +79,18 @@
     "rebuild": "py native\\gpucheck\\build_gpucheck.py"}
   ],
   "new": [
-   {"to": "standalone/sh_stage.py", "from": "PROJ:src/standalone/sh_stage.py", "role": "new:N1", "label": "S1.5"}
+   {"to": "standalone/sh_stage.py", "from": "PROJ:src/standalone/sh_stage.py", "role": "new:N1", "label": "S1.5"},
+   {"to": "standalone/scan_scenery_bounds.py", "from": "PROJ:tools/scan_scenery_bounds.py", "role": "new:SF1", "label": "SF1 (Scenery Fix Dependencies scanner)",
+    "comment": "SF1 2026-10-20: builds / extends SceneryFixDependencies.db (H2EK root) from the tags; run by 'Scan and Build Scenery Fix Dependencies' and automatically before every bake that uses the scenery fix. Its md5 is recorded in the payload MANIFEST like every file; no expect_md5 pin because the scanner is still being extended."}
   ],
   "pinned": [
-   {"to": "standalone/h2v_scenery_bounds.db", "from": "H2ROOT:h2v_scenery_bounds.db", "role": "boundsdb", "label": "design 1 (bounds DB hole)",
+   {"to": "standalone/h2v_scenery_bounds.db", "from": "PROJ:tools/payload/data/h2v_scenery_bounds.db", "role": "boundsdb", "label": "design 1 (bounds DB hole)",
     "expect_md5": "6814f29a8210aaa3871b68e8ea659c93",
-    "comment": "copied into ROOT by the shell only if ROOT has none (never overwritten)"}
+    "comment": "copied into ROOT by the shell only if ROOT has none (never overwritten). W1 2026-10-20: the source is now a project copy (tools/payload/data, md5 6814f29a = the Osoyoos original, the first timestamped backup the scenery scanner made of the live file): the live H2ROOT:h2v_scenery_bounds.db is now extended by the scanner (53767e0b) and must not be what ships"}
   ],
-  "ao_engine": {"group": "dev_AO", "proof": "PROJ:tests/v1_ao_engine/results/AO_ENGINE_PROOF.json",
+  "ao_engine": {"group": "dev_AO", "proof": "PROJ:tests/w1_rebuild_062/results/AO_ENGINE_PROOF.json",
    "comment": "stage_engine.check_ao_engine: features.ao is enabled only when this group's v041-fullgpu + v015-direct kernel files equal engine_v373's AND the proof (written by tests/v1_ao_engine/write_proof.py after the static check, the keyed-identical stage-only bake and the deterministic AO trace passed) names the AO fullgpu.exe, production fullgpu.exe and both gather.cpp md5s on disk now"},
-  "probes_gate": {"proof": "PROJ:tests/t4/results/T4_PROOF.json",
+  "probes_gate": {"proof": "PROJ:tests/w1_rebuild_062/results/T4_PROOF.json",
    "comment": "V5 gate T4 (stage_engine.check_probes): features.probes (Standard on a probe BSP, Lightprobes only) is enabled only when the T4 proof (written by tests/t4/write_proof.py after Standard super on triplicate scored >= 99.53% SH light vs the CPU super cubes, the lightmap stage was md5-equal to a Lightmap Only run, sh_stage refused a corrupted non-SH byte and Lightprobes only installed into a scratch copy) names the md5 on disk now of every file below (the sources the probe path's INST copies come from; gpu_bake.ps1 / gpu_lightprobes.py are the P1-P3 / P5 bases, their patched results are pinned by the series; U1 2026-10-15: production gpu_bake.ps1 now IS the upstreamed series, so its entry is checked against the pre-upstream base that stage_series verified production was built from; U2 2026-10-15: the two lmw_tagio.py entries are the U2 bases, their patched results are pinned by series_tagio -- U2 changes nothing for equal-size elements, proven by tests/u2_stock_decorators: all 775 production-root scnr / sbsp / ltmp / lightmap bitmaps that walked before walk to identical records (10 more stock-layout scenarios now walk), and the cyclotron / headlong re-stages are byte-identical)",
    "files": {"engine_v373/gpu_bake.ps1": "GLW:engine_v373/gpu_bake.ps1",
              "engine_v373/v041-fullgpu/fullgpu.exe": "GLW:engine_v373/v041-fullgpu/fullgpu.exe",

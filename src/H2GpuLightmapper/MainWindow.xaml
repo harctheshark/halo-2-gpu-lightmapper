@@ -163,6 +163,9 @@
                             <Button x:Name="RepairBtn" Content="Repair runtime" Padding="8,1" Margin="6,0,0,0" Click="RepairBtn_Click"
                                     ToolTip="Full md5 check of the extracted runtime and engine; re-extracts anything damaged"/>
                         </StackPanel>
+                        <Button x:Name="ScanSceneryBtn" Content="Scan and Build Scenery Fix Dependencies" Padding="8,1" Margin="0,5,0,0" HorizontalAlignment="Left"
+                                Click="ScanSceneryBtn_Click"
+                                ToolTip="Scans every render_model under this H2EK's tags and adds the scenery models the Scenery Fix Dependencies database (SceneryFixDependencies.db in the H2EK folder) does not know yet. The old file is backed up first. A bake also does this automatically for its own scenario."/>
                     </StackPanel>
                 </Expander>
             </StackPanel>

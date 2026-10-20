@@ -49,6 +49,8 @@ namespace H2GpuLightmapper.Pipeline
         public bool SkipGpuCheck;
         /// <summary>--dry-run only: the probe-point count to assume (a real run queries the scenario).</summary>
         public int? AssumeProbePoints;
+        /// <summary>--dry-run only (X1): the adapter's dedicated memory in MiB to size the parts for (a real run asks gpucheck).</summary>
+        public int? AssumeVramMB;
         public TimeSpan LockWait = TimeSpan.FromMinutes(240);
         public TimeSpan LockPoll = TimeSpan.FromSeconds(20);
         /// <summary>Dev: another file whose appearance requests a cancel (besides RUN\cancel.request).</summary>
@@ -81,6 +83,9 @@ namespace H2GpuLightmapper.Pipeline
         private int? _n, _m;
         private string _nNote, _mNote;
         private int _points;
+        private bool _driveRootOk;
+        private GpuLimits _limits;
+        private string _probeWarning;
         private bool _pointsAssumed;
         private MapInfo _map;
         private bool _reuseN, _reuseM;
@@ -183,8 +188,14 @@ namespace H2GpuLightmapper.Pipeline
             // ---- root / scenario / BSP
             string full = null;
             try { full = Path.GetFullPath(_o.Root.Trim().Trim('"')); } catch (Exception e) { Refuse("not a usable folder: " + _o.Root + " (" + e.Message + ")"); }
-            if (ShellPaths.IsDriveRoot(full)) Refuse(ShellPaths.DriveRootMessage + " (" + full + ")");      // review fix (finding 23)
-            _root = full.TrimEnd('\\');
+            if (ShellPaths.IsDriveRoot(full))
+            {
+                // X1 (was review fix, finding 23): an H2EK at "D:\" bakes only with a payload whose gpu_bake.ps1 has the P1b handling
+                string dwhy;
+                if (!_host.DriveRootEnabled(out dwhy)) Refuse(ShellPaths.DriveRootMessage + " (" + full + "): " + dwhy);
+                _driveRootOk = true;
+            }
+            _root = ShellPaths.NormalizeRoot(full);
             if (!Directory.Exists(_root)) Refuse("the H2EK folder does not exist: " + _root);
             if (!Directory.Exists(Path.Combine(_root, "tags"))) Refuse(_root + " has no tags\\ folder -- not an H2EK folder");
             _o.Root = _root;
@@ -232,7 +243,7 @@ namespace H2GpuLightmapper.Pipeline
                     ProbeWrite = true, RunToolSmoke = true, Custom = _o.Quality == Quality.Custom, CustomPhotons = _o.Photons,
                     InstDirName = inst.DirName, InstMaxPathLen = inst.MaxPathLen, ScenarioRel = rel, Bsp = _o.Bsp,
                     AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot,
-                    FullgpuSelectsDgpu = dgpuExports,
+                    FullgpuSelectsDgpu = dgpuExports, AllowDriveRoot = _driveRootOk,
                 });
                 foreach (var it in _pf.Items.Where(i => i.Level != CheckLevel.Ok)) Say("    " + it);
                 _toolMd5 = _pf.Tool == null ? null : _pf.Tool.Md5;
@@ -272,6 +283,7 @@ namespace H2GpuLightmapper.Pipeline
             CheckCancel();
 
             // ---- GPU + pwsh policy (needs the extracted runtime)
+            GpuCheckResult gpuRes = null;
             if (!dry && !_so.SkipPreflight)
             {
                 bool gpu = !_so.SkipGpuCheck && _rt.GpuCheckExe != null;
@@ -280,11 +292,12 @@ namespace H2GpuLightmapper.Pipeline
                 {
                     ProbeWrite = false, RunToolSmoke = false, Custom = _o.Quality == Quality.Custom, CustomPhotons = _o.Photons,
                     InstDirName = inst.DirName, InstMaxPathLen = inst.MaxPathLen, ScenarioRel = rel, Bsp = _o.Bsp,
-                    AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot,
+                    AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot, AllowDriveRoot = _driveRootOk,
                     GpuCheckExe = gpu ? _rt.GpuCheckExe : null,
                     GpuCheckPlainExe = gpu ? InstLayout.FindByName(inst, _rt.InstDir, InstLayout.GpuCheckPlain) : null,
                     PwshExe = _rt.PwshExe, PwshEnv = _env, FullgpuSelectsDgpu = dgpuExports,
                 });
+                gpuRes = pf2.Gpu;
                 foreach (var id in new[] { "gpu", "gpu.advice", "gpu.hybrid", "pwsh.policy" })
                 {
                     var it = pf2.Get(id);
@@ -298,6 +311,21 @@ namespace H2GpuLightmapper.Pipeline
                 {
                     var b = PreflightChecks.EnsureBoundsDb(_root, _rt.BoundsDb);
                     Say("  bounds DB: " + b.Message);
+                }
+            }
+            CheckCancel();
+
+            // ---- GPU limits (X1 item 2): part sizing from the adapter's dedicated VRAM; nothing is passed on a 24 GB card
+            {
+                long? vram = null; string vsrc = null;
+                if (gpuRes != null && gpuRes.DedicatedVideoMemoryBytes.HasValue) { vram = gpuRes.DedicatedVideoMemoryBytes; vsrc = "gpucheck: " + (gpuRes.DefaultAdapter ?? "default adapter"); }
+                else if (_so.AssumeVramMB.HasValue && _so.AssumeVramMB.Value > 0) { vram = (long)_so.AssumeVramMB.Value * 1048576L; vsrc = dry ? "--assume-vram-mb (dry run)" : "--assume-vram-mb"; }
+                _limits = vsrc == null ? (gpuRes != null ? GpuLimits.Compute(null, null, 0) : GpuLimits.Unknown(null))
+                                       : GpuLimits.Compute(vram, vsrc, _o.Quality == Quality.Custom ? _o.Photons : 0);
+                if (vsrc != null)
+                {
+                    Say("  gpu memory: " + (vram.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB (" + vsrc + ")");
+                    foreach (var ln in _limits.Notes) Say("    " + ln);
                 }
             }
             CheckCancel();
@@ -355,6 +383,13 @@ namespace H2GpuLightmapper.Pipeline
             if (probes && !_host.ProbesEnabled)
                 Refuse("this BSP has " + _points + " light probe point(s) and light probes are not released yet in this build (gated on T4, the engine_v373 re-validation: "
                        + _host.ProbesWhy + "): use Lightmap Only, which resets this BSP's " + _points + " probes to zero like `tool lightmaps` (CLI: --mode lightmap); dev: --dev-probes");
+            if (probes)
+            {
+                // X1 item 4: the GPU probe pass holds ~281 points per BSP at its buffer cap; refuse HERE, before any bake, not at the end
+                var pv = GpuLimits.CheckProbes(_points);
+                if (pv.Refuse) Refuse(pv.Message);
+                if (pv.Marginal) { _probeWarning = pv.Message; Say("  " + pv.Message); }
+            }
             CheckCancel();
 
             // ---- workers (200-299; farm_w149 never)
@@ -437,6 +472,12 @@ namespace H2GpuLightmapper.Pipeline
                 Say("  gpu.hybrid: Windows gives " + string.Join(" and ", exes) + " the high-performance GPU (per-app preference) -- ok");
             }
 
+            // ---- Scenery Fix Dependencies (SF1): BEFORE the capture and the reuse gate -- gpu_bake pins the database's md5 into the
+            // capture record and refuses a write-back if it changed since, so whatever this check adds must already be in the file
+            // when the capture identity below is computed. Never blocks the bake.
+            SceneryFixCheck(dry, rel);
+            CheckCancel();
+
             // ---- capture reuse gate (section 7)
             _tagsNow = new Lazy<TagsFingerprint>(() => TagsFingerprint.Compute(_root, _set));
             var changed = new List<string>();
@@ -482,6 +523,40 @@ namespace H2GpuLightmapper.Pipeline
             CheckCancel();
         }
 
+        /// <summary>
+        /// SF1: before a bake that uses the scenery fix, scan the models this scenario's scenery places and add the ones the Scenery
+        /// Fix Dependencies database does not know yet (scan_scenery_bounds.py --scenario --apply --json). One log line per added
+        /// model; conflicts are a warning; a scanner failure is a warning and the bake continues with the database as it is.
+        /// A dry run starts nothing and writes nothing, so it only says that a real run scans.
+        /// </summary>
+        private void SceneryFixCheck(bool dry, string rel)
+        {
+            if (!_o.Fixes) return;
+            if (dry) { Say("  scenery fix dependencies: not scanned in a dry run (a real run adds this scenario's missing scenery models to " + SceneryFixDeps.DbName + ")"); return; }
+            if (_rt == null || _rt.ScanSceneryPy == null || !File.Exists(_rt.ScanSceneryPy))
+            {
+                Say("  scenery fix dependencies: this payload has no scanner -- the existing database is used as it is");
+                return;
+            }
+            string json = Path.Combine(ShellPaths.StandaloneOf(_work), "scenery_fix_last_scan.json");
+            Say("  scenery fix dependencies: scanning the scenery of " + rel + " ...");
+            SceneryScanResult r;
+            try { r = SceneryFixDeps.Run(_rt.PyExe, _rt.ScanSceneryPy, _root, rel, _rt.Work, _env, SceneryFixDeps.ScenarioScanTimeoutMs, json); }
+            catch (Exception e) when (!(e is OperationCanceledException)) { Say("  WARNING: scenery fix dependencies: the scan failed (" + e.GetType().Name + ": " + e.Message + ") -- continuing with the existing database"); return; }
+            if (!r.Ran) { Say("  WARNING: scenery fix dependencies: " + r.Error + " -- continuing with the existing database"); return; }
+            if (r.Seeding)
+                Say("  scenery fix dependencies: " + SceneryFixDeps.DbName + " had no per-model entries yet -- built it from the " + r.Models.ToString("N0", CultureInfo.InvariantCulture)
+                    + " render_models of the tags folder" + (r.OtherAdded > 0 ? " (" + r.OtherAdded.ToString("N0", CultureInfo.InvariantCulture) + " models outside this scenario were added too)" : "") + ", continuing on!");
+            foreach (var m in r.Added) Say(SceneryFixDeps.AddedLine(m));
+            foreach (var m in r.Updated) Say(SceneryFixDeps.UpdatedLine(m));
+            foreach (var c in r.Conflicts) Say(SceneryFixDeps.ConflictLine(c));
+            if (r.LinesToAdd > 0 && !r.Applied)
+                Say("  WARNING: scenery fix dependencies: " + r.LinesToAdd + " line(s) were missing but the scanner did not write them -- continuing with the existing database");
+            string md5 = CaptureIdentity.Md5OrNull(SceneryFixDeps.DbPath(_root));
+            Say(string.Format(CultureInfo.InvariantCulture, "  scenery fix dependencies: {0} model(s) scanned, {1} of this scenario's added, {2} updated, {3} conflict(s); {4} {5}",
+                              r.Models, r.Added.Count, r.Updated.Count, r.Conflicts.Count, SceneryFixDeps.DbName, md5 == null ? "(not present)" : "md5 " + md5.Substring(0, 8)));
+        }
+
         /// <summary>Non-ASCII / '{' '}' '[' ']' in the H2EK path (the same rules preflight applies; checked even in a dry run).</summary>
         public static string PathTextProblem(string root)
         {
@@ -511,6 +586,7 @@ namespace H2GpuLightmapper.Pipeline
                 O = _o, AppVersion = _host.AppVersion, PayloadSource = _host.Source.Describe, Manifest = _host.Manifest, Rt = _rt, Env = _env,
                 RunDir = runDir, RunDirPredicted = predicted, Worker = _n, ProbeWorker = _m, WorkerNote = _nNote, ProbeWorkerNote = _mNote,
                 ProbePoints = _points, ProbePointsAssumed = _pointsAssumed, ReuseLightmap = _reuseN, ReuseProbe = _reuseM,
+                Limits = _limits, ProbeWarning = _probeWarning,
                 LightmapReuseNote = _o.ReuseCapture ? _reuseNNote : null, ProbeReuseNote = _reuseMNote,
             });
         }
@@ -831,7 +907,7 @@ namespace H2GpuLightmapper.Pipeline
         /// <param name="resultWhy">the run's result text ("installed by ..."); null when the layer text says it (withoutLayer)</param>
         private void RunProductionWriteBack(BakePlan plan, bool skipCapture, PlanStep captureFrom, string headline, string resultWhy, bool withoutLayer)
         {
-            var args = BakePlanner.GpuBakeArgs(_o, plan.Worker.Value, true, skipCapture);
+            var args = BakePlanner.GpuBakeArgs(_o, plan.Worker.Value, true, skipCapture, plan.Limits);
             var spec = PwshInvocation.GpuBake(WithEngine(plan.Engine), _env, args, StepIds.GpuBakeFallback);
             var fs = new PlanStep { Id = StepIds.GpuBakeFallback, UiStep = StepId.Install, Kind = PlanStepKind.Process, FileName = spec.FileName, Cwd = spec.Cwd };
             fs.Args.AddRange(spec.Args);
@@ -951,7 +1027,7 @@ namespace H2GpuLightmapper.Pipeline
             return new ResolvedRuntime
             {
                 AppVersion = _rt.AppVersion, Root = _rt.Root, Work = _rt.Work, InstDir = _rt.InstDir, SlotBase = _rt.SlotBase, PwshDir = _rt.PwshDir, PwshExe = _rt.PwshExe,
-                PyDir = _rt.PyDir, PyExe = _rt.PyExe, GpuBakePs1 = script, LmwInstallPy = _rt.LmwInstallPy, BoundsDb = _rt.BoundsDb, GpuCheckExe = _rt.GpuCheckExe,
+                PyDir = _rt.PyDir, PyExe = _rt.PyExe, GpuBakePs1 = script, LmwInstallPy = _rt.LmwInstallPy, BoundsDb = _rt.BoundsDb, ScanSceneryPy = _rt.ScanSceneryPy, GpuCheckExe = _rt.GpuCheckExe,
             };
         }
 

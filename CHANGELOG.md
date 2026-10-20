@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.2 (2026-10-20): pre-release
+
+Exe SHA-256 `efc7dc4fa5ccdbb174adcdc2aed14e5f6bda78db8fe27bb4bb8384b9c54b4920`. It fixes the issues listed in 0.6.1's README.
+
+- **Scenery fix: custom models and correct sizes.**
+  - The scenery fix hook (v5) looks up each scenery model's compression bounds by its **tag name**, in the new
+    `SceneryFixDependencies.db` in your H2EK folder.
+    - Before every bake, the app scans the scenery the scenario places and adds any model that is missing. The log names each
+      one: "... wasn't in the Scenery Fix Dependencies database -- added automatically, continuing on!".
+    - **Advanced > Scan and Build Scenery Fix Dependencies** scans the whole tags folder on demand.
+    - The old file is kept up to date for older launchers.
+  - **Fixed:** scenery whose data sat above 1 GB in `tool_fast`'s memory was silently left compressed. Its shadows and its
+    per-vertex lighting were wrong (found on a custom lifepod model). The vertex lighting of such scenery now matches the CPU
+    exactly.
+  - **Fixed:** about 40 stock scenery models shared a lookup key with a different model and were decompressed at the wrong size.
+  - **Fixed:** 3-vertex marker sections that are not compressed were "decompressed" with an unrelated model's bounds.
+- **GPU timeout (TDR) risk reduced.**
+  - The photon-lattice step is split into smaller GPU submissions with identical results. On cyclotron (RTX 4090) the worst one
+    went from 1.45 s to 0.67 s.
+  - The sky pass now starts small.
+  - Not eliminated: one step cannot be split further.
+- **Wide BSPs:** no more silent light leaks past about 510 x the photon radius. The occlusion grid grows its cells instead.
+- **VRAM-aware work parts:** the app sizes its parts from the card's memory. Nothing changes on 24 GB; smaller cards are untested.
+- **Light probes:** more than 281 probe points per BSP is refused up front instead of after the whole bake. Maps with lit
+  scenery no longer fail the probe step.
+- **Maps lit only by emissive surfaces** (no sun, no sky) capture correctly. The capture DLL is injected before the tool starts.
+- **H2EK at a drive root** (for example `D:\`) is accepted. No real bake has been run from one yet.
+- **Checked on this build:**
+  - Production identity on cyclotron.
+  - AO neutrality and the exe-vs-hand bake.
+  - Light probes on triplicate (99.533%, unchanged).
+  - Custom on cyclotron.
+  - An end-to-end exe bake of a map with lit custom scenery.
+  - A post-release-build bake (lightmap 99.82% vs the CPU, vertex lighting points identical).
+
 ## 0.6.1 (2026-10-15): pre-release
 
 First public release. Changes since the internal 0.6.0 build:

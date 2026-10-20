@@ -18,6 +18,8 @@ namespace H2GpuLightmapper.Core.Preflight
         public string FeatureLevel;
         public bool Doubles, ExtendedDoubles, Hybrid;
         public double? EffectiveTdrSeconds;
+        /// <summary>X1: dedicated video memory (bytes) of the default adapter (the adapters[] entry with its luid); null when gpucheck did not say.</summary>
+        public long? DedicatedVideoMemoryBytes;
         public string Error;
         public JObj Raw;
 
@@ -70,6 +72,26 @@ namespace H2GpuLightmapper.Core.Preflight
                 g.ExtendedDoubles = d.Bool("extended_doubles_shader_instructions") == true;
             }
             g.Hybrid = j.Bool("hybrid") == true;
+            // X1: the dedicated VRAM of the adapter fullgpu will use = the adapters[] entry with the default adapter's luid
+            // (a software adapter, e.g. the Microsoft Basic Render Driver, is never taken)
+            var adapters = j.Arr("adapters");
+            if (adapters != null)
+            {
+                string luid = d == null ? null : d.Str("luid");
+                JObj pick = null;
+                foreach (var o in adapters)
+                {
+                    var ad = o as JObj;
+                    if (ad == null || ad.Bool("software") == true) continue;
+                    if (luid != null && string.Equals(ad.Str("luid"), luid, StringComparison.OrdinalIgnoreCase)) { pick = ad; break; }
+                    if (pick == null && luid == null) pick = ad;
+                }
+                if (pick != null)
+                {
+                    long? vram = pick.Long("dedicated_video_memory");
+                    if (vram.HasValue && vram.Value > 0) g.DedicatedVideoMemoryBytes = vram;
+                }
+            }
             var tdr = j.Obj("tdr");
             if (tdr != null && tdr["effective_delay_s"] != null) g.EffectiveTdrSeconds = Convert.ToDouble(tdr["effective_delay_s"]);
             if (!g.Ok && g.Reasons.Count == 0)

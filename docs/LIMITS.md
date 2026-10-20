@@ -1,5 +1,15 @@
 # Limits of the Halo 2 GPU Lightmapper
 
+> **Updated in 0.6.2.** This study was written for 0.6.1. Four rows changed since, and the README's [Limits](../README.md#limits)
+> table is current for them:
+>
+> - **BSP width:** no longer a silent leak. The occlusion grid grows its cells past the 512-cell clamp.
+> - **GPU timeout:** the photon-lattice step is split by manager ranges. The worst submission on cyclotron went from 1.45 s to 0.67 s.
+> - **VRAM:** work parts are sized from the card's memory.
+> - **Light probes:** more than 281 points per BSP are refused before the bake starts.
+>
+> The rest of this page describes 0.6.1.
+
 > Source references such as `gather.cpp:6020` or `gpulm_estimator.cpp:5160` point into the GPU engine's source tree. That source is not part of this repository (see [BUILDING.md](BUILDING.md)).
 
 This page lists how big a map the GPU lightmapper can bake, and how many photons and rays it can use. For each limit

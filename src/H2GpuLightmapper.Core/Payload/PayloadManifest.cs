@@ -51,6 +51,19 @@ namespace H2GpuLightmapper.Core.Payload
             return f.Enabled;
         }
 
+        /// <summary>
+        /// X1: may this payload bake an H2EK that sits at the root of a drive (D:\)? Only when the builder saw that the gpu_bake.ps1 it
+        /// ships carries the P1b drive-root handling (features.driveRoot.enabled): an older gpu_bake rejects H2LM_ROOT=D:\ and
+        /// cannot be given "D:" (the drive's current folder). Fails CLOSED: a payload without the record refuses a drive root.
+        /// </summary>
+        public bool DriveRootEnabled(out string why)
+        {
+            var f = Features == null ? null : Features.DriveRoot;
+            if (f == null) { why = "this payload's gpu_bake.ps1 predates drive-root support (no features.driveRoot record)"; return false; }
+            why = f.Enabled ? null : "drive roots are disabled in this build: " + (f.Reason ?? "the payload's gpu_bake.ps1 has no drive-root handling");
+            return f.Enabled;
+        }
+
         public static PayloadManifest Load(Stream s)
         {
             var ser = new DataContractJsonSerializer(typeof(PayloadManifest),
@@ -135,6 +148,8 @@ namespace H2GpuLightmapper.Core.Payload
         /// of the probe-path engine files this payload ships (production fullgpu / estimator DLL / gpu_bake, the lightprobe
         /// drivers, sh_stage, the tag walker).</summary>
         [DataMember(Name = "probes", Order = 1, IsRequired = false, EmitDefaultValue = false)] public PayloadFeature Probes { get; set; }
+        /// <summary>X1: the shipped gpu_bake.ps1 handles H2LM_ROOT at a drive root (P1b: $RP). Absent = an older engine: drive roots stay refused.</summary>
+        [DataMember(Name = "driveRoot", Order = 2, IsRequired = false, EmitDefaultValue = false)] public PayloadFeature DriveRoot { get; set; }
     }
 
     [DataContract]

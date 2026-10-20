@@ -54,8 +54,14 @@ namespace H2GpuLightmapper.Pipeline
             id.Binaries["gpuBake"] = md5Of(gpuBakeRel);
             id.Binaries["toolFast"] = toolMd5 ?? Md5OrNull(Path.Combine(root, "tool_fast.exe"));
             id.Binaries["boundsDb"] = Md5OrNull(Path.Combine(root, "h2v_scenery_bounds.db"));
+            // SF1: the Scenery Fix Dependencies database under its own name (the legacy one above stays recorded too). A record written
+            // before this key existed is compared on boundsDb only (see Evaluate), so old captures are not invalidated for nothing.
+            id.Binaries[SceneryFixKey] = Md5OrNull(Path.Combine(root, "SceneryFixDependencies.db"));
             return id;
         }
+
+        /// <summary>The Binaries key of SceneryFixDependencies.db's md5.</summary>
+        public const string SceneryFixKey = "sceneryFixDb";
 
         public static string Md5OrNull(string p) { try { return File.Exists(p) ? SafeFs.Md5File(p) : null; } catch (IOException) { return null; } }
 
@@ -223,8 +229,16 @@ namespace H2GpuLightmapper.Pipeline
             var bin = j.Obj("binaries") ?? new JObj();
             var diff = new List<string>();
             foreach (var kv in want.Binaries)
+            {
+                if (kv.Key == CaptureIdentity.SceneryFixKey && !bin.Has(kv.Key)) continue;     // an older record: boundsDb vouches (the scanner keeps the legacy file in step)
                 if (!SameText(bin.Str(kv.Key), kv.Value)) diff.Add(kv.Key);
-            if (diff.Count > 0) return Refuse(v, "the engine changed since the capture (" + string.Join(", ", diff) + ")");
+            }
+            if (diff.Count > 0)
+            {
+                bool dbOnly = diff.All(d => d == "boundsDb" || d == CaptureIdentity.SceneryFixKey);
+                return Refuse(v, dbOnly ? "the Scenery Fix Dependencies database changed since the capture (" + string.Join(", ", diff) + "): its models were captured with the old one -- bake with a new capture"
+                                        : "the engine changed since the capture (" + string.Join(", ", diff) + ")");
+            }
             if (forProbes)
             {
                 if (j.Bool("skyHi") != true) return Refuse(v, "the capture was not made for light probes (no GPULM_SKY_HI)");

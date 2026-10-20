@@ -60,6 +60,9 @@ namespace H2GpuLightmapper.Core.Preflight
     {
         /// <summary>Create and delete WORK\.write_probe (off for the read-only production tests).</summary>
         public bool ProbeWrite = true;
+        /// <summary>X1: the payload's gpu_bake.ps1 handles H2LM_ROOT at a drive root (MANIFEST features.driveRoot): an H2EK at "D:\" is then
+        /// an info, not a failure. Default false: the finding-23 refusal.</summary>
+        public bool AllowDriveRoot;
         /// <summary>Run tool_fast.exe with no arguments, hidden, for up to <see cref="ToolSmokeTimeoutMs"/>.</summary>
         public bool RunToolSmoke = true;
         public int ToolSmokeTimeoutMs = 10000;
@@ -113,7 +116,11 @@ namespace H2GpuLightmapper.Core.Preflight
             root = rep.Root;
             rep.Work = ShellPaths.WorkOf(root);
             if (!Directory.Exists(root)) { rep.Add("root.exists", CheckLevel.Fail, "the folder does not exist: " + root); return rep; }
-            if (ShellPaths.IsDriveRoot(root)) rep.Add("path.root", CheckLevel.Fail, ShellPaths.DriveRootMessage, root);
+            if (ShellPaths.IsDriveRoot(root))
+            {
+                if (o.AllowDriveRoot) rep.Add("path.root", CheckLevel.Info, "the H2EK is at the root of a drive; this build's bake scripts handle that (H2LM_ROOT=" + root + ")", root);
+                else rep.Add("path.root", CheckLevel.Fail, ShellPaths.DriveRootMessage, root);
+            }
 
             // ---- tool_fast
             rep.Tool = ToolFast.Identify(root);

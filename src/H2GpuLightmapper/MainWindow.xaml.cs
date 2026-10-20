@@ -254,10 +254,12 @@ namespace H2GpuLightmapper
             {
                 var tool = ToolFast.Identify(root);
                 string pathBad = BakeSession.PathTextProblem(root);
+                string drvWhy = null;
+                bool drvOk = _host.HasPayload && _host.DriveRootEnabled(out drvWhy);     // X1
                 var pf = PreflightChecks.Run(root, new PreflightOptions
                 {
                     ProbeWrite = false, RunToolSmoke = false, InstDirName = inst == null ? null : inst.DirName, InstMaxPathLen = inst == null ? 0 : inst.MaxPathLen,
-                    AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot,
+                    AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot, AllowDriveRoot = drvOk,
                 });
                 var scen = MapQuery.Scenarios(root);
                 Dispatcher.BeginInvoke(new Action(() =>
@@ -398,7 +400,8 @@ namespace H2GpuLightmapper
         /// live holder has the GPU lock (TagWriteGate); the GPU lock is held for its duration; the window cannot close, the
         /// restore / undo / repair buttons and Bake are disabled until it ends; Windows is asked to hold a shutdown meanwhile.
         /// </summary>
-        private void RunOp<T>(string name, string work, string scenario, Func<TagWriteLease, T> body, Func<T, string> describe, Func<T, bool> ok, string title)
+        private void RunOp<T>(string name, string work, string scenario, Func<TagWriteLease, T> body, Func<T, string> describe, Func<T, bool> ok, string title,
+                              Action<T, bool> present = null)
         {
             if (_op != null) { MessageBox.Show(this, "\"" + _op + "\" is still running.", title, MessageBoxButton.OK, MessageBoxImage.Information); return; }
             if (_session != null) { MessageBox.Show(this, "A bake is running in this window.", title, MessageBoxButton.OK, MessageBoxImage.Information); return; }
@@ -415,7 +418,8 @@ namespace H2GpuLightmapper
                 string m = t.Status == TaskStatus.RanToCompletion ? describe(t.Result) : name + " refused / failed: " + t.Exception.GetBaseException().Message;
                 Log(good ? Palette.Good : Palette.Bad, name + ": " + m);
                 if (_closeAfterOp) { Close(); return; }
-                MessageBox.Show(this, m, title, MessageBoxButton.OK, good ? MessageBoxImage.Information : MessageBoxImage.Warning);
+                if (present != null && t.Status == TaskStatus.RanToCompletion) present(t.Result, good);
+                else MessageBox.Show(this, m, title, MessageBoxButton.OK, good ? MessageBoxImage.Information : MessageBoxImage.Warning);
                 RefreshMap();
             })));
         }
@@ -901,6 +905,46 @@ namespace H2GpuLightmapper
                       if (r.Ok) _runtimeReady = true;
                       return r.Ok;
                   }, "Repair runtime");
+        }
+
+        /// <summary>
+        /// SF1: "Scan and Build Scenery Fix Dependencies" -- a FULL scan of the selected H2EK's tags (every render_model), --apply:
+        /// models the database does not know are added (timestamped backup of the old file, append-only). Off the UI thread, hidden
+        /// child process, progress text in the status line; the result is shown (and logged): models scanned, added, conflicts, file.
+        /// Runs under the same gate as the other maintenance actions, so it never overlaps a bake (the bake pins the database's md5).
+        /// </summary>
+        private void ScanSceneryBtn_Click(object sender, RoutedEventArgs e)
+        {
+            const string title = "Scan and Build Scenery Fix Dependencies";
+            if (_root == null || !_host.HasPayload) return;
+            if (_rt == null || _env == null || !_runtimeReady)
+            {
+                MessageBox.Show(this, "The runtime is not ready yet (see the status line). Try again in a moment, or use Advanced > Repair runtime.", title, MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            var rt = _rt; var env = _env; string root = _root;
+            if (rt.ScanSceneryPy == null || !File.Exists(rt.ScanSceneryPy))
+            {
+                MessageBox.Show(this, "This build's runtime has no scenery scanner (scan_scenery_bounds.py). Use Advanced > Repair runtime, or a newer build.", title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            string json = Path.Combine(ShellPaths.StandaloneOf(rt.Work), "scenery_fix_last_scan.json");
+            Log(Palette.Dim, title + ": scanning every render_model under " + Path.Combine(root, "tags") + " ...");
+            RunOp(title, ShellPaths.WorkOf(root), null, lease =>
+            {
+                var r = SceneryFixDeps.Run(rt.PyExe, rt.ScanSceneryPy, root, null, rt.Work, env, SceneryFixDeps.FullScanTimeoutMs, json,
+                                           l => Dispatcher.BeginInvoke(new Action(() => SetStatus(Palette.Fg, title + ": " + l))));
+                return r;
+            }, r => r.Ran ? string.Format(CultureInfo.InvariantCulture, "{0} model(s) scanned, {1} added, {2} updated, {3} conflict(s) -- {4}", r.Models, r.Added.Count, r.Updated.Count, r.Conflicts.Count, r.Db)
+                          : "did not complete: " + r.Error,
+               r => r.Ran, title,
+               (r, good) =>
+               {
+                   foreach (var m in r.Added.Take(200)) Log(Palette.Good, m + " added to the Scenery Fix Dependencies database");
+                   foreach (var m in r.Updated.Take(200)) Log(Palette.Good, m + " updated in the Scenery Fix Dependencies database (its tag changed)");
+                   foreach (var c in r.Conflicts.Take(200)) Log(Palette.Warn, SceneryFixDeps.ConflictLine(c));
+                   new ScanResultWindow(this, title, SceneryFixDeps.Summarize(r), r.Db).ShowDialog();
+               });
         }
 
         private void LogsBtn_Click(object sender, RoutedEventArgs e)

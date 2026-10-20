@@ -17,6 +17,15 @@ namespace H2GpuLightmapper.Core.Tests
             if (!EqualityComparer<TV>.Default.Equals(expected, actual))
                 throw new TestFailure(what + ": expected <" + expected + "> got <" + actual + ">");
         }
+        public static void Seq(IList<string> expected, IList<string> actual, string what)
+        {
+            int n = Math.Max(expected.Count, actual.Count);
+            for (int i = 0; i < n; i++)
+            {
+                string e = i < expected.Count ? expected[i] : "(none)", a = i < actual.Count ? actual[i] : "(none)";
+                if (e != a) throw new TestFailure(what + ": item " + i + " expected <" + e + "> got <" + a + ">\n    expected: " + string.Join(" | ", expected) + "\n    actual:   " + string.Join(" | ", actual));
+            }
+        }
         public static void Contains(string hay, string needle, string what)
         {
             if (hay == null || hay.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0) throw new TestFailure(what + ": <" + needle + "> not in <" + Trim(hay) + ">");

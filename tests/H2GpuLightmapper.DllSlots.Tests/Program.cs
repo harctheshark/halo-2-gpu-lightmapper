@@ -27,7 +27,9 @@ namespace H2GpuLightmapper.DllSlots.Tests
         private const string DevLad = @"C:\Users\alice\AppData\Local";
         private const int Cp1252 = 1252, Cp932 = 932;
 
-        private static byte[] Prod, Skel;
+        private const string ProdV062Md5 = "b2370477f36db8c74e6749d5389f2a57";      // W1 2026-10-20: engine_v373's DLL after the 0.6.2 promotion
+
+        private static byte[] Prod, Skel, ProdV062;
         private static string ProdPath, SkelPath, SandRoot;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true, BestFitMapping = false, ThrowOnUnmappableChar = true)]
@@ -38,9 +40,13 @@ namespace H2GpuLightmapper.DllSlots.Tests
             string engine = Environment.GetEnvironmentVariable("H2LM_TEST_ENGINE");   // <H2EK_ROOT>\GPU Lightmap Work\engine_v373 (read only)
             string sandbox = Path.Combine(Path.GetTempPath(), "s04", Guid.NewGuid().ToString("N").Substring(0, 4));
             string filter = null;
+            // W1: --engine must hold the PRE-promotion DLLs (aaf10a0f / f0fb73ac: a copy of the old v014 DLL beside the skeleton DLL is enough);
+            // --engine-v062 (or H2LM_TEST_ENGINE_V062) is the promoted engine_v373 (b2370477) for the "promoted-production layout" test
+            string engineV062 = Environment.GetEnvironmentVariable("H2LM_TEST_ENGINE_V062");
             for (int i = 0; i < args.Length; i++)
             {
-                if (args[i] == "--engine" && i + 1 < args.Length) engine = args[++i];
+                if (args[i] == "--engine-v062" && i + 1 < args.Length) engineV062 = args[++i];
+                else if (args[i] == "--engine" && i + 1 < args.Length) engine = args[++i];
                 else if (args[i] == "--sandbox" && i + 1 < args.Length) sandbox = args[++i];
                 else if (args[i] == "--filter" && i + 1 < args.Length) filter = args[++i];
                 else { Console.Error.WriteLine("unknown argument " + args[i]); return 2; }
@@ -59,6 +65,13 @@ namespace H2GpuLightmapper.DllSlots.Tests
                     File.Copy(Path.Combine(engine, @"v014-inject-estimator\gpulm_estimator.dll"), ProdPath); root.TrackFile(ProdPath);
                     File.Copy(Path.Combine(engine, @"v043-tagwriter\dll\gpulm_estimator.dll"), SkelPath); root.TrackFile(SkelPath);
                     Prod = File.ReadAllBytes(ProdPath); Skel = File.ReadAllBytes(SkelPath);
+                    if (!string.IsNullOrEmpty(engineV062))
+                    {
+                        string p62 = Path.Combine(SandRoot, "fx_prod_v062.dll");
+                        File.Copy(Path.Combine(engineV062, @"v014-inject-estimator\gpulm_estimator.dll"), p62); root.TrackFile(p62);
+                        ProdV062 = File.ReadAllBytes(p62);
+                        if (DllSlotPatcher.Md5Hex(ProdV062) != ProdV062Md5) { Console.WriteLine("SETUP REFUSED: --engine-v062 DLL md5 is " + DllSlotPatcher.Md5Hex(ProdV062)); return 2; }
+                    }
                     if (DllSlotPatcher.Md5Hex(Prod) != ProdMd5 || DllSlotPatcher.Md5Hex(Skel) != SkelMd5)
                     {
                         Console.WriteLine("SETUP REFUSED: fixture md5s are " + DllSlotPatcher.Md5Hex(Prod) + " / " + DllSlotPatcher.Md5Hex(Skel));
@@ -71,6 +84,7 @@ namespace H2GpuLightmapper.DllSlots.Tests
                 {
                     T("layout: discovery reproduces the known production layout", Layout_DiscoverMatchesKnown_Production),
                     T("layout: discovery reproduces the known skeleton layout", Layout_DiscoverMatchesKnown_Skeleton),
+                    T("layout: promoted-production layout (b2370477) is discovered, pinned, and a patch changes only slot bytes", Layout_PromotedProduction),
                     T("layout: no relocated pointer targets a slot interior", Layout_NoInteriorPointers),
                     T("patch: ProdRoot base is a no-op (aaf10a0f / f0fb73ac unchanged)", Patch_ProdRoot_IsNoOp),
                     T("patch: Steam G:\\...\\H2EK fits and changes only slot bytes", Patch_SteamH2EK_Fits),
@@ -156,6 +170,27 @@ namespace H2GpuLightmapper.DllSlots.Tests
             Assert.True(ReferenceEquals(KnownSlotLayouts.Production, DllSlotPatcher.ResolveLayout(Prod)), "ResolveLayout returns the pinned known layout");
             Assert.Eq(0x6CBE0, KnownSlotLayouts.Production.Slots[0].Offset, "kBaseDir offset");
             Assert.Eq(0xB6608, KnownSlotLayouts.Production.Slots[1].Offset, "g_dirBuf offset");
+        }
+
+        private static void Layout_PromotedProduction()
+        {
+            if (ProdV062 == null) throw new TestSkip("no --engine-v062 / H2LM_TEST_ENGINE_V062 (the promoted engine_v373)");
+            var d = DllSlotPatcher.DiscoverLayout(ProdV062);
+            Assert.True(d.SameSlotsAs(KnownSlotLayouts.ProductionV062), "discovered " + d + " vs known " + KnownSlotLayouts.ProductionV062);
+            Assert.Eq(SlotLayoutSource.Discovered, d.Source, "source");
+            Assert.Eq(ProdV062Md5, d.PristineMd5, "md5");
+            Assert.Eq((long)ProdV062.Length, KnownSlotLayouts.ProductionV062.FileSize, "size");
+            Assert.True(ReferenceEquals(KnownSlotLayouts.ProductionV062, DllSlotPatcher.ResolveLayout(ProdV062)), "ResolveLayout returns the pinned known layout");
+            var refs = DllSlotPatcher.VerifyLayoutAgainstImage(ProdV062, KnownSlotLayouts.ProductionV062);
+            Assert.True(refs.All(x => x >= 1), "every slot start is referenced");
+            var r = DllSlotPatcher.PatchDetailed(ProdV062, SteamBase, null, Cp1252);
+            Assert.True(ReferenceEquals(r.Layout, KnownSlotLayouts.ProductionV062), "layout");
+            int n = AssertDiffOnlyInSlots(ProdV062, r.Bytes, KnownSlotLayouts.ProductionV062);
+            Assert.True(n > 0 && n <= 2 * 61, "changed " + n + " bytes");
+            Assert.Eq(SteamBase, DllSlotPatcher.ReadSlotBase(r.Bytes, KnownSlotLayouts.ProductionV062, Cp1252), "read back");
+            Assert.True(DllSlotPatcher.Repristine(r.Bytes, KnownSlotLayouts.ProductionV062).SequenceEqual(ProdV062), "repristine == input");
+            var same = DllSlotPatcher.PatchDetailed(ProdV062, MineWork + "\\", null, Cp1252);
+            Assert.Eq(ProdV062Md5, DllSlotPatcher.Md5Hex(same.Bytes), "the ProdRoot base is a no-op for the promoted DLL too");
         }
 
         private static void Layout_DiscoverMatchesKnown_Skeleton()

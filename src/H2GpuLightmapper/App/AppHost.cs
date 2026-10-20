@@ -147,6 +147,14 @@ namespace H2GpuLightmapper.App
             }
         }
 
+        /// <summary>X1: an H2EK at a drive root bakes only with a payload whose gpu_bake.ps1 has the P1b handling (MANIFEST features.driveRoot);
+        /// dev override settings.json "devDriveRoot": true is NOT offered -- the refusal is what protects an older engine.</summary>
+        public bool DriveRootEnabled(out string why)
+        {
+            if (Manifest == null) { why = PayloadError ?? "no payload"; return false; }
+            return Manifest.DriveRootEnabled(out why);
+        }
+
         /// <summary>Review fix (finding 15): AO only when the payload proved the AO engine is in sync (MANIFEST features.ao).</summary>
         public bool AoEnabled(out string why)
         {

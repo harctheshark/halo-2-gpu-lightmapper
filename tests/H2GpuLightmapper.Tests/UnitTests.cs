@@ -23,6 +23,7 @@ namespace H2GpuLightmapper.Tests
             yield return T("unit: scenario normalisation + AO tag + custom chunk", Helpers);
             yield return T("unit: CLI parsing (strict: unknown option, missing value, --photons without custom)", CliParsing);
             yield return T("unit: gpu_bake argv = run_bake.ps1's production order (+ P2 custom last)", GpuBakeArgs);
+            yield return T("unit: X1 GPU limits (VRAM part sizing, 24 GB = production argv, D3D11 cap on small cards) + probe-count limit + gpucheck VRAM + NormalizeRoot", X1Limits);
             yield return T("unit: capture record + reuse gate rules (crc, quality, P / MC, fixes, binaries, probes, tags)", ReuseGate);
             yield return T("unit: tags fingerprint excludes this BSP's outputs, Sapien auto-backups and the tool's temp_scenario scratch; diff lists changes", Fingerprint);
             yield return T("unit: after our install only the .scenario line is restamped; other changes keep warning", Restamp);
@@ -245,6 +246,67 @@ namespace H2GpuLightmapper.Tests
             o.Fixes = false; o.Quality = Quality.Super;
             Assert.Seq(new[] { "-Scenario", @"scenarios\multi\cyclotron\cyclotron", "-Bsp", "cyclotron", "-Worker", "203", "-Quality", "super", "-WriteBackMode", "direct" },
                        BakePlanner.GpuBakeArgs(o, 203, false, false), "dev no-fixes argv");
+        }
+
+        private static void X1Limits()
+        {
+            const long GB24 = 25310527488L;             // the RTX 4090's gpucheck figure (dedicated_video_memory)
+            var o = BakeOptions.Defaults(); o.ScenarioRel = @"scenarios\multi\cyclotron\cyclotron"; o.Bsp = "cyclotron";
+            // ---- 24 GB: nothing is passed, the argv is byte-for-byte the production one
+            var big = GpuLimits.Compute(GB24, "t", 0);
+            Assert.Eq(0L, big.MaxCallsPerPart, "24 GB: no -MaxCallsPerPart");
+            Assert.Eq(0, big.BufCapMB, "24 GB: no -BufCapMB");
+            Assert.True(!big.Changes, "24 GB changes nothing");
+            foreach (bool wb in new[] { true, false })
+                foreach (bool sc in new[] { true, false })
+                    Assert.Seq(BakePlanner.GpuBakeArgs(o, 200, wb, sc), BakePlanner.GpuBakeArgs(o, 200, wb, sc, big), "24 GB argv == production (wb " + wb + ", skip " + sc + ")");
+            Assert.True(GpuLimits.Compute(24L << 30, "t", 0).MaxCallsPerPart == 0, "a 24 GiB card (25.77 GB) too");
+            Assert.True(GpuLimits.Compute(20L << 30, "t", 0).MaxCallsPerPart == 0 || GpuLimits.Compute(20L << 30, "t", 0).MaxCallsPerPart > 40000000L, "20 GiB: at most a mild cap");
+            // ---- smaller cards: the rows fit LIMITS.md 8.2 (16 GB ~37 M, 12 GB ~26 M, 8 GB ~15 M) less the 10% margin
+            long r16 = GpuLimits.Compute(16000000000L, "t", 0).MaxCallsPerPart, r12 = GpuLimits.Compute(12000000000L, "t", 0).MaxCallsPerPart, r8 = GpuLimits.Compute(8000000000L, "t", 0).MaxCallsPerPart;
+            Assert.True(r16 > 30000000L && r16 < 37000000L, "16 GB rows " + r16);
+            Assert.True(r12 > 21000000L && r12 < 26000000L, "12 GB rows " + r12);
+            Assert.True(r8 > 11000000L && r8 < 15000000L, "8 GB rows " + r8);
+            Assert.True(r16 > r12 && r12 > r8, "monotone");
+            Assert.Eq(0, GpuLimits.Compute(8L << 30, "t", 0).BufCapMB, "an 8 GiB card: D3D11 allows 2048 MB > 1792, no -BufCapMB");
+            // Custom: the photon budget is an upper bound of the stored photons -> fewer rows
+            Assert.True(GpuLimits.Compute(16000000000L, "t", 100000000L).MaxCallsPerPart < r16, "Custom 100 M photons leaves fewer rows");
+            // ---- under ~7 GiB: D3D11's documented per-resource limit (a quarter of the VRAM) is below 1792 MiB
+            Assert.Eq(1536, GpuLimits.Compute(6L << 30, "t", 0).BufCapMB, "6 GiB: -BufCapMB 1536");
+            Assert.Eq(1024, GpuLimits.Compute(4L << 30, "t", 0).BufCapMB, "4 GiB: -BufCapMB 1024");
+            Assert.Eq(1792, GpuLimits.D3d11ResourceLimitMB(7L << 30), "7 GiB is exactly the default cap");
+            Assert.Eq(2048, GpuLimits.D3d11ResourceLimitMB(24L << 30), "capped at 2048");
+            var six = GpuLimits.Compute(6L << 30, "t", 0);
+            var a6 = BakePlanner.GpuBakeArgs(o, 200, false, false, six);
+            Assert.True(a6.IndexOf("-MaxCallsPerPart") > 0 && a6.IndexOf("-BufCapMB") > a6.IndexOf("-MaxCallsPerPart"), "both passed on a 6 GiB card: " + string.Join(" ", a6));
+            Assert.Seq(BakePlanner.GpuBakeArgs(o, 200, false, false), a6.Take(a6.IndexOf("-MaxCallsPerPart")).ToList(), "the production argv is the prefix");
+            // unknown / tiny / integrated: nothing is passed
+            Assert.True(!GpuLimits.Compute(null, null, 0).Changes && !GpuLimits.Compute(512L << 20, "t", 0).Changes && !GpuLimits.Compute(0, "t", 0).Changes, "unknown / integrated: unchanged");
+            // ---- light probes: tail rows 98,304 per point against the GQ buffer (68 B per row)
+            Assert.Eq(27633061L, GpuLimits.CapRows(1792), "1,792 MiB / 68 B");
+            Assert.Eq(281, GpuLimits.MaxProbePoints(1792), "281 points at the default cap (LIMITS.md: ~270-281)");
+            Assert.Eq(642, GpuLimits.MaxProbePoints(4095), "~640 at -BufCapMB 4095");
+            Assert.True(!GpuLimits.CheckProbes(11).Refuse && !GpuLimits.CheckProbes(11).Marginal, "11 points (triplicate) fine");
+            Assert.True(!GpuLimits.CheckProbes(281).Refuse && GpuLimits.CheckProbes(281).Marginal, "281: allowed but marginal");
+            Assert.True(GpuLimits.CheckProbes(282).Refuse && GpuLimits.CheckProbes(1024).Refuse, "282 / 1,024 refused");
+            Assert.True(!GpuLimits.CheckProbes(270).Marginal && GpuLimits.CheckProbes(271).Marginal && !GpuLimits.CheckProbes(271).Refuse, "marginal band = the last 11 points (271-281)");
+            Assert.Contains(GpuLimits.CheckProbes(300).Message, "at most 281", "message names the limit");
+            // ---- gpucheck JSON: the default adapter's dedicated memory (never the software adapter)
+            string js = "{\"adapters\":[{\"luid\":\"0:1\",\"software\":true,\"dedicated_video_memory\":0},{\"luid\":\"0:2\",\"software\":false,\"dedicated_video_memory\":" + GB24
+                        + "},{\"luid\":\"0:3\",\"software\":false,\"dedicated_video_memory\":134217728}],\"default_adapter\":{\"luid\":\"0:2\",\"name\":\"X\",\"feature_level\":\"12_1\"},\"verdict\":{\"ok\":true}}";
+            var gc = Core.Preflight.GpuCheck.Parse(js, 0);
+            Assert.Eq((long?)GB24, gc.DedicatedVideoMemoryBytes, "the default adapter's VRAM");
+            Assert.Eq((long?)134217728L, Core.Preflight.GpuCheck.Parse(js.Replace("\"luid\":\"0:2\",\"name\"", "\"luid\":\"0:3\",\"name\""), 0).DedicatedVideoMemoryBytes, "matched by luid, not by position");
+            Assert.Eq((long?)null, Core.Preflight.GpuCheck.Parse("{\"verdict\":{\"ok\":true}}", 0).DedicatedVideoMemoryBytes, "absent -> null");
+            // ---- roots: a drive root keeps its backslash, every other root loses it
+            Assert.Eq(@"D:\", Core.Payload.ShellPaths.NormalizeRoot(@"D:\"), "D:\\ stays");
+            Assert.Eq(@"D:\", Core.Payload.ShellPaths.NormalizeRoot("D:/"), "D:/ -> D:\\");
+            Assert.Eq(@"D:\H2EK", Core.Payload.ShellPaths.NormalizeRoot(@"D:\H2EK\"), "a folder loses its trailing backslash");
+            Assert.Eq(@"D:\GPU Lightmap Work", Core.Payload.ShellPaths.WorkOf(@"D:\"), "WORK of a drive root is the drive root plus GPU Lightmap Work");
+            Assert.Eq(@"D:\H2EK\GPU Lightmap Work", Core.Payload.ShellPaths.WorkOf(@"D:\H2EK\"), "WORK of a folder");
+            Assert.Eq(@"D:\tags\scenarios\x", Path.Combine(Core.Payload.ShellPaths.NormalizeRoot(@"D:\"), "tags", @"scenarios\x"), "joins never give 'D:tags'");
+            // the scenario normaliser strips the tags prefix at a drive root too
+            Assert.Eq(@"scenarios\multi\cyclotron\cyclotron", BakeOptions.NormalizeScenario(@"D:\", @"D:\tags\scenarios\multi\cyclotron\cyclotron.scenario"), "NormalizeScenario at a drive root");
         }
 
         private static CaptureIdentity Id(string q = "super", long? p = null, int? mc = null, bool sky = false)

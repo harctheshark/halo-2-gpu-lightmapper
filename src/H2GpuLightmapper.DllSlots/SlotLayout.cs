@@ -113,7 +113,18 @@ namespace H2GpuLightmapper.DllSlots
             new[] { new SlotSpec("kBaseDir", 0x66F94, 61, ".rdata"), new SlotSpec("g_dirBuf", 0xA2400, 300, ".data") },
             SlotLayoutSource.Known);
 
-        public static IReadOnlyList<SlotLayout> All { get; } = new[] { Production, Skeleton };
+        /// <summary>
+        /// W1 2026-10-20: engine_v373\v014-inject-estimator\gpulm_estimator.dll after the 0.6.2 promotion (b2370477, also the AO engine's copy).
+        /// The offsets are the ones <see cref="DllSlotPatcher.DiscoverLayout"/> finds (two NUL-terminated copies of the pristine
+        /// G:\...\GPU Lightmap Work\ path, no relocated pointer into a slot interior: tests/H2GpuLightmapper.DllSlots.Tests, test
+        /// "promoted-production layout"); before this entry the shell reached them by discovery on every extraction.
+        /// </summary>
+        public static readonly SlotLayout ProductionV062 = new SlotLayout(
+            "gpulm_estimator (production, 0.6.2)", "b2370477f36db8c74e6749d5389f2a57", 775168,
+            new[] { new SlotSpec("kBaseDir", 446432, 61, ".rdata"), new SlotSpec("g_dirBuf", 748552, 300, ".data") },
+            SlotLayoutSource.Known);
+
+        public static IReadOnlyList<SlotLayout> All { get; } = new[] { Production, ProductionV062, Skeleton };
 
         public static SlotLayout ByPristineMd5(string md5)
         {

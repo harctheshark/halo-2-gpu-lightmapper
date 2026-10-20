@@ -38,8 +38,8 @@ SANDBOX = os.path.join(os.environ['TEMP'], 's19')      # short on purpose: WORK\
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'fe88bd8bd1a0a990222de51ce30a566a'),
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', 'bac932e8cb795191049381cebefdf22d'),   # production source _research/ao/dev_AO2
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '15771590e4358733d7666616236c18f7'),   # W1 2026-10-20: the promoted engine (was fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '440ce318562d832147db78954b193059'),   # production source _research/ao/dev_AO4 (W1; was dev_AO2 bac932e8)
 }
 EXPECT_PATCHED = {
     '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', 'ffb288d47846b38ed51e0f313761adf3'),   # P5
@@ -166,6 +166,8 @@ def t_inst_equals_production():
             check(f.get('sourceMd5') == base and L.md5_file(r['source']) == base, '%s base' % p)
         elif p in EXPECT_BUILT:
             check(f['md5'] == EXPECT_BUILT[p], '%s %s' % (p, f['md5']))
+        elif p == 'standalone/scan_scenery_bounds.py':      # W1: SF1's scanner, shipped from the project tree
+            check(f['md5'] == L.md5_file(os.path.join(PROJ, 'tools', 'scan_scenery_bounds.py')), '%s %s' % (p, f['md5']))
         elif p in EXPECT_NEW:
             want = EXPECT_NEW[p] or L.md5_file(os.path.join(PROJ, 'src', 'standalone', 'sh_stage.py'))
             check(f['md5'] == want, '%s %s != %s' % (p, f['md5'], want))
@@ -174,11 +176,11 @@ def t_inst_equals_production():
             check(f['md5'] == rec['gpucheck_plain' if 'plain' in p else 'gpucheck']['md5'], p)
         else:
             check(p not in declared and r['kind'] == 'prod', p)
-            check(r['source'].lower().startswith((GLW.lower() + os.sep, H2ROOT.lower() + os.sep)), '%s source %s is not production' % (p, r['source']))
+            check(r['source'].lower().startswith((GLW.lower() + os.sep, H2ROOT.lower() + os.sep)) or (p == 'standalone/h2v_scenery_bounds.db' and r['source'].lower().startswith(os.path.join(PROJ, 'tools', 'payload', 'data').lower() + os.sep)), '%s source %s is not production' % (p, r['source']))
             check(f['md5'] == L.md5_file(r['source']) == f.get('sourceMd5'), '%s != production %s' % (p, r['source']))
             n_prod += 1
     bdb = [f for f in c['files'] if f['path'] == 'standalone/h2v_scenery_bounds.db'][0]
-    check(bdb['md5'] == '6814f29a8210aaa3871b68e8ea659c93' == L.md5_file(os.path.join(H2ROOT, 'h2v_scenery_bounds.db')), 'bounds DB')
+    check(bdb['md5'] == '6814f29a8210aaa3871b68e8ea659c93' == L.md5_file(os.path.join(PROJ, 'tools', 'payload', 'data', 'h2v_scenery_bounds.db')), 'bounds DB (W1: the project copy of the Osoyoos original; the live file is extended by the scanner)')
     # the production fullgpu.exe is copied by its CURRENT md5 (no pin): equal to production now
     fg = [f for f in c['files'] if f['path'] == 'engine_v373/v041-fullgpu/fullgpu.exe'][0]
     check(fg['md5'] == L.md5_file(os.path.join(GLW, 'engine_v373', 'v041-fullgpu', 'fullgpu.exe')), 'fullgpu')
@@ -200,7 +202,7 @@ def t_roles_layout():
     slots = sorted(p for p, f in paths.items() if 'dllslot' in f.get('role', '').split(','))
     nslot = 6 if custom_shipped() else 4          # engine_custom/ adds its own pair (the same two pristine builds)
     check(len(slots) == nslot and all(p.endswith('gpulm_estimator.dll') for p in slots), 'dllslot %s' % slots)
-    check(sorted(paths[p]['md5'] for p in slots) == sorted(['aaf10a0fbc1b78ddefebe8248acddcca', 'f0fb73ac9cd42f8f716f26b64584759b'] * (nslot // 2)),
+    check(sorted(paths[p]['md5'] for p in slots) == sorted(['b2370477f36db8c74e6749d5389f2a57', 'f0fb73ac9cd42f8f716f26b64584759b'] * (nslot // 2)),   # W1 2026-10-20: b2370477 = the promoted gpulm_estimator.dll (was aaf10a0f)
           'slot md5s')
     roles = lambda r: [p for p, f in paths.items() if r in f.get('role', '').split(',')]
     check(roles('boundsdb') == ['standalone/h2v_scenery_bounds.db'], 'boundsdb')
@@ -517,7 +519,7 @@ def t_ao_driver_defaults():
 def t_no_bytecode_in_production():
     """the builder never imports production code: no __pycache__ appeared in the production code dirs it read"""
     dirs = [os.path.join(GLW, d) for d in ('engine_v373', os.path.join('engine_v373', 'v043-tagwriter'), os.path.join('_research', 'ao'),
-                                           os.path.join('_research', 'ao', 'dev_AO'), os.path.join('_research', 'ao', 'dev_AO2'),
+                                           os.path.join('_research', 'ao', 'dev_AO'), os.path.join('_research', 'ao', 'dev_AO2'), os.path.join('_research', 'ao', 'dev_AO4'),
                                            os.path.join('_research', 'lightprobes'))]
     new = []
     for d in dirs:

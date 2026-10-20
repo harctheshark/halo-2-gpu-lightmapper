@@ -34,11 +34,13 @@ namespace H2GpuLightmapper.Cli
         [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap]
         [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture] [--no-install] [--yes]
         [--ao-fallback stop|install] [--probes-fallback stop|install] [--install-retries N [--install-retry-wait-s S]]
-        [--dry-run [--json] [--probe-points N]]
+        [--dry-run [--json] [--probe-points N] [--assume-vram-mb N]]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --scenario S --bsp B [--list | --from BACKUP | --undo-last-install] [--dry-run]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --recover
   ""H2 GPU Lightmapper.exe"" --cli cleanup-alias --h2ek DIR   (removes the H2GLM\<k6> short-path link to that H2EK's work folder)
   ""H2 GPU Lightmapper.exe"" --cli doctor [--h2ek DIR] [--json] [--repair] [--no-gpu] [--no-extract]
+  ""H2 GPU Lightmapper.exe"" --cli scan-scenery-fix --h2ek DIR [--scenario S]   (Scan and Build Scenery Fix Dependencies: adds the scenery
+        models the database SceneryFixDependencies.db in the H2EK folder does not know yet; every bake also does this for its own scenario)
   ""H2 GPU Lightmapper.exe"" --cli cancel --h2ek DIR          (cancels the bake running on that H2EK, in any window)
   ""H2 GPU Lightmapper.exe"" --cli status --h2ek DIR
 
@@ -94,6 +96,7 @@ namespace H2GpuLightmapper.Cli
                 case "bake": return Bake(args, start);
                 case "restore": return Restore(args, start);
                 case "doctor": return Doctor(args, start);
+                case "scan-scenery-fix": return ScanSceneryFix(args, start);
                 case "cancel": return Cancel(args, start);
                 case "status": return Status(args, start);
                 case "cleanup-alias": return CleanupAlias(args, start);
@@ -174,13 +177,13 @@ namespace H2GpuLightmapper.Cli
         {
             var a = ParseFor(args, start + 1,
                 new[] { "--h2ek", "--scenario", "--bsp", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
-                        "--worker", "--probe-worker", "--probe-points", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s" },
+                        "--worker", "--probe-worker", "--probe-points", "--assume-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s" },
                 new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded" });
             var o = BakeOptionsFrom(a);
             var so = new SessionOptions
             {
                 DryRun = a.Has("--dry-run"), SkipPreflight = a.Has("--dev-skip-preflight"), SkipGpuCheck = a.Has("--dev-skip-gpucheck"),
-                AssumeProbePoints = a.GetInt("--probe-points"), CancelFile = a.Get("--cancel-file"),
+                AssumeProbePoints = a.GetInt("--probe-points"), AssumeVramMB = a.GetInt("--assume-vram-mb"), CancelFile = a.Get("--cancel-file"),
             };
             bool json = a.Has("--json");
             var lw = a.GetDouble("--lock-wait-min");
@@ -190,6 +193,8 @@ namespace H2GpuLightmapper.Cli
             if (json && !so.DryRun) a.Errors.Add("--json is only for --dry-run");
             if (so.AssumeProbePoints.HasValue && !so.DryRun) a.Errors.Add("--probe-points is only for --dry-run (a real run queries the scenario)");
             if (so.AssumeProbePoints.HasValue && so.AssumeProbePoints.Value < 0) a.Errors.Add("--probe-points must be >= 0");
+            if (so.AssumeVramMB.HasValue && !so.DryRun) a.Errors.Add("--assume-vram-mb is only for --dry-run (a real run asks gpucheck for the adapter's memory)");
+            if (so.AssumeVramMB.HasValue && so.AssumeVramMB.Value < 0) a.Errors.Add("--assume-vram-mb must be >= 0");
             var retry = InstallRetryFrom(a, o);
             var host = AppHost.Create(HostConfigFrom(a));
             int ae = ArgErrors(a);
@@ -296,9 +301,7 @@ namespace H2GpuLightmapper.Cli
         /// <summary>The H2EK folder from --h2ek, or null with an error printed (a drive root is refused: finding 23).</summary>
         private static string RootFrom(string arg)
         {
-            string full = Path.GetFullPath(arg.Trim().Trim('"'));
-            if (ShellPaths.IsDriveRoot(full)) { Console.Error.WriteLine(ShellPaths.DriveRootMessage + " (" + full + ")"); return null; }
-            string root = full.TrimEnd('\\');
+            string root = ShellPaths.NormalizeRoot(arg);      // X1: a drive root stays "D:\" (these commands never start gpu_bake)
             if (!Directory.Exists(Path.Combine(root, "tags"))) { Console.Error.WriteLine("not an H2EK folder (no tags\\): " + root); return null; }
             return root;
         }
@@ -559,6 +562,48 @@ namespace H2GpuLightmapper.Cli
             return ExitOk;
         }
 
+        // ------------------------------------------------------------------ scan-scenery-fix (SF1)
+
+        /// <summary>--cli scan-scenery-fix --h2ek DIR [--scenario S]: the "Scan and Build Scenery Fix Dependencies" action. Without
+        /// --scenario every render_model under DIR\tags is scanned; missing models are added to DIR\SceneryFixDependencies.db
+        /// (timestamped backup of the old file, append-only). Exit 0 done, 2 refused, 3 the scan did not complete.</summary>
+        private static int ScanSceneryFix(string[] args, int start)
+        {
+            var a = ParseFor(args, start + 1, new[] { "--h2ek", "--scenario" }, new string[0]);
+            string root = a.Get("--h2ek"), scen = a.Get("--scenario");
+            if (string.IsNullOrWhiteSpace(root)) a.Errors.Add("--h2ek DIR is required");
+            var host = AppHost.Create(HostConfigFrom(a));
+            int ae = ArgErrors(a);
+            if (ae >= 0) return ae;
+            if (!host.HasPayload) { Console.Error.WriteLine("REFUSED: " + (host.PayloadError ?? "no payload")); return ExitRefused; }
+            root = RootFrom(root);
+            if (root == null) return ExitRefused;
+            string work = ShellPaths.WorkOf(root);
+            string why = TagWriteGate.Blocked(work, "the scenery fix scan");
+            if (why != null) { Console.Error.WriteLine("REFUSED: " + why); return ExitRefused; }
+            ResolvedRuntime rt;
+            try
+            {
+                var q = host.Installer.StartupEnsure(root);
+                if (!q.Ok) { Console.Error.WriteLine("REFUSED: the runtime could not be prepared: " + q); return ExitRefused; }
+                rt = host.Resolve(root);
+            }
+            catch (Exception e) when (e is IOException || e is InvalidDataException || e is UnauthorizedAccessException)
+            { Console.Error.WriteLine("REFUSED: the runtime could not be prepared: " + e.Message); return ExitRefused; }
+            if (rt.ScanSceneryPy == null) { Console.Error.WriteLine("REFUSED: this payload has no scan_scenery_bounds.py"); return ExitRefused; }
+            var env = BakeEnv.Build(rt);
+            SceneryScanResult r;
+            using (TagWriteGate.Enter(work, "the scenery fix scan"))
+            {
+                r = SceneryFixDeps.Run(rt.PyExe, rt.ScanSceneryPy, root, scen, rt.Work, env,
+                                       string.IsNullOrEmpty(scen) ? SceneryFixDeps.FullScanTimeoutMs : SceneryFixDeps.ScenarioScanTimeoutMs,
+                                       Path.Combine(ShellPaths.StandaloneOf(rt.Work), "scenery_fix_last_scan.json"));
+            }
+            foreach (var l in SceneryFixDeps.Summarize(r)) Console.Out.WriteLine(l);
+            Console.Out.WriteLine("RESULT " + (r.Ran ? "OK" : "FAILED") + ": " + r.Models + " model(s), " + r.Added.Count + " added, " + r.Updated.Count + " updated, " + r.Conflicts.Count + " conflict(s)");
+            return r.Ran ? ExitOk : ExitFailed;
+        }
+
         // ------------------------------------------------------------------ doctor
 
         private static int Doctor(string[] args, int start)
@@ -591,8 +636,11 @@ namespace H2GpuLightmapper.Cli
                 return Emit(json, doc, lines, ok ? ExitOk : ExitRefused);
             }
             string fullRoot = Path.GetFullPath(root.Trim().Trim('"'));
-            if (ShellPaths.IsDriveRoot(fullRoot)) { lines.Add("  " + ShellPaths.DriveRootMessage + " (" + fullRoot + ")"); doc.Add("root", fullRoot).Add("ok", false); return Emit(json, doc, lines, ExitRefused); }
-            root = fullRoot.TrimEnd('\\');
+            string drvWhy = null;
+            bool drvRoot = ShellPaths.IsDriveRoot(fullRoot);
+            bool drvOk = drvRoot && host.HasPayload && host.DriveRootEnabled(out drvWhy);       // X1: only a payload with the P1b gpu_bake
+            if (drvRoot && !drvOk) { lines.Add("  " + ShellPaths.DriveRootMessage + " (" + fullRoot + ")" + (drvWhy != null ? ": " + drvWhy : "")); doc.Add("root", fullRoot).Add("ok", false); return Emit(json, doc, lines, ExitRefused); }
+            root = ShellPaths.NormalizeRoot(fullRoot);
             string work = ShellPaths.WorkOf(root);
             doc.Add("root", root).Add("work", work);
             lines.Add("  root: " + root);
@@ -628,7 +676,7 @@ namespace H2GpuLightmapper.Cli
             var pf = PreflightChecks.Run(root, new PreflightOptions
             {
                 ProbeWrite = true, RunToolSmoke = true, InstDirName = inst == null ? null : inst.DirName, InstMaxPathLen = inst == null ? 0 : inst.MaxPathLen,
-                AliasLocalAppData = host.Paths.AliasLocalAppData, AliasVolumeRoot = host.Paths.AliasVolumeRoot,
+                AliasLocalAppData = host.Paths.AliasLocalAppData, AliasVolumeRoot = host.Paths.AliasVolumeRoot, AllowDriveRoot = drvOk,
                 GpuCheckExe = !noGpu && rt != null ? rt.GpuCheckExe : null,
                 GpuCheckPlainExe = !noGpu && rt != null && inst != null ? InstLayout.FindByName(inst, rt.InstDir, InstLayout.GpuCheckPlain) : null,
                 PwshExe = rt == null ? null : rt.PwshExe, PwshEnv = env,
@@ -666,8 +714,7 @@ namespace H2GpuLightmapper.Cli
         {
             string root = a.Get("--h2ek");
             if (string.IsNullOrWhiteSpace(root)) { a.Errors.Add("--h2ek DIR is required"); return null; }
-            string full = Path.GetFullPath(root.Trim().Trim('"'));
-            return ShellPaths.IsDriveRoot(full) ? full : full.TrimEnd('\\');
+            return ShellPaths.NormalizeRoot(root);
         }
 
         private static int Cancel(string[] args, int start)

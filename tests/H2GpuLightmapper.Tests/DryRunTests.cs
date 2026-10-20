@@ -29,6 +29,158 @@ namespace H2GpuLightmapper.Tests
             yield return T("dry: text mode prints DRY RUN, the env block and every step", TextMode);
             yield return T("dry: on the real ProdRoot (read-only): Direct slot, nothing created in its WORK", RealMine);
             yield return T("dry: privacy (env values only for the shell's own variables) + scenario / BSP canonical case", PrivacyAndCase);
+            yield return T("dry: X1 VRAM-aware parts: 24 GB leaves every argv unchanged; 16 GB adds -MaxCallsPerPart; 6 GB adds -BufCapMB too", VramParts);
+            yield return T("dry: X1 light-probe preflight refuses a BSP past the GPU probe pass's limit (282+) before anything runs", ProbePreflight);
+            yield return T("dry: X1 H2EK at a drive root (a SUBST drive): refused without features.driveRoot, planned with it, no drive-relative or doubled paths", DriveRoot);
+        }
+
+
+        // ------------------------------------------------------------------ X1 (Monday 2026-10-19 robustness list, items 2 / 4 / 7)
+
+        private static void VramParts()
+        {
+            var r = C.NewRoot();
+            string[] bakeArgs = { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" };
+            Func<string, JObj> plan = mb => mb == null ? Plan(r, bakeArgs) : Plan(r, bakeArgs.Concat(new[] { "--assume-vram-mb", mb }).ToArray());
+            var none = plan(null);
+            var baseArgs = Args(Step(none, "gpu-bake"));
+            Assert.True(none.Obj("gpuLimits") == null, "no VRAM figure in a dry run without --assume-vram-mb: no gpuLimits, the production argv");
+            // 24 GB (the RTX 4090's gpucheck figure, 24,138 MiB): the planner's own cap binds first -> the argv is unchanged
+            var p24 = plan("24138");
+            Assert.Seq(baseArgs, Args(Step(p24, "gpu-bake")), "24 GB: the gpu_bake argv is byte-for-byte the production one");
+            Func<JObj, string> argv = st => st.Arr("args") == null ? "" : string.Join(" ", Args(st));
+            Assert.Seq(Steps(none).Select(argv).ToList(), Steps(p24).Select(argv).ToList(), "24 GB: every step's argv is unchanged");
+            Assert.Eq(0L, p24.Obj("gpuLimits").Long("maxCallsPerPart"), "24 GB: maxCallsPerPart 0 (not passed)");
+            Assert.Eq(0L, p24.Obj("gpuLimits").Long("bufCapMB"), "24 GB: bufCapMB 0 (not passed)");
+            // 16 GB: -MaxCallsPerPart n appended after the production argv, nothing else
+            var p16 = plan("16384");
+            var a16 = Args(Step(p16, "gpu-bake"));
+            Assert.Seq(baseArgs, a16.Take(baseArgs.Count).ToList(), "16 GB: the production argv is the prefix");
+            Assert.Seq(new[] { "-MaxCallsPerPart" }, a16.Skip(baseArgs.Count).Take(1).ToList(), "16 GB: -MaxCallsPerPart follows");
+            long n16 = long.Parse(a16[baseArgs.Count + 1]);
+            Assert.True(n16 > 25000000L && n16 < 40000000L, "16 GB rows " + n16);
+            Assert.Eq(baseArgs.Count + 2, a16.Count, "16 GB: no -BufCapMB (D3D11 allows 2048 MB)");
+            Assert.Eq((long)n16, p16.Obj("gpuLimits").Long("maxCallsPerPart"), "the plan records it");
+            Assert.True(p16.Arr("notes").Cast<string>().Any(n => n.Contains("-MaxCallsPerPart")), "a note says why");
+            // the tool write-back fallback (the production -WriteBack argv) carries the same sizing
+            var fb = Step(plan("16384"), "stage-or-tool-fallback").Obj("params").Arr("fallbackArgs").Cast<string>().ToList();
+            Assert.True(fb.Contains("-MaxCallsPerPart") && fb.Contains("-WriteBack"), "fallback argv: " + string.Join(" ", fb));
+            // 6 GB: both knobs (D3D11's documented per-resource limit on 6144 MiB is 1536 MiB < 1792)
+            var a6 = Args(Step(plan("6144"), "gpu-bake"));
+            Assert.Seq(baseArgs, a6.Take(baseArgs.Count).ToList(), "6 GB: the production argv is the prefix");
+            Assert.Eq("-BufCapMB", a6[a6.Count - 2], "6 GB: -BufCapMB last");
+            Assert.Eq("1536", a6[a6.Count - 1], "6 GB: 1536");
+            Assert.True(a6.Contains("-MaxCallsPerPart"), "6 GB: also -MaxCallsPerPart");
+            // an integrated GPU (512 MiB dedicated) is not sized
+            Assert.Seq(baseArgs, Args(Step(plan("512"), "gpu-bake")), "512 MiB: not sized, unchanged");
+            // a real run asks gpucheck: the dry-run switch is refused outside --dry-run
+            var l = C.Base("bake"); l.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron", "--assume-vram-mb", "8192", "--dev-skip-preflight", "--dev-skip-gpucheck" });
+            var bad = C.Run(l);
+            Assert.True(bad.Exit != 0 && (bad.Out + bad.Err).Contains("only for --dry-run"), "--assume-vram-mb outside --dry-run: " + bad);
+        }
+
+        private static void ProbePreflight()
+        {
+            var r = C.NewRoot();
+            string pd = C.BuildPayload(C.Sb.Dir("payload_x1_probes"), true, true);
+            Func<int, string[], CliResult> dry = (pts, extra) =>
+            {
+                var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = pd;
+                l.AddRange(new[] { "--h2ek", r.Root, "--dry-run", "--json", "--scenario", Tri, "--bsp", "triplicate", "--probe-points", pts.ToString() });
+                l.AddRange(extra);
+                return C.Run(l, 120000);
+            };
+            var ok = dry(11, new string[0]);
+            Assert.Eq(0, ok.Exit, "11 points (triplicate) plans: " + ok);
+            Assert.True(!ok.Json().Arr("warnings").Cast<string>().Any(w => w.Contains("light probe points")), "no probe warning at 11");
+            var edge = dry(281, new string[0]);
+            Assert.Eq(0, edge.Exit, "281 points still plans: " + edge);
+            Assert.True(edge.Json().Arr("warnings").Cast<string>().Any(w => w.Contains("close to the 281")), "but warns that the largest chart shares the buffer");
+            var over = dry(282, new string[0]);
+            Assert.Eq(2, over.Exit, "282 points refused before anything: " + over);
+            string why = over.Json().Str("refused");
+            Assert.Contains(why, "282 light probe points", "reason names the count");
+            Assert.Contains(why, "at most 281", "reason names the limit");
+            Assert.Contains(why, "--mode lightmap", "reason names the alternative");
+            Assert.Eq(2, dry(1024, new[] { "--mode", "probes" }).Exit, "Lightprobes only: 1,024 points refused too");
+            Assert.Eq(0, dry(1024, new[] { "--mode", "lightmap" }).Exit, "Lightmap Only bakes no probes: not refused");
+        }
+
+        // a free drive letter, or null
+        private static string FreeLetter()
+        {
+            var used = new HashSet<string>(DriveInfo.GetDrives().Select(d => d.Name.Substring(0, 1).ToUpperInvariant()));
+            foreach (char c in "YXWVUTSRQPONM") if (!used.Contains(c.ToString())) return c.ToString();
+            return null;
+        }
+
+        private static string Subst(params string[] args)
+        {
+            var res = Core.Run.ProcessRunner.RunCapture(Path.Combine(Environment.SystemDirectory, "subst.exe"), args, C.Short.Root, null, 30000);
+            return res.Stdout + res.Stderr;
+        }
+
+        private static void DriveRoot()
+        {
+            var r = C.NewRoot();
+            string letter = FreeLetter();
+            if (letter == null) throw new TestFailure("no free drive letter for the SUBST test");
+            string drive = letter + @":\";
+            string pdOn = C.BuildPayload(C.Sb.Dir("payload_dr_on"), true, null, false, true);
+            string pdOff = C.BuildPayload(C.Sb.Dir("payload_dr_off"), true, null, false, false);
+            Subst(letter + ":", r.Root);
+            try
+            {
+                Assert.True(Directory.Exists(Path.Combine(drive, "tags")), "the SUBST drive shows the sandbox H2EK: " + drive);
+                Func<string, string[], CliResult> dry = (pd, extra) =>
+                {
+                    var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = pd;
+                    l.AddRange(new[] { "--h2ek", drive, "--dry-run", "--json", "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" });
+                    l.AddRange(extra);
+                    return C.Run(l, 120000);
+                };
+                // a payload whose gpu_bake lacks the P1b handling (features.driveRoot false / absent): the old refusal, exit 2
+                foreach (var pd in new[] { pdOff, C.PayloadDir })
+                {
+                    var no = dry(pd, new string[0]);
+                    Assert.Eq(2, no.Exit, "drive root refused without features.driveRoot: " + no);
+                    Assert.Contains(no.Out + no.Err, "root of a drive", "reason");
+                }
+                // a payload that records it: planned, every path well-formed
+                var res = dry(pdOn, new string[0]);
+                Assert.Eq(0, res.Exit, "drive root planned with features.driveRoot: " + res);
+                var p = res.Json();
+                Assert.Eq(drive, p.Str("root"), "root keeps its backslash");
+                Assert.Eq(drive + "GPU Lightmap Work", p.Str("work"), "work");
+                var e = p.Obj("env");
+                Assert.Eq(drive, e.Str("H2LM_ROOT"), "H2LM_ROOT = D:\\ (what P1b accepts)");
+                Assert.Eq(drive + "GPU Lightmap Work", e.Str("H2LM_WORK"), "H2LM_WORK");
+                var g = Step(p, "gpu-bake");
+                Assert.Eq(drive + "GPU Lightmap Work", g.Str("cwd"), "cwd");
+                Assert.Contains(string.Join(" ", Args(g)), drive + @"GPU Lightmap Work\_runtime\", "the script is under WORK");
+                Assert.True((p.Str("out") ?? "").StartsWith(drive + @"GPU Lightmap Work\farm_w", StringComparison.OrdinalIgnoreCase), "OUT: " + p.Str("out"));
+                string all = Core.Util.Json.Write(p, false).Replace(@"\\", @"\");
+                // no drive-relative path ("Y:tags") and no doubled separator ("Y:\\tags") anywhere in the plan
+                var rel = System.Text.RegularExpressions.Regex.Matches(all, "(?i)\\b" + letter + @":[^\\/:]");
+                Assert.Eq(0, rel.Count, "a drive-relative path in the plan: " + (rel.Count > 0 ? all.Substring(Math.Max(0, rel[0].Index - 40), 100) : ""));
+                Assert.True(!all.Contains(letter + @":\\"), "a doubled separator after the drive (Y:\\tags)");
+                // an ordinary (non-root) H2EK is planned exactly as before: the same argv with and without the feature
+                var plain = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
+                Assert.Eq(r.Root, plain.Str("root"), "non-root unchanged");
+                // doctor on the drive root: refused without the feature (the old message), accepted with it
+                var dl = C.Base("doctor", false); dl[dl.IndexOf("--payload-dir") + 1] = pdOff; dl.AddRange(new[] { "--h2ek", drive, "--no-gpu", "--no-extract", "--json" });
+                var dno = C.Run(dl);
+                Assert.Eq(2, dno.Exit, "doctor: " + dno);
+                // restore / cancel never start gpu_bake: a drive root is fine for them (nothing to restore here, but no root refusal)
+                var sl = C.Base("restore", false); sl.AddRange(new[] { "--h2ek", drive, "--scenario", Cyc, "--bsp", "cyclotron", "--list" });
+                var sr = C.Run(sl);
+                Assert.True(!(sr.Out + sr.Err).Contains("root of a drive"), "restore --list at a drive root is not refused for being a drive root: " + sr);
+            }
+            finally
+            {
+                Subst(letter + ":", "/d");
+            }
+            Assert.True(!Directory.Exists(drive), "the SUBST drive " + drive + " was removed");
         }
 
         // ------------------------------------------------------------------ helpers

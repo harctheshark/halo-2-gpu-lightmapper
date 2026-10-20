@@ -1,0 +1,174 @@
+# title: P7 promotion 2026-10-20: M2 early injection (-earlyDll / -readyLog), B5 hook v5 pins + SceneryFixDependencies.db md5, fix #9 probe-mode guard (engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 99559d0888442dc97c584c316c9571e7
+# result-md5: b37450623e3928cadd8007fb4ebfade8
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -463,26 +463,30 @@
+ 
+ # >>> v370 osoyoos fixes (see the header). With both switches off nothing below changes a single launch.
+ $OSOY        = "$WC\osoyoos"
+-$OSOY_DLL    = "$OSOY\H2ToolHooks.dll"        # = the user's Osoyoos-scenery-build Release\H2ToolHooks.dll (2026-07-19 12:51)
+-$OSOY_LAUNCH = "$OSOY\osoy_launch.exe"        # osoy_launch.c, build_osoy_launch.bat; selftest\selftest.ps1
++$OSOY_DLL    = "$OSOY\H2ToolHooks.dll"        # 0.6.2: the Osoyoos SFD hook v5 (Osoyoos-hook-v5\H2ToolHooks\Release\H2ToolHooks.dll, af0c03b1; replaced the 2026-07-19 build 9deff656)
++$OSOY_LAUNCH = "$OSOY\osoy_launch.exe"        # osoy_launch.c, build_osoy_launch.bat; selftest\selftest.ps1 (0.6.2: the --nowindow / --quality-row build, e2dba7af, in BOTH layouts)
+ # H2LM P3: relocated code (H2LM_CODE) runs the PAYLOAD's osoy_launch.exe (the --nowindow / --quality-row build), pinned to its own md5,
+ # filled in when the payload is built (the OSOY_LAUNCH_MD5 build token, tools\strict_patch.py --set); the production layout keeps
+ # the production pin.
+-$OSOY_PIN    = [ordered]@{ $OSOY_DLL = '9DEFF656B076EE101B22A7C3623FFE25'; $OSOY_LAUNCH = $(if ($env:H2LM_CODE) { '%%H2LM:OSOY_LAUNCH_MD5%%' } else { 'C304184E6DA7D7A0C7BB0E05900B926D' }) }
++$OSOY_PIN    = [ordered]@{ $OSOY_DLL = 'AF0C03B1EC7CA66839262BC910140CD0'; $OSOY_LAUNCH = '%%H2LM:OSOY_LAUNCH_MD5%%' }   # 0.6.2: hook v5 + the --nowindow launcher, one pin for every layout
+ $osoyOn      = [bool]$PluckerFix -or [bool]$SceneryFix
+ $osoyLaunch  = $osoyOn -or $Quality -eq "custom"     # H2LM P2: a custom capture / write-back runs through osoy_launch.exe (--quality-row) even with both fixes off
+ $osoyDesc    = "plucker={0} scenery={1}" -f $(if ($PluckerFix) { "ON" } else { "off" }), $(if ($SceneryFix) { "ON" } else { "off" })
+ # a leftover shell OSOYOOS_* never reaches a tool (osoy_launch.exe strips them anyway; a plain Start-Process run has no H2ToolHooks)
+ function Clear-Osoyoos { Get-ChildItem Env: | Where-Object { $_.Name -like 'OSOYOOS_*' } | ForEach-Object { Remove-Item "Env:$($_.Name)" -ErrorAction SilentlyContinue } }
+ Clear-Osoyoos
+-if ($osoyLaunch) {     # H2LM P2 (was $osoyOn; identical with low / super): the pins are checked whenever osoy_launch.exe will run
++if ($osoyLaunch) {    # H2LM P2 (was $osoyOn; identical with low / super): the pins are checked whenever osoy_launch.exe will run
+     foreach ($osoyK in $OSOY_PIN.Keys) {
+         if (-not (Test-Path $osoyK)) { throw "v370: MISSING $osoyK -- -PluckerFix / -SceneryFix need it" }
+         $osoyH = (Get-FileHash $osoyK -Algorithm MD5).Hash
+         if ($osoyH -ne $OSOY_PIN[$osoyK]) { throw "v370: $osoyK md5 $osoyH is not the pinned $($OSOY_PIN[$osoyK]) -- re-pin it here after rebuilding / re-copying it" } }
+     Write-Host ("      v370 OSOYOOS FIXES: {0} -- H2ToolHooks.dll {1} loaded EARLY (suspended launch) into every tool run of this bake" -f `
+-                $osoyDesc, $OSOY_PIN[$OSOY_DLL].Substring(0, 8)) -ForegroundColor Green }
+-function Start-OsoyTool([string]$toolArgs, [string]$runTag, [string]$argDir, [string]$outFile = "", [string]$errFile = "") {
++                $osoyDesc, $OSOY_PIN[$OSOY_DLL].Substring(0, 8)) -ForegroundColor Green
++    # v373M: the capture / write-back DLL is injected into the HELD tool and must report ready before --resume (see Start-OsoyTool)
++    if (-not (Select-String -Path $DLL -SimpleMatch -Pattern "[GPULM v373M] init complete pid=" -Quiet)) {
++        throw "STALE $DLL -- it lacks the v373M ready marker the held-launch injection waits for. Build it with v014-inject-estimator\build.bat" } }
++function Start-OsoyTool([string]$toolArgs, [string]$runTag, [string]$argDir, [string]$outFile = "", [string]$errFile = "", [string]$earlyDll = "", [string]$readyLog = "") {
++    $script:earlyDone = $false     # v373M: set when $earlyDll was injected (and reported ready) while the tool was still held
+     # -> a started [Diagnostics.Process] of tool_fast whose requested Osoyoos hooks were PROVEN in place before its first
+     #    instruction; throws otherwise (osoy_launch.exe has then terminated the suspended tool -- it never ran)
+     $af = Join-Path $argDir "osoyoos_${runTag}_args.txt"
+@@ -509,6 +513,35 @@
+     try {
+         $pp = [Diagnostics.Process]::GetProcessById($tpid)
+         $null = $pp.Handle
++        # >>> v373M (2026-10-19, surflight): INJECT OUR DLL WHILE THE TOOL IS STILL HELD, resume only when its hooks are in.
++        # The old order (resume, sleep 3 s, inject) is a race the tool can win: a tiny map (surface lights only, 44-1202 triangles)
++        # builds its lights, runs the surface-light finalize rays and starts its photon cast inside the 3 s. Late injection then has two
++        # faces: the sever stub at 0x49706B lands after photon_cast_all_lights was entered (the CPU cast runs, 16M hit_alb samples,
++        # "S_cast NOT recorded") or lands just before the cast but after the only geometry-first-sight rays (no soup arrays, "capture
++        # incomplete: tbuf_sorted.bin ... missing"). Held, the main thread cannot run until the DLL's Init thread logged "init complete".
++        if ($earlyDll) {
++            $ei = @(& $INJ $tpid $earlyDll 2>&1 | ForEach-Object { "$_" })
++            $eix = $LASTEXITCODE
++            $ei | Add-Content $lf
++            if ($eix -ne 0) { throw "v370 [$runTag]: early injection of $(Split-Path $earlyDll -Leaf) into the held tool (pid $tpid) FAILED (inject.exe exit $eix): $($ei -join ' ')" }
++            $eMark = "[GPULM v373M] init complete pid=${tpid}:"
++            $eSw = [Diagnostics.Stopwatch]::StartNew(); $eReady = $false
++            while ($eSw.Elapsed.TotalSeconds -lt 90 -and -not $pp.HasExited) {
++                try {
++                    $eFs = [IO.File]::Open($readyLog, 'Open', 'Read', 'ReadWrite')
++                    try {
++                        $eTake = [Math]::Min([int64]$eFs.Length, 262144L); $null = $eFs.Seek(-$eTake, 'End')
++                        $eBuf = New-Object byte[] ([int]$eTake); $eGot = $eFs.Read($eBuf, 0, [int]$eTake)
++                        if ([Text.Encoding]::ASCII.GetString($eBuf, 0, $eGot).Contains($eMark)) { $eReady = $true }
++                    } finally { $eFs.Dispose() }
++                } catch { }
++                if ($eReady) { break }
++                Start-Sleep -Milliseconds 100 }
++            if (-not $eReady) { throw "v370 [$runTag]: the early-injected DLL never logged '$eMark' to $readyLog within 90 s (a DLL without the v373M ready marker, or its Init failed) -- the held tool is terminated" }
++            Add-Content $lf ("v373M early injection: {0} ready after {1:n2} s, tool still held" -f (Split-Path $earlyDll -Leaf), $eSw.Elapsed.TotalSeconds)
++            Write-Host ("      [{0}] v373M: {1} injected BEFORE the tool's first instruction (init complete after {2:n2} s); resuming" -f $runTag, (Split-Path $earlyDll -Leaf), $eSw.Elapsed.TotalSeconds) -ForegroundColor Green
++            $script:earlyDone = $true }
++        # <<< v373M
+         $ro = @(& $OSOY_LAUNCH --resume $tpid 2>&1 | ForEach-Object { "$_" })
+         $ro | Add-Content $lf
+         if ($LASTEXITCODE -ne 0) { throw "v370 [$runTag]: could not resume the held tool (pid $tpid): $($ro -join ' ')" }
+@@ -565,7 +598,8 @@
+     return [BitConverter]::ToUInt32($b, 12) }
+ function Get-SceneryBoundsMd5 {
+     # v371 (DESIGN_FINAL 5.9): the -SceneryFix bounds DB the Osoyoos hook reads through its cwd fallback (osoyoos_fixes RESULT.txt)
+-    $f = "$RP\h2v_scenery_bounds.db"
++    # 0.6.2 (hook v5): the database the v5 hook actually reads: H2SFD_DB_PATH, else <root>\SceneryFixDependencies.db, else the legacy file
++    $f = if ($env:H2SFD_DB_PATH -and (Test-Path $env:H2SFD_DB_PATH)) { $env:H2SFD_DB_PATH } elseif (Test-Path "$RP\SceneryFixDependencies.db") { "$RP\SceneryFixDependencies.db" } else { "$RP\h2v_scenery_bounds.db" }
+     if (Test-Path $f) { return (Get-FileHash $f -Algorithm MD5).Hash } else { return "absent" } }
+ function Assert-PerVertexServe($proc, [string]$wbLog, [string]$tagDir, [string]$tagPfx, [string]$tagBak, [int]$nBefore, [string]$marker) {
+     # v371 C1 (DESIGN_FINAL 5.1 C / 5.9): the DLL stops the tool BEFORE the save (TerminateProcess 0x5CE1, F20) on any scenery OR poop
+@@ -874,7 +908,7 @@
+         if (-not $castInj) { if (-not $castProc.HasExited) { $castProc.Kill() }; $castProc = $null
+                              Write-Host "      *** v372W: CPU-cast process injection FAILED -- statistical suns keep the GPU lottery" -ForegroundColor Red }
+         else { Write-Host "      v372W: CPU-cast process pid $($castProc.Id) started beside the capture (the CPU's own photon cast -> castcpu\)" } }
+-    if ($osoyLaunch) { $p = Start-OsoyTool $a "capture" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch)
++    if ($osoyLaunch) { $p = Start-OsoyTool $a "capture" $OUT -earlyDll $DLL -readyLog "$OUT\gpulm.log" }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch); v373M: and our DLL
+     else {
+     $p = Start-Process -FilePath $TOOL -ArgumentList $a -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+     }
+@@ -886,12 +920,14 @@
+     # `$inj = $false` flag silently OVERWRITES $INJ, the injector path. The symptom is inject.exe
+     # returning rc=1 with no output forever, which reads exactly like a real injection failure.
+     $injected = $false
++    if ($osoyLaunch -and $script:earlyDone) { $injected = $true }     # v373M: injected while the tool was held (Start-OsoyTool)
++    else {
+     Start-Sleep -Seconds 3
+     for ($i=0; $i -lt 80; $i++) {
+         $io = & $INJ $p.Id $DLL 2>&1
+         if ("$io" -match "injected" -or $LASTEXITCODE -eq 0) { $injected = $true; break }
+         if ($p.HasExited) { break }
+-        Start-Sleep -Milliseconds 250 }
++        Start-Sleep -Milliseconds 250 } }
+     # Never let an un-injected tool_fast keep running: without the DLL nothing is severed, so it
+     # does the full CPU bake we are here to avoid -- burning minutes and, in phase 4, overwriting
+     # the tag with CPU lighting. Fail loudly instead of silently producing the wrong artefact.
+@@ -997,6 +1033,11 @@
+     # write) is refused too. The first BSP-path call (return 004ADAA7) is reported whatever its call number.
+     $sc = Select-String -Path "$OUT\gpulm.log" -Pattern "\[GPULM SCAST\] photon_cast_all_lights call \d+ from 004ADAA7: .*LCG state ([0-9A-F]{8})" | Select-Object -First 1
+     if (-not (Test-Path "$OUT\lcg_cast.bin") -or -not $sc) {
++        # v373M diagnosis: the sever line is in the log but the CPU photons were traced anyway (hit_alb samples > 0) = the DLL was injected AFTER
++        # the tool had entered photon_cast_all_lights (a tiny map outruns the post-resume injection; only the held launch is immune)
++        $lateInj = (@($capLog | Select-String -SimpleMatch -Pattern 'SEVER: photon_cast_all_lights 0x49706B').Count -gt 0) -and
++                   (@($capLog | Select-String -Pattern 'hit_alb: [1-9]\d* ').Count -gt 0)
++        if ($lateInj) { throw "PHASE 1: LATE INJECTION -- the sever stub at 0x49706B was installed but the CPU photon cast had already begun (hit_alb samples were captured). The capture DLL must be injected before the tool's first instruction: use -PluckerFix / -SceneryFix (the held osoy_launch launch does it, v373M), or re-run." }
+         throw "PHASE 1: S_cast NOT recorded (lcg_cast.bin missing or no BSP-path [GPULM SCAST] line in $OUT\gpulm.log) -- the RNG-exact sun would refuse (NO_CAPTURE). Is GPULM_SEVER set and the 0x49706B prologue intact?" }
+     $nScast = @(Select-String -Path "$OUT\gpulm.log" -Pattern "\[GPULM SCAST\] photon_cast_all_lights call \d+ from 004ADAA7").Count
+     Write-Host ("      S_cast: {0} (lcg_cast.bin, {1} BSP-path manager calls)" -f $sc.Matches[0].Groups[1].Value,$nScast)
+@@ -1448,9 +1489,19 @@
+     if (-not (Select-String -Path $log -SimpleMatch -Pattern "BUFCAP: v372 cap" -Quiet)) {
+         throw "PHASE 3: [$tag] no 'BUFCAP: v372 cap' line -- a pre-v372 fullgpu.exe (slot-sized GQ: earthcity_1 SUPER would wrap its 4 GiB ByteWidth)" }
+     $scnRows = Select-String -Path $log -Pattern "SCENERY: scenery_q.bin (\d+) rows" | Select-Object -First 1
+-    if ($PluckerFix -and $scnRows -and [int]$scnRows.Matches[0].Groups[1].Value -gt 0 -and
+-        -not (Select-String -Path $log -SimpleMatch -Pattern "PLK64: scenery rows present" -Quiet)) {
+-        throw "PHASE 3: [$tag] -PluckerFix on a scenery capture, but fullgpu did not report the combined *_scn_plk kernel set ('PLK64: scenery rows present')" }
++    # 0.6.2 FIX #9 (mode-aware): a PROBE-MODE run (GPULM_PROBES, the light-probe pass) never appends scenery RECEIVER rows -- fullgpu logs
++    # "PROBE: N scenery rows dropped (probe mode)", sets scnN = 0 and traces the cube texels with the probe kernel (probe_plk, which
++    # shares the geometry / scenery-blocker tables and does not read scenery_q) -- so the combined *_scn_plk set is never created and
++    # 'PLK64: scenery rows present' is never printed. The probe run instead MUST report that the rows were dropped and MUST NOT have
++    # created the scenery twin set; every lightmap bake (no GPULM_PROBES) keeps the original requirement unchanged.
++    if ($PluckerFix -and $scnRows -and [int]$scnRows.Matches[0].Groups[1].Value -gt 0) {
++        if ($env:GPULM_PROBES) {
++            if (-not (Select-String -Path $log -Pattern "PROBE: \d+ scenery rows dropped \(probe mode\)" -Quiet)) {
++                throw "PHASE 3: [$tag] PROBE MODE on a scenery capture (scenery_q.bin has rows), but fullgpu did not report 'PROBE: N scenery rows dropped (probe mode)' -- the probe pass must drop the scenery receiver rows (not the CPU probe rule otherwise)" }
++            if (Select-String -Path $log -SimpleMatch -Pattern "PLK64: scenery rows present" -Quiet) {
++                throw "PHASE 3: [$tag] PROBE MODE reported 'PLK64: scenery rows present' -- the probe pass must not carry scenery receiver rows" } }
++        elseif (-not (Select-String -Path $log -SimpleMatch -Pattern "PLK64: scenery rows present" -Quiet)) {
++            throw "PHASE 3: [$tag] -PluckerFix on a scenery capture, but fullgpu did not report the combined *_scn_plk kernel set ('PLK64: scenery rows present')" } }
+     $anaOff = Select-String -Path $log -SimpleMatch -Pattern "GPULM_ANA_FRUSTUM=0" | Select-Object -First 1
+     if ($anaOff) { throw "PHASE 3: [$tag] $($anaOff.Line.Trim()) -- the v372 analytic emission fixes were turned off (A/B escape)" }
+     $anaCen = Select-String -Path $log -Pattern "v372 analytic census: (\d+) frustum-branch" | Select-Object -First 1
+@@ -1972,7 +2023,7 @@
+     } else { Write-Host "      no existing lightmap tag to back up ($tagDir\$tagPfx*) -- first bake of this BSP" }
+     Set-Content "$OUT\writeback_in_progress.txt" ("started {0}; previous tags: {1} ({2} files from {3}\{4}*). Copy them back if the new tag is broken." -f (Get-Date), $tagBak, $tagFiles.Count, $tagDir, $tagPfx)
+     $aFull = "lightmaps $Scenario $Bsp low -tags_dir tags -data_dir data -game_root_dir ."
+-    if ($osoyLaunch) { $p = Start-OsoyTool $aFull "writeback" $OUT }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch)
++    if ($osoyLaunch) { $p = Start-OsoyTool $aFull "writeback" $OUT -earlyDll $DLL -readyLog "$W\gpulm.log" }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch); v373M: and our DLL
+     else {
+     $p = Start-Process -FilePath $TOOL -ArgumentList $aFull -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+     $null = $p.Handle     # v371 (m2): keeps ExitCode readable after the exit -- the 0x5CE1 refusal is read from it
+@@ -1985,12 +2036,14 @@
+     # `$inj = $false` flag silently OVERWRITES $INJ, the injector path. The symptom is inject.exe
+     # returning rc=1 with no output forever, which reads exactly like a real injection failure.
+     $injected = $false
++    if ($osoyLaunch -and $script:earlyDone) { $injected = $true }     # v373M: injected while the tool was held (Start-OsoyTool)
++    else {
+     Start-Sleep -Seconds 3
+     for ($i=0; $i -lt 80; $i++) {
+         $io = & $INJ $p.Id $DLL 2>&1
+         if ("$io" -match "injected" -or $LASTEXITCODE -eq 0) { $injected = $true; break }
+         if ($p.HasExited) { break }
+-        Start-Sleep -Milliseconds 250 }
++        Start-Sleep -Milliseconds 250 } }
+     if (-not $injected) { if (-not $p.HasExited) { $p.Kill() }; throw "PHASE 4: injection FAILED -- the tool would have baked on the CPU and saved a CPU-lit tag. Aborted." }
+     $p.WaitForExit(3000000) | Out-Null
+     # Never report success without proof. A missing WRITE-BACK line means the tag holds CPU lighting.

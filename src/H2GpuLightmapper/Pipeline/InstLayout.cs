@@ -23,6 +23,8 @@ namespace H2GpuLightmapper.Pipeline
         public const string AoGpuBake = "_research/ao/dev_AO/gpu_bake.ps1";
         public const string ProbeDriver = "_research/lightprobes/gpu_lightprobes.py";
         public const string ShStage = "standalone/sh_stage.py";
+        /// <summary>The Scenery Fix Dependencies scanner (builds / extends SceneryFixDependencies.db from the H2EK's tags).</summary>
+        public const string ScanSceneryBounds = "standalone/scan_scenery_bounds.py";
         /// <summary>The GLW-root tag writer copy (lmw_tagio + lmw_defs.json) the lp_* scripts and the map query import.</summary>
         public const string TagIoDir = "v043-tagwriter";
         public const string TagIo = "v043-tagwriter/lmw_tagio.py";

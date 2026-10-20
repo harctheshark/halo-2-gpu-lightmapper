@@ -12,7 +12,7 @@ namespace H2GpuLightmapper.Core.Tests
     /// <summary>Shared test context: paths, md5-checked fixture copies of production files, the test payload.</summary>
     internal sealed class Ctx : IDisposable
     {
-        public const string ProdDllMd5 = "aaf10a0fbc1b78ddefebe8248acddcca";
+        public const string ProdDllMd5 = "b2370477f36db8c74e6749d5389f2a57";      // W1 2026-10-20: the promoted engine_v373 DLL (was aaf10a0f)
         public const string SkelDllMd5 = "f0fb73ac9cd42f8f716f26b64584759b";
         public const string LmwInstallMd5 = "4608af880327453b6e07844d6e7e95b9";
 
@@ -50,6 +50,17 @@ namespace H2GpuLightmapper.Core.Tests
             FxSkelDll = CopyChecked(Path.Combine(engine, @"v043-tagwriter\dll\gpulm_estimator.dll"), "fx_skel.dll", SkelDllMd5);
             FxLmwInstall = CopyChecked(Path.Combine(engine, @"v043-tagwriter\lmw_install.py"), "lmw_install.py", LmwInstallMd5);
             FxBoundsDb = CopyChecked(Path.Combine(MineRoot, "h2v_scenery_bounds.db"), "h2v_scenery_bounds.db", null);
+            if (!SafeFs.Md5File(FxBoundsDb).StartsWith("6814f29a", StringComparison.Ordinal))
+            {
+                // SF1 2026-10-20: the live H2EK's database has been extended by the scenery scanner (it is no longer the shipped
+                // 6814f29a); the tests need the SHIPPED bytes, which the payload staging keeps (read-only copy of that file)
+                string shipped = Path.Combine(Project, "build", "s19", "stage", "inst", "standalone", "h2v_scenery_bounds.db");
+                if (File.Exists(shipped) && SafeFs.Md5File(shipped).StartsWith("6814f29a", StringComparison.Ordinal))
+                {
+                    File.Delete(FxBoundsDb);
+                    File.Copy(shipped, FxBoundsDb);
+                }
+            }
             if (!SafeFs.Md5File(FxBoundsDb).StartsWith("6814f29a", StringComparison.Ordinal)) throw new InvalidOperationException("the bounds DB fixture is not 6814f29a");
             string gc = Path.Combine(Project, @"build\gpucheck\gpucheck.exe");
             if (File.Exists(gc)) FxGpuCheck = CopyChecked(gc, "gpucheck.exe", null);
