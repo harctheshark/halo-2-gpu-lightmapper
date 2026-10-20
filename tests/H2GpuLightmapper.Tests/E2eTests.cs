@@ -29,6 +29,8 @@ namespace H2GpuLightmapper.Tests
             yield return T("e2e: cancel from another process during phase 3 -> exit 4, lock released, nothing installed", CancelPhase3);
             yield return T("e2e: cancel during the fallback's [4b] install is deferred: the install completes, is VERIFIED, DONE with the cancel noted", CancelDeferred);
             yield return T("e2e: a failing bake -> exit 3 with gpu_bake's reason; the completed capture is still recorded", FailBake);
+            yield return T("e2e: W2 --responsive + --exact-vertex-lighting both reach gpu_bake (bound, in the log), the stage is written, the run folder has the short name; unticked binds neither", W2BothOptions);
+            yield return T("e2e: X2 --responsive reaches gpu_bake (-Responsive bound; log says 'responsive on'); a device-loss line on a failed bake -> the plain TDR explanation", X2ResponsiveAndTdr);
             yield return T("e2e: Restore previous lightmap; an unfinished install refuses bakes until --recover undoes it", RestoreRecover);
             yield return T("e2e: another bake holds the GPU lock -> WAITING, then gives up (exit 3); the foreign lock untouched", LockWait);
             yield return T("e2e: doctor / status / cancel verbs; real preflight refuses a root without tool_fast (exit 2)", DoctorStatus);
@@ -585,8 +587,9 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(r.Root, ao[0].Str("h2lm_root"), "H2LM_ROOT for P6");
             Assert.True(!r.Calls("gpu_bake").Single().Arr("argv").Cast<string>().Contains("-WriteBack"), "the bake itself was stage-only");
             var st = RunStatus.Load(run);
-            Assert.Eq(Path.Combine(run, "tag_backup_before_writeback"), st.InstallBackupDir, "install backup recorded");
-            // Undo last install (lmw_install restore from RUN\tag_backup_before_writeback)
+            Assert.Eq(Path.Combine(run, "tagbak"), st.InstallBackupDir, "install backup recorded (W2: RUN\\tagbak)");
+            Assert.True(System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(run), @"^\d{8}_\d{6}_cyclotron_cyclotron$"), "the run folder uses the short label: " + Path.GetFileName(run));
+            // Undo last install (lmw_install restore from RUN\tagbak)
             var l = C.Base("restore"); l.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron", "--undo-last-install" });
             var u = C.Run(l);
             Assert.Eq(0, u.Exit, "undo: " + u);
@@ -734,6 +737,70 @@ namespace H2GpuLightmapper.Tests
             Assert.True(st.State == RunState.Done && st.Extra.Bool("installed") == true, "status DONE, installed: " + st.State);
             Assert.Eq(Md5(Path.Combine(r.Farm(200), "tagw_stage", CycPrefix + ".scenario_structure_lightmap")), Md5(r.CycLtmp), "never half-written: the full set is in");
             Assert.True(!File.Exists(Path.Combine(r.Farm(200), "writeback_in_progress.txt")), "no marker left");
+        }
+
+        // W2 e2e: both Advanced settings reach the real gpu_bake invocation (the fake records its bound parameters)
+        private static void W2BothOptions()
+        {
+            var r = C.NewRoot();
+            var off = C.Bake(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install");
+            Ok(off, "unticked bake");
+            var bOff = r.Calls("gpu_bake").Single();
+            Assert.True(!bOff.Arr("bound").Cast<string>().Any(x => x.StartsWith("ExactVertexLighting=") || x.StartsWith("Responsive=")), "unticked: neither switch bound");
+            Assert.True(!off.Out.Contains("exact vertex lighting"), "unticked: the log does not mention exact vertex lighting");
+            var r2 = C.NewRoot();
+            var on = C.Bake(r2, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--responsive", "--exact-vertex-lighting");
+            Ok(on, "both options bake");
+            var bOn = r2.Calls("gpu_bake").Single();
+            var argv = bOn.Arr("argv").Cast<string>().ToList();
+            Assert.True(argv.Contains("-Responsive") && argv.Contains("-ExactVertexLighting"), "gpu_bake got both: " + string.Join(" ", argv));
+            Assert.True(bOn.Arr("bound").Cast<string>().Contains("ExactVertexLighting=True") && bOn.Arr("bound").Cast<string>().Contains("Responsive=True"), "both switches bound");
+            Assert.Contains(on.Out, "exact vertex lighting on (slower tag writer)", "the plan / log says 'exact vertex lighting on (slower tag writer)'");
+            Assert.Contains(on.Out, "responsive on", "and 'responsive on'");
+            // AO on: the AO layer's final stage is written by gpu_ao stage -> it gets --exact-vertex-lighting too (P6b); the AO trace / apply do not
+            var r3 = C.NewRoot();
+            var ao = C.Bake(r3, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--ao", "--exact-vertex-lighting");
+            Ok(ao, "AO + exact vertex lighting bake");
+            var calls = r3.Calls("gpu_ao");
+            Assert.Seq(new[] { "trace", "apply", "stage" }, calls.Select(c => c.Arr("argv").Cast<string>().ElementAt(1)).ToList(), "verbs in order");
+            Assert.True(calls[2].Arr("argv").Cast<string>().Contains("--exact-vertex-lighting"), "gpu_ao stage got --exact-vertex-lighting: " + string.Join(" ", calls[2].Arr("argv")));
+            Assert.True(!calls[0].Arr("argv").Cast<string>().Contains("--exact-vertex-lighting") && !calls[1].Arr("argv").Cast<string>().Contains("--exact-vertex-lighting"), "trace / apply do not");
+            Assert.True(r3.Calls("gpu_bake").Single().Arr("argv").Cast<string>().Contains("-ExactVertexLighting"), "and the lightmap gpu_bake still gets -ExactVertexLighting");
+        }
+
+        // X2 e2e: --responsive reaches the real gpu_bake invocation (the fake records its bound parameters); an engine device-loss line on a failed bake
+        // becomes the plain TDR explanation in the result (and an ordinary failure does not)
+        private static void X2ResponsiveAndTdr()
+        {
+            var r = C.NewRoot();
+            var off = C.Bake(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install");
+            Ok(off, "unticked bake");
+            var bOff = r.Calls("gpu_bake").Single();
+            Assert.True(!bOff.Arr("argv").Cast<string>().Contains("-Responsive"), "unticked: gpu_bake got no -Responsive");
+            Assert.True(!bOff.Arr("bound").Cast<string>().Any(x => x.StartsWith("Responsive=")), "unticked: nothing bound");
+            Assert.True(!off.Out.Contains("responsive on"), "unticked: the log does not say 'responsive on'");
+            var r2 = C.NewRoot();
+            var on = C.Bake(r2, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--responsive");
+            Ok(on, "responsive bake");
+            var bOn = r2.Calls("gpu_bake").Single();
+            Assert.True(bOn.Arr("argv").Cast<string>().Contains("-Responsive"), "ticked: gpu_bake got -Responsive: " + string.Join(" ", bOn.Arr("argv").Cast<string>()));
+            Assert.True(bOn.Arr("bound").Cast<string>().Contains("Responsive=True"), "ticked: the switch bound");
+            Assert.Contains(on.Out, "responsive on", "the plan / log shows 'responsive on'");
+            // the device-loss lines -> the plain explanation
+            var r3 = C.NewRoot();
+            r3.Control("gpu_bake=fail_tdr\n");
+            var tdr = C.Bake(r3, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
+            Assert.Eq(3, tdr.Exit, "failed: " + tdr);
+            var resultLine = tdr.Lines.First(x => x.StartsWith("RESULT FAILED", StringComparison.Ordinal));
+            Assert.Contains(tdr.Out, H2GpuLightmapper.Core.Run.DeviceLoss.Explanation, "the plain TDR explanation is shown");
+            Assert.Contains(tdr.Out, "Details: the bake stopped", "the technical reason is kept after it");
+            Assert.True(tdr.Out.IndexOf(H2GpuLightmapper.Core.Run.DeviceLoss.Explanation, StringComparison.Ordinal) >= 0 && resultLine.Contains("Windows reset the GPU"), "in the RESULT line: " + resultLine);
+            var r4 = C.NewRoot();
+            r4.Control("gpu_bake=fail_bake\n");
+            var plain = C.Bake(r4, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
+            Assert.Eq(3, plain.Exit, "failed: " + plain);
+            Assert.True(!plain.Out.Contains("Windows reset the GPU"), "an ordinary failure gets no TDR text");
+            Assert.Contains(plain.Out, "PHASE 3: the fake bake failed on purpose", "its own reason");
         }
 
         private static void FailBake()

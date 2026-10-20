@@ -4,7 +4,7 @@
   the farm files the shell reads: capture_id.json (soup crc), gpulm.log, the probe-ready sky files under GPULM_SKY_HI=1,
   OUT\skeleton, OUT\tagw_stage (+ a 'written' tagw_report.json). With -WriteBack -WriteBackMode direct it installs with the
   REAL lmw_install.py (INST copy) into the SANDBOX tags, exactly like production phase 4b. Never a GPU, never the tool.
-  Behaviour knobs: $W\fake_control.txt lines "gpu_bake=ok|fail_bake|nostage|slow3|slow4b|nostage_once|nostage_once_slow4b|nodirect"
+  Behaviour knobs: $W\fake_control.txt lines "gpu_bake=ok|fail_bake|fail_tdr|nostage|slow3|slow4b|nostage_once|nostage_once_slow4b|nodirect"
   and "gpu_bake_wait". Every call is appended to $W\fake_calls.log as one JSON line.
     nostage            [4a] makes no stage (with -WriteBack: the tool write-back [4], as production falls back)
     nostage_once       U3: no stage in a stage-only bake; with -WriteBack a stage + [4b] (the fallback's own direct writer works)
@@ -24,6 +24,8 @@ param(
     [switch]$SkipCapture,
     [switch]$PluckerFix,
     [switch]$SceneryFix,
+    [switch]$Responsive,                      # X2: the engine's "Keep PC responsive" switch (the fake only records that it was bound)
+    [switch]$ExactVertexLighting,             # W2 (0.6.3): the engine's "2004 Exact Vertex Lighting?" switch (recorded only)
     [ValidateRange(1000000,100000000)][int]$Photons = 0,
     [ValidateRange(1,64)][int]$MCSamples = 0
 )
@@ -82,6 +84,9 @@ Phase 2 "DERIVE - fake derive"
 Phase 3 "GPU BAKE - fake bake"
 if ($env:GPULM_PROBES) { Write-Host ("      PROBE: traced {0}" -f $env:GPULM_PROBES); Set-Content -LiteralPath (Join-Path $OUT "vertex_out.bin") -Value "v" }
 if ($mode -eq "fail_bake") { throw "PHASE 3: the fake bake failed on purpose" }
+if ($mode -eq "fail_tdr") {      # X2: the engine's device-loss lines, then the throw (stdout like the real DIRECT: lines)
+    Write-Host "DIRECT: *** GPU CAST DEVICE REMOVED (DXGI_ERROR_DEVICE_HUNG) -- the GPU device was RESET by Windows (TDR); nothing was written"
+    throw "PHASE 3: fullgpu exited 3 after the device was lost" }
 if ($mode -eq "slow3") { Start-Sleep -Seconds 60; Write-Host "SHOULD NOT PRINT (slow3)" }
 
 if ($WriteBackMode -ne "tool") {

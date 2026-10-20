@@ -56,7 +56,9 @@ namespace H2GpuLightmapper.Core.Preflight
             e.Add(new Entry { What = "auto backup", Example = work + "\\_TAGBAK_auto\\" + Ts + "_" + prefix + "\\" + truecolor });
             e.Add(new Entry { What = "farm install backup", Example = work + "\\farm_w200\\tag_backup_before_writeback\\" + truecolor + ".older_" + Ts });
             e.Add(new Entry { What = "UI backup", Example = work + "\\_TAGBAK_ui\\" + leaf + "_" + b + "_before_restore_" + Ts + "\\" + truecolor });
-            e.Add(new Entry { What = "run backup", Example = work + "\\standalone\\runs\\" + Ts + "_" + leaf + "_" + b + "\\tag_backup_before_writeback\\" + truecolor });
+            // W2 (0.6.3): the run folder is <ts>_<label (<= 20 chars)> and its install backup subfolder is "tagbak" (0.6.2: <ts>_<leaf>_<bsp> and
+            // tag_backup_before_writeback, which reached 243 characters for a long map name)
+            e.Add(new Entry { What = "run backup", Example = work + "\\standalone\\runs\\" + Ts + "_" + Run.RunFolder.Label(leaf, b) + "\\" + Run.RunFolder.BackupDirName + "\\" + truecolor });
             return e;
         }
 

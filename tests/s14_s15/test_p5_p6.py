@@ -23,6 +23,7 @@ import strict_patch as SP  # noqa: E402
 GLW_DEFAULT = os.environ.get('H2LM_TEST_GLW', '')   # <H2EK_ROOT>\GPU Lightmap Work (production, read only)
 P5 = os.path.join(PROJ, 'patches', 'P5_gpu_lightprobes.patch')
 P6 = os.path.join(PROJ, 'patches', 'P6_gpu_ao.patch')
+P6B = os.path.join(PROJ, 'patches', 'P6b_gpu_ao_exactvl.patch')       # W2 (0.6.3): gpu_ao stage --exact-vertex-lighting (the series chain is P6 -> P6b)
 RESULTS = []
 
 
@@ -139,9 +140,15 @@ def main():
     p = subprocess.run([sys.executable, '-I', '-B', os.path.join(PROJ, 'tools', 'patch_series.py'), 'apply', '--series',
                         os.path.join(PROJ, 'patches', 'series_research.json'), '--src-root', a.glw, '--out-root', so_dir],
                        capture_output=True, text=True, stdin=subprocess.DEVNULL, creationflags=0x08000000 | 0x00004000)
-    check('patch_series.py apply patches/series_research.json == the strict_patch results', p.returncode == 0
+    # W2 (0.6.3): the gpu_ao chain is P6 -> P6b
+    PB = SP.read_patch(P6B)
+    pb_path = os.path.join(work, 'patched_pb', '_research', 'ao', 'gpu_ao.py')
+    os.makedirs(os.path.dirname(pb_path), exist_ok=True)
+    open(pb_path, 'wb').write(SP.apply_bytes(PB, open(ao_p, 'rb').read()))
+    check('P6b: strict apply on the P6 result -> result-md5 %s' % PB['result-md5'][:8], md5f(ao_p) == PB['base-md5'] and md5f(pb_path) == PB['result-md5'])
+    check('patch_series.py apply patches/series_research.json == the strict_patch results (P5; P6 then P6b)', p.returncode == 0
           and md5f(os.path.join(so_dir, '_research', 'lightprobes', 'gpu_lightprobes.py')) == md5f(lp_p)
-          and md5f(os.path.join(so_dir, '_research', 'ao', 'gpu_ao.py')) == md5f(ao_p), p.stdout + p.stderr)
+          and md5f(os.path.join(so_dir, '_research', 'ao', 'gpu_ao.py')) == md5f(pb_path), p.stdout + p.stderr)
     subs_tree = [(trees['orig'], '<TREE>'), (trees['patched'], '<TREE>')]
 
     # ---------------------------------------------------------------- 3: --help
@@ -267,6 +274,32 @@ def main():
           and os.path.normcase(args[args.index('--scenario') + 1]).startswith(os.path.normcase(os.path.join(fake_root, 'tags'))), repr(args))
     check('gpu_ao stage with H2LM_ROOT: lm_tagwriter --tool = ROOT/tool_fast.exe (finding 24)',
           args.count('--tool') == 1 and os.path.normcase(args[args.index('--tool') + 1]) == os.path.normcase(os.path.join(fake_root, 'tool_fast.exe')), repr(args))
+
+    # W2 (0.6.3) P6b: `stage` without the flag launches exactly what P6 launched; with it, the same argv + --exact-vertex-lighting (last); other verbs' --help untouched
+    farm = os.path.join(work, 'aostage_p6b', 'farm_w%02d' % W)
+    os.makedirs(os.path.join(farm, 'ao', 's10e05', 'run'), exist_ok=True); os.makedirs(os.path.join(farm, 'skeleton'), exist_ok=True)
+    open(os.path.join(farm, 'ao', 's10e05', 'run', 'vertdir.bin'), 'wb').write(b'')
+    open(os.path.join(farm, 'ao', 's10e05', 'AO_NOT_CPU_FAITHFUL.txt'), 'w').write('x')
+    sargs = ['stage', '--farm', farm, '--worker', str(W), '--scenario', scen, '--bsp', 'triplicate', '--engine', eng, '--tag', 's10e05', '--overwrite']
+    renv = {'H2LM_ROOT': fake_root}          # the same ROOT for the three trees (--tool <ROOT>\tool_fast.exe)
+    r6 = harness(work, ao_p, sargs, env_extra=renv, tag='aostage_p6')
+    rb = harness(work, pb_path, sargs, env_extra=renv, tag='aostage_p6b')
+    re_ = harness(work, pb_path, sargs + ['--exact-vertex-lighting'], env_extra=renv, tag='aostage_p6b_evl')
+    c6 = r6['calls'][0]['args'] if r6['calls'] else []
+    cb = rb['calls'][0]['args'] if rb['calls'] else []
+    ce = re_['calls'][0]['args'] if re_['calls'] else []
+    check('gpu_ao stage (P6b, no flag): the launched lm_tagwriter / validate argv is identical to P6 (2 children, same exit)',
+          len(r6['calls']) == len(rb['calls']) == 2 and c6 == cb and r6['exit'] == rb['exit'] and r6['calls'][1]['args'] == rb['calls'][1]['args'], repr((c6, cb)))
+    check('gpu_ao stage --exact-vertex-lighting -> lm_tagwriter gets it once, after --tool <ROOT>/tool_fast.exe; everything else identical; lmw_validate unchanged',
+          ce == cb + ['--exact-vertex-lighting'] and re_['calls'][1]['args'] == rb['calls'][1]['args'] and re_['exit'] == rb['exit'], repr(ce))
+    for verb in ('trace', 'apply', 'install'):
+        h6 = harness(work, ao_p, [verb, '--help'], effects=False, tag='aohelp6_' + verb)
+        hb = harness(work, pb_path, [verb, '--help'], effects=False, tag='aohelp6b_' + verb)
+        check('gpu_ao %s --help: byte-identical after P6b' % verb, h6['stdout'] == hb['stdout'] and h6['exit'] == hb['exit'] == 0)
+    hs6 = harness(work, ao_p, ['stage', '--help'], effects=False, tag='aohelp6_stage')
+    hsb = harness(work, pb_path, ['stage', '--help'], effects=False, tag='aohelp6b_stage')
+    o6 = set(re.findall(r'--[a-z][a-z-]*', hs6['stdout'])); ob = set(re.findall(r'--[a-z][a-z-]*', hsb['stdout']))
+    check('gpu_ao stage --help: every option kept, only --exact-vertex-lighting added (argparse re-wraps the column)', hsb['exit'] == 0 and ob - o6 == {'--exact-vertex-lighting'} and o6 <= ob, repr((sorted(o6), sorted(ob))))
 
     # P5 full standalone line, with a fake farm that lets the driver walk to the end
     def fake_farm(root, w):

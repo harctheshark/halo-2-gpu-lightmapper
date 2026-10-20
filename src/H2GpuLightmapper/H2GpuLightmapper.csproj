@@ -25,7 +25,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
-    <Version>0.6.2</Version>
+    <Version>0.6.3</Version>
     <!-- E1 (0.6.1): no absolute build path (the user name, the project folder) inside the exe. /pathmap rewrites the source paths, the
          generated-code paths and the PDB path in the PE debug directory to /_/ ; the exe stays byte-reproducible from a clean tree
          whatever folder it is built in. The .pdb itself is a build product, never shipped. -->

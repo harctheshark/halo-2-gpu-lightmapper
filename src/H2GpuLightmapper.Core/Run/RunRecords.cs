@@ -171,15 +171,49 @@ namespace H2GpuLightmapper.Core.Run
         }
     }
 
-    /// <summary>WORK\standalone\runs\&lt;yyyyMMdd_HHmmss&gt;_&lt;leaf&gt;_&lt;bsp&gt;\ (FINAL_DESIGN section 2).</summary>
+    /// <summary>WORK\standalone\runs\&lt;yyyyMMdd_HHmmss&gt;_&lt;label&gt;\ (FINAL_DESIGN section 2). W2 (0.6.3): the label is the sanitized
+    /// "&lt;leaf&gt;_&lt;bsp&gt;" cut to at most <see cref="LabelMax"/> characters (0.6.2 used the whole thing, which pushed the install backup of a
+    /// long map name past the 240-character path limit), and the run's install backup subfolder is <see cref="BackupDirName"/> ("tagbak")
+    /// instead of "tag_backup_before_writeback". Older runs keep their old names; nothing reads a run folder by its name except the
+    /// "Logs" button, which matches both styles (<see cref="NameMatches"/>); Undo / history read status.json.</summary>
     public static class RunFolder
     {
+        public const int LabelMax = 20;
+        /// <summary>The run folder's install backup subfolder (0.6.3 and later). The worker's OUT\tag_backup_before_writeback (gpu_bake / lmw_install) is a different folder and keeps its name.</summary>
+        public const string BackupDirName = "tagbak";
+        /// <summary>The 0.6.0 - 0.6.2 name of that subfolder (old runs' status.json still point at it).</summary>
+        public const string LegacyBackupDirName = "tag_backup_before_writeback";
+
+        /// <summary>sanitized "&lt;leaf&gt;_&lt;bsp&gt;" truncated to <see cref="LabelMax"/> characters (no trailing dot / space, never empty).</summary>
+        public static string Label(string leaf, string bsp)
+        {
+            string s = Sanitize(leaf ?? "") + "_" + Sanitize(bsp ?? "");
+            if (s.Length > LabelMax) s = s.Substring(0, LabelMax);
+            s = s.TrimEnd(' ', '.');
+            return s.Length == 0 ? "run" : s;
+        }
+
+        public static string LabelFor(string scenarioRel, string bsp) { return Label(ScenarioLeaf(scenarioRel), bsp); }
+
+        /// <summary>The folder name of a run started at <paramref name="now"/>: yyyyMMdd_HHmmss_&lt;label&gt;.</summary>
+        public static string TagFor(DateTime now, string scenarioRel, string bsp)
+        {
+            return now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + "_" + LabelFor(scenarioRel, bsp);
+        }
+
+        /// <summary>Is this run folder one of this map's runs? New style: ends with _&lt;label&gt;; 0.6.2 and older: ends with _&lt;leaf&gt;_&lt;bsp&gt;.</summary>
+        public static bool NameMatches(string dirName, string scenarioRel, string bsp)
+        {
+            string leaf = ScenarioLeaf(scenarioRel);
+            return dirName.EndsWith("_" + LabelFor(scenarioRel, bsp), StringComparison.OrdinalIgnoreCase)
+                   || dirName.EndsWith("_" + Sanitize(leaf) + "_" + Sanitize(bsp ?? ""), StringComparison.OrdinalIgnoreCase);
+        }
+
         public static string RunsDir(string work) { return System.IO.Path.Combine(ShellPaths.StandaloneOf(work), "runs"); }
 
         public static string Create(string work, string scenarioRel, string bsp, DateTime now)
         {
-            string leaf = ScenarioLeaf(scenarioRel);
-            string tag = now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + "_" + Sanitize(leaf) + "_" + Sanitize(bsp ?? "");
+            string tag = TagFor(now, scenarioRel, bsp);
             Directory.CreateDirectory(RunsDir(work));
             string dir = SafeFs.UniqueChild(RunsDir(work), tag);
             Directory.CreateDirectory(dir);

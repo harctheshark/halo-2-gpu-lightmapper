@@ -51,6 +51,8 @@ namespace H2GpuLightmapper.Pipeline
         public int? AssumeProbePoints;
         /// <summary>--dry-run only (X1): the adapter's dedicated memory in MiB to size the parts for (a real run asks gpucheck).</summary>
         public int? AssumeVramMB;
+        /// <summary>--dry-run only (X2): video memory in MiB that other programs are assumed to hold (a real run measures it with gpucheck).</summary>
+        public int? AssumeOtherVramUseMB;
         public TimeSpan LockWait = TimeSpan.FromMinutes(240);
         public TimeSpan LockPoll = TimeSpan.FromSeconds(20);
         /// <summary>Dev: another file whose appearance requests a cancel (besides RUN\cancel.request).</summary>
@@ -320,11 +322,17 @@ namespace H2GpuLightmapper.Pipeline
                 long? vram = null; string vsrc = null;
                 if (gpuRes != null && gpuRes.DedicatedVideoMemoryBytes.HasValue) { vram = gpuRes.DedicatedVideoMemoryBytes; vsrc = "gpucheck: " + (gpuRes.DefaultAdapter ?? "default adapter"); }
                 else if (_so.AssumeVramMB.HasValue && _so.AssumeVramMB.Value > 0) { vram = (long)_so.AssumeVramMB.Value * 1048576L; vsrc = dry ? "--assume-vram-mb (dry run)" : "--assume-vram-mb"; }
+                // X2: what other programs hold right now (gpucheck: the system-wide counter + the OS budget); a dry run takes --assume-other-vram-mb
+                long? other = null;
+                if (gpuRes != null && gpuRes.DedicatedVideoMemoryBytes.HasValue)
+                    other = GpuLimits.ComputeOtherUse(gpuRes.DedicatedVideoMemoryBytes, gpuRes.LiveBudgetBytes, gpuRes.LiveProcessUsageBytes, gpuRes.SystemDedicatedUsageBytes);
+                else if (vsrc != null && _so.AssumeOtherVramUseMB.HasValue) other = (long)_so.AssumeOtherVramUseMB.Value * 1048576L;
                 _limits = vsrc == null ? (gpuRes != null ? GpuLimits.Compute(null, null, 0) : GpuLimits.Unknown(null))
-                                       : GpuLimits.Compute(vram, vsrc, _o.Quality == Quality.Custom ? _o.Photons : 0);
+                                       : GpuLimits.Compute(vram, vsrc, _o.Quality == Quality.Custom ? _o.Photons : 0, other);
                 if (vsrc != null)
                 {
-                    Say("  gpu memory: " + (vram.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB (" + vsrc + ")");
+                    Say("  gpu memory: " + (vram.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB (" + vsrc + ")"
+                        + (other.HasValue ? "; in use by other programs now: " + (other.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB" : ""));
                     foreach (var ln in _limits.Notes) Say("    " + ln);
                 }
             }
@@ -573,10 +581,7 @@ namespace H2GpuLightmapper.Pipeline
         private string PredictRunDir()
         {
             var now = _so.Now ?? DateTime.Now;
-            string leaf = RunFolder.ScenarioLeaf(_o.ScenarioRel);
-            var bad = Path.GetInvalidFileNameChars();
-            Func<string, string> san = s => new string(s.Select(c => Array.IndexOf(bad, c) >= 0 ? '_' : c).ToArray());
-            return Path.Combine(RunFolder.RunsDir(_work), now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + "_" + san(leaf) + "_" + san(_o.Bsp));
+            return Path.Combine(RunFolder.RunsDir(_work), RunFolder.TagFor(now, _o.ScenarioRel, _o.Bsp));      // W2: the same name RunFolder.Create makes
         }
 
         private BakePlan BuildPlan(string runDir, bool predicted)
@@ -793,7 +798,7 @@ namespace H2GpuLightmapper.Pipeline
                     ProbeWorker = s.ProbeWorker, TimeoutMs = s.TimeoutMs,
                 });
                 if (tt != null) { tt.Dispose(); tt = null; try { foreach (var l in tail.ReadNewLines()) { lock (sideLines) sideLines.Add(l); Run.Shell("    side| " + l); } } catch { } }
-                if (s.SideLog != null) lock (sideLines) _sideSawPhase2 = sideLines.Any(l => l.StartsWith("[2]", StringComparison.Ordinal) || l.StartsWith("[3]", StringComparison.Ordinal));
+                if (s.SideLog != null) lock (sideLines) { _sideSawPhase2 = sideLines.Any(l => l.StartsWith("[2]", StringComparison.Ordinal) || l.StartsWith("[3]", StringComparison.Ordinal)); _sideDeviceLoss = DeviceLoss.AnyDeviceLoss(sideLines); }
                 return oc;
             }
             finally
@@ -866,7 +871,7 @@ namespace H2GpuLightmapper.Pipeline
                                            "the production -WriteBack argv (the direct tag writer cannot run: " + (oc.FailureReason ?? "?") + ")", false);
                     return false;
                 }
-                throw new StepFailedException("the bake stopped (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"));
+                throw FailedStep("the bake stopped (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
             }
             return true;
         }
@@ -925,7 +930,7 @@ namespace H2GpuLightmapper.Pipeline
             if (InstallRan(oc)) MarkInstalled();
             if (fresh && (oc.Ok || oc.Parser.PhasesSeen.Any(ph => ph != "1"))) WriteCaptureRecord(fs, false);
             if (oc.Cancelled && !_installed) throw new OperationCanceledException("cancelled during the install");
-            if (!oc.Ok && !(oc.Cancelled && _installed)) throw new StepFailedException("the production write-back stopped (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"));
+            if (!oc.Ok && !(oc.Cancelled && _installed)) throw FailedStep("the production write-back stopped (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
             if (oc.Cancelled) Run.Shell("the cancel was applied after the tag write: the lightmap was installed; verifying it before the run ends");
             if (withoutLayer) _installedWithoutLayer = true;
             Run.SetStep(StepId.Verify);
@@ -978,8 +983,21 @@ namespace H2GpuLightmapper.Pipeline
         {
             var oc = RunStepProcess(s);
             if (oc.Cancelled) throw new OperationCanceledException("cancelled during " + what);
-            if (!oc.Ok) throw new StepFailedException(what + " failed (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"));
+            if (!oc.Ok) throw FailedStep(what + " failed (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc,
+                                         s.Id == StepIds.AoTrace && s.Args.IndexOf("--farm") >= 0 && s.Args.IndexOf("--farm") + 1 < s.Args.Count
+                                             ? Path.Combine(s.Args[s.Args.IndexOf("--farm") + 1], "ao", "gpu_ao_trace_driver.log") : null);
         }
+
+        /// <summary>X2: a failed step's exception. When the engine reported a lost GPU device (a TDR: a line on either stream, in the step's
+        /// side log, or in a driver script's own log) the plain explanation leads the text; otherwise the text is exactly what it was.</summary>
+        private StepFailedException FailedStep(string technical, ProcOutcome oc, string extraLog = null)
+        {
+            bool lost = (oc != null && oc.Parser != null && oc.Parser.DeviceLost) || _sideDeviceLoss || DeviceLoss.FileHasDeviceLoss(extraLog);
+            if (lost) Run.Shell("*** the engine reported a lost GPU device (TDR): " + DeviceLoss.Explanation);
+            return new StepFailedException(DeviceLoss.Compose(technical, lost));
+        }
+
+        private bool _sideDeviceLoss;
 
         /// <summary>OUT\skeleton + a 'written' tagw_report.json; otherwise the map fell back to the tool writer.</summary>
         private bool DoStageReady(BakePlan plan, PlanStep s)
@@ -1129,7 +1147,7 @@ namespace H2GpuLightmapper.Pipeline
             var oc = RunStepProcess(s);
             if (oc.Cancelled) throw new OperationCanceledException("cancelled during the light probe bake");
             if (s.FreshCapture && (oc.Ok || _sideSawPhase2)) WriteCaptureRecord(s, true);
-            if (!oc.Ok) throw new StepFailedException("the light probe bake failed (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"));
+            if (!oc.Ok) throw FailedStep("the light probe bake failed (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
             Run.SetStep(StepId.Probes);
         }
 

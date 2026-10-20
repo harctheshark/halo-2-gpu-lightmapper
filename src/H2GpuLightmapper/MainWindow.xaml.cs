@@ -132,6 +132,8 @@ namespace H2GpuLightmapper
                         case "probes": if (MProbes.Visibility == Visibility.Visible) MProbes.IsChecked = true; break;
                         case "lightmap": MLightmap.IsChecked = true; break;
                         case "stageonly": StageOnlyCheck.IsChecked = true; break;
+                        case "responsive": ResponsiveCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
+                        case "exactvertex": ExactVertexCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                     }
                 }
                 UpdateOptionUi();
@@ -307,7 +309,14 @@ namespace H2GpuLightmapper
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (ver != _rootVersion) return;
-                GpuLine.Text = r.Line + (r.Advice != null && r.Advice.Count > 0 ? "\n" + string.Join("\n", r.Advice) : "");
+                string vram = "";
+                if (r.DedicatedVideoMemoryBytes.HasValue)
+                {
+                    long? other = GpuLimits.ComputeOtherUse(r.DedicatedVideoMemoryBytes, r.LiveBudgetBytes, r.LiveProcessUsageBytes, r.SystemDedicatedUsageBytes);
+                    vram = "   VRAM " + (r.DedicatedVideoMemoryBytes.Value / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB"
+                           + (other.HasValue ? ", " + (other.Value / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB in use by programs now" : "");
+                }
+                GpuLine.Text = r.Line + vram + (r.Advice != null && r.Advice.Count > 0 ? "\n" + string.Join("\n", r.Advice) : "");
                 GpuLine.Foreground = r.Ok ? Palette.Dim : Palette.Bad;
             }));
         }
@@ -633,6 +642,8 @@ namespace H2GpuLightmapper
             else if (o.Ao) { errors.Add("AO exponent: not a number"); o.AoExponent = double.NaN; }
             o.ReuseCapture = ReuseCheck.IsChecked == true && ReuseCheck.IsEnabled;
             o.StageOnly = StageOnlyCheck.IsChecked == true;
+            o.Responsive = ResponsiveCheck.IsChecked == true;        // X2
+            o.ExactVertexLighting = ExactVertexCheck.IsChecked == true;        // W2 (0.6.3): "2004 Exact Vertex Lighting?" -> gpu_bake -ExactVertexLighting
             return o;
         }
 
@@ -953,8 +964,8 @@ namespace H2GpuLightmapper
             if (dir == null && _work != null && CurScenario != null && CurBsp != null)
             {
                 string runs = RunFolder.RunsDir(_work);
-                string tail = "_" + RunFolder.ScenarioLeaf(CurScenario) + "_" + CurBsp;
-                if (Directory.Exists(runs)) dir = Directory.GetDirectories(runs).Where(d => d.EndsWith(tail, StringComparison.OrdinalIgnoreCase)).OrderByDescending(d => d, StringComparer.Ordinal).FirstOrDefault();
+                // 0.6.3 names runs <ts>_<label (<= 20 chars)>, 0.6.2 and older <ts>_<leaf>_<bsp>: both are this map's runs
+                if (Directory.Exists(runs)) dir = Directory.GetDirectories(runs).Where(d => RunFolder.NameMatches(Path.GetFileName(d), CurScenario, CurBsp)).OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal).FirstOrDefault();
             }
             if (dir == null && _work != null) dir = RunFolder.RunsDir(_work);
             OpenFolder(dir);

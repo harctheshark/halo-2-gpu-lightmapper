@@ -32,6 +32,7 @@ for v in ('trace', 'apply', 'stage'):
         p.add_argument('--plucker-fix', action='store_true'); p.add_argument('--scenery-fix', action='store_true')
     else:
         p.add_argument('--tag', required=True); p.add_argument('--overwrite', action='store_true')
+        if v == 'stage': p.add_argument('--exact-vertex-lighting', action='store_true')      # W2 (0.6.3): P6b
     if v == 'apply':
         p.add_argument('--strength', type=float, required=True); p.add_argument('--exponent', type=float, required=True)
 a = ap.parse_args()

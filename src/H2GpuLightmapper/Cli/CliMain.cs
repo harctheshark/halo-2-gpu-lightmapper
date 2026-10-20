@@ -34,7 +34,8 @@ namespace H2GpuLightmapper.Cli
         [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap]
         [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture] [--no-install] [--yes]
         [--ao-fallback stop|install] [--probes-fallback stop|install] [--install-retries N [--install-retry-wait-s S]]
-        [--dry-run [--json] [--probe-points N] [--assume-vram-mb N]]
+        [--responsive] [--exact-vertex-lighting]
+        [--dry-run [--json] [--probe-points N] [--assume-vram-mb N [--assume-other-vram-mb N]]]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --scenario S --bsp B [--list | --from BACKUP | --undo-last-install] [--dry-run]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --recover
   ""H2 GPU Lightmapper.exe"" --cli cleanup-alias --h2ek DIR   (removes the H2GLM\<k6> short-path link to that H2EK's work folder)
@@ -67,6 +68,15 @@ namespace H2GpuLightmapper.Cli
   guarded fullgpu (engine_custom) and needs no switch; it is validated only at Super's own values (20,000,000 / 8). Other values are
   untested and can bake for hours (100,000,000 photons / 64 rays took 1.4 hours on cyclotron on an RTX 4090) and need much more VRAM.
   A payload without engine_custom refuses Custom (exit 2) unless --dev-custom-unguarded.
+  --responsive = the window's Advanced settings ""Keep PC responsive - Slower Bakes!"": every gpu_bake of the bake gets -Responsive (the GPU work
+  is split into short pieces so the desktop, videos and games stay smooth; the lightmap is identical, the bake takes longer). Off = the
+  argv is exactly what it was before the option existed. The AO trace and the light probe bake run through driver scripts; they get
+  GPULM_RESPONSIVE=1 in their environment.
+  --exact-vertex-lighting = the window's Advanced settings ""2004 Exact Vertex Lighting?"": every gpu_bake of the bake gets -ExactVertexLighting
+  (the tag writer re-runs the CPU's 7-probe per-vertex visibility gate, so the vertex-lit records match the 2004 tool more closely; the tag writer takes
+  about 2 minutes longer on cyclotron; the lightmap bitmaps are unchanged). Off = the argv is exactly what it was before the option existed.
+  --assume-other-vram-mb N (dry run, with --assume-vram-mb): video memory other programs are assumed to hold. A real run measures it with
+  gpucheck and sizes the parts (-MaxCallsPerPart) for what is left when it is more than a normal desktop's 3 GiB.
   --dry-run prints the exact child argv / environment / working folder of every step and starts nothing, writes nothing.
   Exit codes: 0 ok, 2 refused before any write, 3 failed, 4 cancelled.
 
@@ -164,6 +174,8 @@ namespace H2GpuLightmapper.Cli
             o.Worker = a.GetInt("--worker");
             o.ProbeWorker = a.GetInt("--probe-worker");
             o.Fixes = !a.Has("--dev-no-fixes");
+            o.Responsive = a.Has("--responsive");
+            o.ExactVertexLighting = a.Has("--exact-vertex-lighting");
             o.ReuseUnrecorded = a.Has("--reuse-unrecorded");
             if (o.ReuseUnrecorded && !o.ReuseCapture) a.Errors.Add("--reuse-unrecorded needs --reuse-capture");
             if (o.ReuseUnrecorded && !o.Worker.HasValue && o.Mode != BakeMode.Probes) a.Errors.Add("--reuse-unrecorded needs --worker N (the farm whose capture is reused)");
@@ -177,13 +189,13 @@ namespace H2GpuLightmapper.Cli
         {
             var a = ParseFor(args, start + 1,
                 new[] { "--h2ek", "--scenario", "--bsp", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
-                        "--worker", "--probe-worker", "--probe-points", "--assume-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s" },
-                new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded" });
+                        "--worker", "--probe-worker", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s" },
+                new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded" });
             var o = BakeOptionsFrom(a);
             var so = new SessionOptions
             {
                 DryRun = a.Has("--dry-run"), SkipPreflight = a.Has("--dev-skip-preflight"), SkipGpuCheck = a.Has("--dev-skip-gpucheck"),
-                AssumeProbePoints = a.GetInt("--probe-points"), AssumeVramMB = a.GetInt("--assume-vram-mb"), CancelFile = a.Get("--cancel-file"),
+                AssumeProbePoints = a.GetInt("--probe-points"), AssumeVramMB = a.GetInt("--assume-vram-mb"), AssumeOtherVramUseMB = a.GetInt("--assume-other-vram-mb"), CancelFile = a.Get("--cancel-file"),
             };
             bool json = a.Has("--json");
             var lw = a.GetDouble("--lock-wait-min");
@@ -195,6 +207,9 @@ namespace H2GpuLightmapper.Cli
             if (so.AssumeProbePoints.HasValue && so.AssumeProbePoints.Value < 0) a.Errors.Add("--probe-points must be >= 0");
             if (so.AssumeVramMB.HasValue && !so.DryRun) a.Errors.Add("--assume-vram-mb is only for --dry-run (a real run asks gpucheck for the adapter's memory)");
             if (so.AssumeVramMB.HasValue && so.AssumeVramMB.Value < 0) a.Errors.Add("--assume-vram-mb must be >= 0");
+            if (so.AssumeOtherVramUseMB.HasValue && !so.DryRun) a.Errors.Add("--assume-other-vram-mb is only for --dry-run (a real run measures it with gpucheck)");
+            if (so.AssumeOtherVramUseMB.HasValue && !so.AssumeVramMB.HasValue) a.Errors.Add("--assume-other-vram-mb needs --assume-vram-mb");
+            if (so.AssumeOtherVramUseMB.HasValue && so.AssumeOtherVramUseMB.Value < 0) a.Errors.Add("--assume-other-vram-mb must be >= 0");
             var retry = InstallRetryFrom(a, o);
             var host = AppHost.Create(HostConfigFrom(a));
             int ae = ArgErrors(a);

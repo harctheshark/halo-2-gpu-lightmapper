@@ -23,6 +23,8 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_6.h>
+#include <pdh.h>
+#include <pdhmsg.h>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -32,6 +34,7 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "pdh.lib")
 
 #ifndef GPUCHECK_NO_OPTIMUS_EXPORTS
 extern "C" {
@@ -43,7 +46,7 @@ static const bool kOptimusExports = true;
 static const bool kOptimusExports = false;
 #endif
 
-static const char* kVersion = "1.0.0";
+static const char* kVersion = "1.1.0";
 
 // ---------------------------------------------------------------- tiny JSON writer
 struct Json {
@@ -219,6 +222,69 @@ static void write_caps(Json& j, const Caps& c) {
     }
 }
 
+
+// ---------------------------------------------------------------- X2: live video memory (read only)
+// IDXGIAdapter3::QueryVideoMemoryInfo(LOCAL): "budget" is what the OS lets THIS process use right now (it shrinks when other programs
+// hold video memory), "current_usage" is this process's own use (about 0 here). The Windows GPU Adapter Memory performance counter
+// ("Dedicated Usage", the figure Task Manager shows) is the SYSTEM-wide use by every process; it is reported separately and is null
+// when the counter is unavailable. Both are snapshots; nothing is written.
+struct LiveMem {
+    bool queried = false;
+    unsigned long long budget = 0, usage = 0, avail_reserve = 0, cur_reserve = 0;
+    bool have_sys = false;
+    unsigned long long sys_dedicated_usage = 0;
+};
+
+static bool pdh_dedicated_usage(const LUID& l, unsigned long long& out) {
+    wchar_t path[160];
+    swprintf_s(path, L"\\GPU Adapter Memory(luid_0x%08X_0x%08X_phys_0)\\Dedicated Usage", (unsigned)l.HighPart, (unsigned)l.LowPart);
+    PDH_HQUERY q = nullptr;
+    if (PdhOpenQueryW(nullptr, 0, &q) != ERROR_SUCCESS) return false;
+    bool ok = false;
+    PDH_HCOUNTER c = nullptr;
+    if (PdhAddEnglishCounterW(q, path, 0, &c) == ERROR_SUCCESS && PdhCollectQueryData(q) == ERROR_SUCCESS) {
+        PDH_FMT_COUNTERVALUE v{};
+        if (PdhGetFormattedCounterValue(c, PDH_FMT_LARGE, nullptr, &v) == ERROR_SUCCESS &&
+            (v.CStatus == PDH_CSTATUS_VALID_DATA || v.CStatus == PDH_CSTATUS_NEW_DATA) && v.largeValue >= 0) {
+            out = (unsigned long long)v.largeValue;
+            ok = true;
+        }
+    }
+    PdhCloseQuery(q);
+    return ok;
+}
+
+static LiveMem live_memory(IDXGIAdapter1* a, const LUID& luid) {
+    LiveMem m;
+    IDXGIAdapter3* a3 = nullptr;
+    if (SUCCEEDED(a->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&a3)) && a3) {
+        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+        if (SUCCEEDED(a3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
+            m.queried = true;
+            m.budget = info.Budget;
+            m.usage = info.CurrentUsage;
+            m.avail_reserve = info.AvailableForReservation;
+            m.cur_reserve = info.CurrentReservation;
+        }
+        a3->Release();
+    }
+    m.have_sys = pdh_dedicated_usage(luid, m.sys_dedicated_usage);
+    return m;
+}
+
+static void write_live(Json& j, const LiveMem& m) {
+    j.mobj("video_memory");
+    j.mbool("queried", m.queried);
+    if (m.queried) {
+        j.mnum("budget", m.budget);
+        j.mnum("current_usage", m.usage);
+        j.mnum("available_for_reservation", m.avail_reserve);
+        j.mnum("current_reservation", m.cur_reserve);
+    }
+    if (m.have_sys) j.mnum("system_dedicated_usage", m.sys_dedicated_usage); else j.mnull("system_dedicated_usage");
+    j.close('}');
+}
+
 struct RegDword {
     bool present = false;
     DWORD v = 0;
@@ -297,6 +363,7 @@ int main(int argc, char** argv) {
             j.mnum("shared_system_memory", (unsigned long long)d.SharedSystemMemory);
             j.mstr("luid", luid_str(d.AdapterLuid));
             j.mbool("software", sw);
+            if (!sw) write_live(j, live_memory(a, d.AdapterLuid));   // X2: budget / usage now (additive; schema stays 1)
             if (perAdapter) {
                 Caps c = probe_device(a);
                 j.mobj("d3d11");

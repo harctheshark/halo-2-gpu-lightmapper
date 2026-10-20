@@ -30,12 +30,191 @@ namespace H2GpuLightmapper.Tests
             yield return T("dry: on the real ProdRoot (read-only): Direct slot, nothing created in its WORK", RealMine);
             yield return T("dry: privacy (env values only for the shell's own variables) + scenario / BSP canonical case", PrivacyAndCase);
             yield return T("dry: X1 VRAM-aware parts: 24 GB leaves every argv unchanged; 16 GB adds -MaxCallsPerPart; 6 GB adds -BufCapMB too", VramParts);
+            yield return T("dry: X2 Keep PC responsive: unticked plans carry no 'Responsive' at all; ticked = + -Responsive last on gpu_bake (incl. the fallback argv), GPULM_RESPONSIVE=1 on the AO trace / probe driver", ResponsivePlan);
+            yield return T("dry: W2 2004 Exact Vertex Lighting?: unticked plans carry no -ExactVertexLighting; ticked = + it on every gpu_bake argv (after -Responsive), the note, no other step changes", ExactVertexPlan);
+            yield return T("dry: W2 run folder = <ts>_<label <= 20 chars> and the run's install backup is 'tagbak' (the worker's [4b] backup keeps its name)", RunFolderPlan);
+            yield return T("dry: X2 live VRAM: a 4090 with <= 3 GiB held by others = today's argv; a game on top shrinks -MaxCallsPerPart with a plain note", LiveVramPlan);
             yield return T("dry: X1 light-probe preflight refuses a BSP past the GPU probe pass's limit (282+) before anything runs", ProbePreflight);
             yield return T("dry: X1 H2EK at a drive root (a SUBST drive): refused without features.driveRoot, planned with it, no drive-relative or doubled paths", DriveRoot);
         }
 
 
         // ------------------------------------------------------------------ X1 (Monday 2026-10-19 robustness list, items 2 / 4 / 7)
+
+        // ------------------------------------------------------------------ X2: Keep PC responsive + live VRAM through the exe's dry run
+
+        // the predicted run folder carries the clock (yyyyMMdd_HHmmss_): two dry runs a second apart differ only there
+        private static string NoStamp(string x) { return System.Text.RegularExpressions.Regex.Replace(x, @"\d{8}_\d{6}_", "STAMP_"); }
+
+        private static void ResponsivePlan()
+        {
+            var r = C.NewRoot();
+            var strip = new Func<IEnumerable<string>, List<string>>(a => a.Where(x => x != "-Responsive").ToList());
+            Func<string[], Tuple<JObj, JObj>> pair = extra => Tuple.Create(Plan(r, extra), Plan(r, extra.Concat(new[] { "--responsive" }).ToArray()));
+            // every step's argv: ticked == unticked + -Responsive on the gpu_bake steps only; the unticked plan has no -Responsive anywhere
+            foreach (var extra in new[] { new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" },
+                                          new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install" },
+                                          new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "low", "--ao" },
+                                          new[] { "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao" } })
+            {
+                var t = pair(extra);
+                var off = t.Item1; var on = t.Item2;
+                Assert.Eq(false, off.Obj("options").Bool("responsive"), "unticked: options.responsive false");
+                Assert.Eq(true, on.Obj("options").Bool("responsive"), "ticked: options.responsive true");
+                Assert.Seq(Ids(off), Ids(on), "same steps");
+                Assert.True(!Json.Write(off, false).Contains("Responsive"), "unticked plan: no 'Responsive' anywhere (argv, params, env)");
+                Assert.True(!off.Arr("notes").Cast<string>().Any(n => n.Contains("responsive on")), "unticked: no note");
+                Assert.True(on.Arr("notes").Cast<string>().Any(n => n.StartsWith("responsive on", StringComparison.Ordinal)), "ticked: the plan says 'responsive on'");
+                int gb = 0;
+                foreach (var st in Steps(off))
+                {
+                    var so = Steps(on).First(x => x.Str("id") == st.Str("id"));
+                    if (st.Arr("args") == null) continue;
+                    var ao = Args(st); var an = Args(so);
+                    if (st.Str("id") == "gpu-bake")
+                    {
+                        gb++;
+                        Assert.Seq(ao.Concat(new[] { "-Responsive" }).ToList(), an, "gpu-bake: unticked argv + -Responsive last");
+                        var fo = st.Obj("params").Arr("fallbackArgs"); var fn = so.Obj("params").Arr("fallbackArgs");
+                        if (fo != null) Assert.Seq(fo.Cast<string>().Concat(new[] { "-Responsive" }).ToList(), fn.Cast<string>().ToList(), "the tool write-back fallback argv gets it too");
+                    }
+                    else Assert.Seq(ao.Select(NoStamp).ToList(), an.Select(NoStamp).ToList(), st.Str("id") + ": argv unchanged");
+                }
+                Assert.Eq(1, gb, "one gpu_bake step");
+            }
+            // the driver scripts (gpu_ao trace, gpu_lightprobes) run their own gpu_bake and cannot take the switch: they get the environment variable
+            var full = Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao", "--responsive");
+            Assert.Eq("1", Step(full, "ao-trace").Obj("envExtra").Str("GPULM_RESPONSIVE"), "ao-trace: GPULM_RESPONSIVE=1");
+            Assert.Eq("1", Step(full, "probe-bake").Obj("envExtra").Str("GPULM_RESPONSIVE"), "probe-bake: GPULM_RESPONSIVE=1");
+            Assert.Eq(0, Step(full, "ao-apply").Obj("envExtra").Count, "ao-apply (no GPU): no env");
+            Assert.Eq(0, Step(full, "gpu-bake").Obj("envExtra").Count, "gpu-bake: the switch is an argument, not env");
+            var offFull = Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao");
+            Assert.Eq(0, Step(offFull, "ao-trace").Obj("envExtra").Count, "unticked: ao-trace env empty");
+            Assert.Eq(0, Step(offFull, "probe-bake").Obj("envExtra").Count, "unticked: probe-bake env empty");
+            // the sizing from the VRAM comes first, -Responsive last
+            var six = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--assume-vram-mb", "6144", "--responsive");
+            var a6 = Args(Step(six, "gpu-bake"));
+            Assert.Seq(new[] { "-BufCapMB", "1536", "-Responsive" }, a6.Skip(a6.Count - 3).ToList(), "VRAM sizing then -Responsive");
+        }
+
+        // ------------------------------------------------------------------ W2 (0.6.3): 2004 Exact Vertex Lighting? + the short run folder
+
+        private static void ExactVertexPlan()
+        {
+            var r = C.NewRoot();
+            foreach (var extra in new[] { new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" },
+                                          new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install" },
+                                          new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "low", "--ao" },
+                                          new[] { "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao" } })
+            {
+                var off = Plan(r, extra); var on = Plan(r, extra.Concat(new[] { "--exact-vertex-lighting" }).ToArray());
+                Assert.Eq(false, off.Obj("options").Bool("exactVertexLighting"), "unticked: options.exactVertexLighting false");
+                Assert.Eq(true, on.Obj("options").Bool("exactVertexLighting"), "ticked: options.exactVertexLighting true");
+                Assert.Seq(Ids(off), Ids(on), "same steps");
+                Assert.True(!Json.Write(off, false).Contains("-ExactVertexLighting"), "unticked plan: no -ExactVertexLighting anywhere (argv, params, env)");
+                Assert.True(!off.Arr("notes").Cast<string>().Any(n => n.Contains("exact vertex lighting")), "unticked: no note");
+                Assert.True(on.Arr("notes").Cast<string>().Any(n => n.StartsWith("exact vertex lighting on (slower tag writer)", StringComparison.Ordinal)), "ticked: the plan says 'exact vertex lighting on (slower tag writer)'");
+                int gb = 0;
+                foreach (var st in Steps(off))
+                {
+                    var so = Steps(on).First(x => x.Str("id") == st.Str("id"));
+                    if (st.Arr("args") == null) continue;
+                    var ao = Args(st); var an = Args(so);
+                    if (st.Str("id") == "gpu-bake")
+                    {
+                        gb++;
+                        Assert.Seq(ao.Concat(new[] { "-ExactVertexLighting" }).ToList(), an, "gpu-bake: unticked argv + -ExactVertexLighting last");
+                        var fo = st.Obj("params").Arr("fallbackArgs"); var fn = so.Obj("params").Arr("fallbackArgs");
+                        if (fo != null) Assert.Seq(fo.Cast<string>().Concat(new[] { "-ExactVertexLighting" }).ToList(), fn.Cast<string>().ToList(), "the tool write-back fallback argv gets it too");
+                    }
+                    else if (st.Str("id") == "ao-stage")
+                        Assert.Seq(ao.Concat(new[] { "--exact-vertex-lighting" }).Select(NoStamp).ToList(), an.Select(NoStamp).ToList(), "ao-stage: gpu_ao stage writes the AO layer's final stage -> + --exact-vertex-lighting (P6b)");
+                    else Assert.Seq(ao.Select(NoStamp).ToList(), an.Select(NoStamp).ToList(), st.Str("id") + ": argv unchanged");
+                    Assert.True(st.Obj("envExtra") == null || so.Obj("envExtra").Count == st.Obj("envExtra").Count, st.Str("id") + ": env unchanged");
+                }
+                Assert.Eq(1, gb, "one gpu_bake step");
+            }
+            // both options: -Responsive first, -ExactVertexLighting last; the AO trace / probe bake get only GPULM_RESPONSIVE (they write no lightmap)
+            var both = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--responsive", "--exact-vertex-lighting");
+            var ab = Args(Step(both, "gpu-bake"));
+            Assert.Seq(new[] { "-Responsive", "-ExactVertexLighting" }, ab.Skip(ab.Count - 2).ToList(), "-Responsive then -ExactVertexLighting");
+            var full = Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao", "--responsive", "--exact-vertex-lighting");
+            Assert.True(Args(Step(full, "ao-stage")).Contains("--exact-vertex-lighting") && !Args(Step(offFullEvl(r), "ao-stage")).Contains("--exact-vertex-lighting"), "AO: only the ticked plan's gpu_ao stage gets --exact-vertex-lighting");
+            Assert.True(!Args(Step(full, "ao-trace")).Contains("-ExactVertexLighting") && !Args(Step(full, "probe-bake")).Contains("-ExactVertexLighting"), "the AO trace / probe bake write no lightmap: no -ExactVertexLighting");
+            Assert.Eq("1", Step(full, "probe-bake").Obj("envExtra").Str("GPULM_RESPONSIVE"), "probe-bake still GPULM_RESPONSIVE=1");
+            var a2 = Args(Step(full, "gpu-bake"));
+            Assert.Eq("-ExactVertexLighting", a2[a2.Count - 1], "the lightmap bake of Standard + probes + AO gets it");
+            // the sizing from the VRAM comes first
+            var six = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--assume-vram-mb", "6144", "--exact-vertex-lighting");
+            var a6 = Args(Step(six, "gpu-bake"));
+            Assert.Seq(new[] { "-BufCapMB", "1536", "-ExactVertexLighting" }, a6.Skip(a6.Count - 3).ToList(), "VRAM sizing then -ExactVertexLighting");
+        }
+
+        private static JObj offFullEvl(TestRoot r) { return Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao", "--responsive"); }
+
+        private static void RunFolderPlan()
+        {
+            var r = C.NewRoot();
+            var p = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
+            string rd = Path.GetFileName(p.Str("runDir"));
+            Assert.True(System.Text.RegularExpressions.Regex.IsMatch(rd, @"^\d{8}_\d{6}_cyclotron_cyclotron$"), "run folder <ts>_<leaf>_<bsp> when it fits 20 characters: " + rd);
+            // a long name is cut to 20 characters of label
+            var q = Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes");
+            string rq = Path.GetFileName(q.Str("runDir"));
+            Assert.True(System.Text.RegularExpressions.Regex.IsMatch(rq, @"^\d{8}_\d{6}_triplicate_triplicat$"), "label cut to 20 characters: " + rq);
+            Assert.Eq(20, rq.Substring(16).Length, "20 label characters");
+            // the run's install backup is RUN\tagbak where the run folder is used; the worker's [4b] backup keeps tag_backup_before_writeback
+            Assert.Eq(Path.Combine(q.Str("runDir"), "tagbak"), q.Str("installBackupDir"), "Standard + probes: the run's install backup = RUN/tagbak");
+            var pr = Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--mode", "probes");
+            Assert.Eq(Path.Combine(pr.Str("runDir"), "tagbak"), pr.Str("installBackupDir"), "Lightprobes only: RUN/tagbak");
+            Assert.Eq(Path.Combine(r.Farm(200), "tag_backup_before_writeback"), p.Str("installBackupDir"), "Lightmap Only: [4b]'s worker backup keeps its name");
+            Assert.True(!Json.Write(q, false).Contains("tag_backup_before_writeback"), "no long run-folder backup name left in the Standard + probes plan");
+        }
+
+        private static void LiveVramPlan()
+        {
+            var r = C.NewRoot();
+            string[] bake = { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" };
+            Func<string, string, JObj> plan = (vram, other) =>
+            {
+                var l = bake.ToList();
+                if (vram != null) l.AddRange(new[] { "--assume-vram-mb", vram });
+                if (other != null) l.AddRange(new[] { "--assume-other-vram-mb", other });
+                return Plan(r, l.ToArray());
+            };
+            Func<JObj, string> argv = p => NoStamp(string.Join("\n", Steps(p).Where(s => s.Arr("args") != null).Select(s => s.Str("id") + ": " + string.Join(" ", Args(s)))));
+            string baseline = argv(plan(null, null));
+            // the RTX 4090 (24,138 MiB), a normal desktop (0 - 3,072 MiB held): every step's argv is today's, and nothing is said about other programs
+            foreach (var other in new[] { "0", "1024", "2048", "3072" })
+            {
+                var p = plan("24138", other);
+                Assert.Eq(baseline, argv(p), "4090 with " + other + " MiB held by others: argv byte-identical to no figure at all");
+                Assert.True(!p.Arr("notes").Cast<string>().Any(n => n.Contains("in use by other programs")), other + " MiB: no note");
+                Assert.Eq(0L, p.Obj("gpuLimits").Long("maxCallsPerPart"), other + " MiB: nothing passed");
+            }
+            // a game holds 14 GB: the parts shrink, the plan says so plainly
+            var g = plan("24138", "14336");
+            long n = g.Obj("gpuLimits").Long("maxCallsPerPart").Value;
+            Assert.True(n > 0 && n < 52195783L, "14 GiB held on a 4090: -MaxCallsPerPart " + n);
+            var a = Args(Step(g, "gpu-bake"));
+            Assert.Eq(n.ToString(), a[a.IndexOf("-MaxCallsPerPart") + 1], "the argv carries it");
+            Assert.Eq(14336L * 1048576L, g.Obj("gpuLimits").Long("otherUseBytes"), "the plan records what was held");
+            Assert.True(g.Obj("gpuLimits").Long("effectiveVramBytes") > 0, "and what the parts were sized for");
+            string note = g.Arr("notes").Cast<string>().FirstOrDefault(x => x.Contains("in use by other programs"));
+            Assert.True(note != null && note.StartsWith("14,336 MiB of VRAM is in use by other programs; parts sized for ", StringComparison.Ordinal), "note: " + note);
+            var fb = Step(g, "stage-or-tool-fallback").Obj("params").Arr("fallbackArgs").Cast<string>().ToList();
+            Assert.True(fb.Contains("-MaxCallsPerPart") && fb.Contains("-WriteBack"), "the fallback argv carries it too");
+            // more held = smaller parts
+            long n20 = plan("24138", "20480").Obj("gpuLimits").Long("maxCallsPerPart").Value;
+            Assert.True(n20 > 0 && n20 < n, "20 GiB held < 14 GiB held: " + n20 + " < " + n);
+            // the dry-run switches are validated
+            var l1 = C.Base("bake"); l1.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron", "--dry-run", "--assume-other-vram-mb", "4096", "--dev-skip-preflight", "--dev-skip-gpucheck" });
+            var b1 = C.Run(l1);
+            Assert.True(b1.Exit != 0 && (b1.Out + b1.Err).Contains("needs --assume-vram-mb"), "--assume-other-vram-mb alone: " + b1);
+            var l2 = C.Base("bake"); l2.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron", "--assume-vram-mb", "8192", "--assume-other-vram-mb", "4096", "--dev-skip-preflight", "--dev-skip-gpucheck" });
+            var b2 = C.Run(l2);
+            Assert.True(b2.Exit != 0 && (b2.Out + b2.Err).Contains("only for --dry-run"), "outside --dry-run: " + b2);
+        }
 
         private static void VramParts()
         {
@@ -289,7 +468,7 @@ namespace H2GpuLightmapper.Tests
             string stage = Path.Combine(farm, @"ao\s10e05\tagw_stage");
             var ins = Step(p, "install");
             Assert.Seq(new[] { Path.Combine(Inst(r), @"engine_v373\v043-tagwriter\lmw_install.py"), "install", "--stage", stage, "--target-dir", r.CycDir,
-                               "--backup-dir", Path.Combine(p.Str("runDir"), "tag_backup_before_writeback"), "--marker", Path.Combine(farm, "writeback_in_progress.txt"),
+                               "--backup-dir", Path.Combine(p.Str("runDir"), "tagbak"), "--marker", Path.Combine(farm, "writeback_in_progress.txt"),
                                "--auto-backup-root", Path.Combine(r.Work, "_TAGBAK_auto") }, Args(ins), "lmw_install argv");
             Assert.Eq(true, ins.Bool("tagWrite"), "install is a tag write");
         }

@@ -9,7 +9,7 @@
    "tokens": []},
   {"path": "_research/ao/gpu_ao.py",
    "base_md5": "04b171cabd16084eff3190de48722f89",
-   "patches": ["P6_gpu_ao.patch"],
+   "patches": ["P6_gpu_ao.patch", "P6b_gpu_ao_exactvl.patch"],
    "tokens": []}
  ]
 }

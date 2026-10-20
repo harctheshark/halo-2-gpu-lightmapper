@@ -41,6 +41,9 @@ namespace H2GpuLightmapper.Core.Run
         public List<string> GuardFails { get; } = new List<string>();
         public List<string> ErrorLines { get; } = new List<string>();
         public List<string> PhasesSeen { get; } = new List<string>();
+        /// <summary>X2: the engine's device-loss lines seen on either stream (see <see cref="DeviceLoss"/>); a failed bake with any of them is shown as a TDR.</summary>
+        public List<string> DeviceLossLines { get; } = new List<string>();
+        public bool DeviceLost { get { return DeviceLossLines.Count > 0; } }
         /// <summary>Fired when a banner starts a phase (old id, new id).</summary>
         public event Action<string, string> PhaseChanged;
 
@@ -66,6 +69,7 @@ namespace H2GpuLightmapper.Core.Run
             string text = LineDecoder.StripAnsi(raw ?? "");
             var p = new ParsedLine { Text = text, IsErr = isErr, Kind = LineKind.Plain, Utc = DateTime.UtcNow };
             string t = text.Trim();
+            if (t.Length > 0 && DeviceLossLines.Count < 50 && DeviceLoss.IsDeviceLossLine(t)) DeviceLossLines.Add(t);
             if (t.Length > 0)
             {
                 var q = isErr ? _errTail : _outTail;

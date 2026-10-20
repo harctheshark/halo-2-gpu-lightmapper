@@ -1,4 +1,5 @@
 using System;
+using H2GpuLightmapper.App;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -31,7 +32,7 @@ namespace H2GpuLightmapper.Tests
                 var a = new List<string> { "--payload-dir", dev ? guarded : C.PayloadDir, "--localappdata", C.Lad, "--alias-volume-root", C.Vol, "--rt-pwsh", C.PwshDir, "--rt-py", C.PyDir,
                                            "--h2ek", r.Root, "--scenario", @"scenarios\multi\triplicate\triplicate", "--bsp", "triplicate",
                                            "--dev-ui-snapshot", png, "--dev-ui-snapshot-delay-ms", "6000" };
-                if (dev) a.AddRange(new[] { "--dev-probes", "--dev-ui-preset", "custom,ao,advanced,lightmap" });
+                if (dev) a.AddRange(new[] { "--dev-probes", "--dev-ui-preset", "custom,ao,advanced,lightmap,responsive" });
                 var res = C.Run(a, 120000);
                 Assert.Eq(0, res.Exit, "the window exited cleanly: " + res);
                 Assert.True(!File.Exists(png + ".error.txt"), "snapshot error: " + (File.Exists(png + ".error.txt") ? File.ReadAllText(png + ".error.txt") : ""));
@@ -96,6 +97,20 @@ namespace H2GpuLightmapper.Tests
             Assert.Contains(tag("RaysBox"), "Text=\"16\"", "rays 16");
             Assert.Contains(tag("AdvancedExpander"), "IsExpanded=\"False\"", "Advanced collapsed");
             Assert.NotContains(tag("StageOnlyCheck"), "IsChecked=\"True\"", "stage only off");
+            // X2: Advanced settings
+            Assert.Contains(x, "Header=\"Advanced settings\"", "the Advanced settings group");
+            Assert.True(x.IndexOf("x:Name=\"AdvancedExpander\"", StringComparison.Ordinal) < x.IndexOf("x:Name=\"ResponsiveCheck\"", StringComparison.Ordinal)
+                        && x.IndexOf("x:Name=\"ResponsiveCheck\"", StringComparison.Ordinal) < x.IndexOf("x:Name=\"StageOnlyCheck\"", StringComparison.Ordinal), "inside the Advanced area, before the existing items");
+            Assert.NotContains(tag("ResponsiveCheck"), "IsChecked", "Keep PC responsive: unchecked by default");
+            Assert.NotContains(tag("ResponsiveCheck"), "IsEnabled=\"False\"", "Keep PC responsive: enabled");
+            Assert.Contains(tag("ResponsiveCheck"), "Content=\"Keep PC responsive - Slower Bakes!\"", "label");
+            Assert.Contains(tag("ResponsiveCheck"), "ToolTip=\"" + BakeOptions.ResponsiveTip + "\"", "tooltip");
+            Assert.NotContains(tag("ExactVertexCheck"), "IsChecked", "2004 Exact Vertex Lighting?: unchecked");
+            Assert.NotContains(tag("ExactVertexCheck"), "IsEnabled=\"False\"", "2004 Exact Vertex Lighting?: enabled (0.6.3)");
+            Assert.Contains(tag("ExactVertexCheck"), "Content=\"2004 Exact Vertex Lighting?\"", "label");
+            Assert.Contains(tag("ExactVertexCheck"), "ToolTip=\"You likely don't need this, this is just to shut Harcs brain up\"", "tooltip, exactly");
+            Assert.NotContains(tag("ExactVertexCheck"), "later build", "no '(coming in a later build)' suffix any more");
+            Assert.Contains(tag("ExactVertexCheck"), "Checked=\"Option_Changed\"", "wired to the option refresh");
             foreach (var b in new[] { "BakeBtn", "CancelBtn", "RestoreBtn", "LogsBtn" }) tag(b);
             Assert.Contains(x, "Reset to 50M / 16", "reset link");
             Assert.Contains(x, "Gather rays (Monte-Carlo samples)", "rays label");

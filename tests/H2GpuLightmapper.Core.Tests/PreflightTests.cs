@@ -22,6 +22,8 @@ namespace H2GpuLightmapper.Core.Tests
             yield return T("preflight: fake root: non-stock tool, no tags, no fbxsdk, no VC++ x86 / d3dx -> refusals", FakeRootRefusals);
             yield return T("preflight: path text: braces, brackets, non-ASCII refused", PathText);
             yield return T("preflight: path budget refused on a deep root", Budget);
+            yield return T("preflight: W2 path budget: the 0.6.2 refusal at 243 characters (run backup) fits with margin now (short run folder label + tagbak); label rules", W2PathBudgetRunBackup);
+            yield return T("preflight: W2 a GPU without FP64 is refused in plain words (NVIDIA / AMD advice, CPU tool), technical detail kept", W2NoFp64Plain);
             yield return T("preflight: write probe on a scratch root (leaves nothing)", WriteProbe);
             yield return T("preflight: bounds DB copied only if absent; never overwritten", BoundsDb);
             yield return T("preflight: gpucheck JSON parse (ok and no-FP64) and a real gpucheck run", GpuCheckTests);
@@ -163,7 +165,7 @@ namespace H2GpuLightmapper.Core.Tests
             var o2 = ReadOnly();
             o2.ScenarioRel = @"scenarios\multi\cyclotron\cyclotron"; o2.Bsp = "cyclotron";
             Assert.Eq(CheckLevel.Ok, PreflightChecks.Run(C.MineRoot, o2).Get("path.budget").Level, "cyclotron on ProdRoot fits");
-            string mid = C.Short.Dir("warnroot_" + new string('m', 12));   // nominal map names overflow, INST still fits
+            string mid = C.Short.Dir("warnroot_" + new string('m', 34));   // nominal map names overflow, INST still fits (W2 0.6.3: was 12; the shorter run folder saves 20 characters)
             var w = PreflightChecks.Run(mid, ReadOnly()).Get("path.budget");
             Assert.Eq(CheckLevel.Warn, w.Level, "without a scenario an overrun is a warning (" + w.Message + ")");
             var o3 = ReadOnly();
@@ -198,6 +200,69 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.True(!Directory.GetFiles(root).Any(f => f.Contains(".h2lm_tmp_")), "no temp left");
             var r = PreflightChecks.Run(other, ReadOnly());
             Assert.Eq(CheckLevel.Info, r.Get("boundsdb").Level, "a foreign DB is reported as kept");
+        }
+
+        // W2 (0.6.3): the user's report "paths would reach 243 characters (run backup; limit 240)". The run backup path is
+        // WORK\standalone\runs\<ts>_<label>\<backup subfolder>\<leaf>_<bsp>_lightmap_truecolor_bitmaps.bitmap. 0.6.2: label = leaf_bsp (whole), subfolder
+        // tag_backup_before_writeback; 0.6.3: label <= 20 characters, subfolder tagbak.
+        private static int OldRunBackupLength(string root, string leaf, string bsp)
+        {
+            string truecolor = leaf + "_" + bsp + "_lightmap_truecolor_bitmaps.bitmap";
+            return (root.TrimEnd('\\') + "\\GPU Lightmap Work" + "\\standalone\\runs\\" + "20261014_120000" + "_" + leaf + "_" + bsp + "\\tag_backup_before_writeback\\" + truecolor).Length;
+        }
+
+        private static void W2PathBudgetRunBackup()
+        {
+            const string scen = "scenarios\\multi\\a_long_scenario_folder\\a_long_map_name_x1";
+            string leaf = "a_long_map_name_x1", bsp = "a_long_bsp_name_1";
+            // a root that makes the 0.6.2 run backup path exactly 243 characters (the user's refusal)
+            string probe = "C:\\h";
+            int k = 243 - OldRunBackupLength(probe, leaf, bsp);
+            Assert.True(k > 0, "the example is solvable: " + k);
+            string root = probe + new string('x', k);
+            Assert.Eq(243, OldRunBackupLength(root, leaf, bsp), "the 0.6.2 run backup path of this root is 243 characters");
+            var e = PathBudget.Estimate(root, null, 0, scen, bsp).First(x => x.What == "run backup");
+            Assert.True(e.Length <= PathBudget.Limit - 10, "0.6.3: the run backup path is " + e.Length + " characters, at least 10 under the limit (" + PathBudget.Limit + ")");
+            Assert.True(e.Length <= 243 - 20, "0.6.3 saves at least 20 characters (the shorter subfolder alone): " + e.Length);
+            Assert.True(e.Example.Contains("\\tagbak\\") && !e.Example.Contains("tag_backup_before_writeback"), "the entry uses the tagbak subfolder: " + e.Example);
+            Assert.True(e.Example.Contains("_" + RunFolder.Label(leaf, bsp) + "\\"), "the entry uses the 20-character label: " + e.Example);
+            // the shipped helper agrees with the path the planner will create
+            Assert.Eq(RunFolder.TagFor(new DateTime(2026, 10, 14, 12, 0, 0), scen, bsp), "20261014_120000_" + RunFolder.Label(leaf, bsp), "TagFor == the budget's run folder name");
+            // the same refusal as 0.6.2 would have fired for the old numbers; now the whole preflight budget no longer names the run backup
+            var o = ReadOnly(); o.ScenarioRel = scen; o.Bsp = bsp;
+            var all = PathBudget.Estimate(root, null, 0, scen, bsp);
+            var lg = PathBudget.Longest(all);
+            Assert.True(lg.Length <= PathBudget.Limit - 10, "the user's 243-character case fits with margin now: the longest entry is '" + lg.What + "' at " + lg.Length + " characters (limit " + PathBudget.Limit + ")");
+            Assert.True(PathBudget.Longest(all).What != "run backup", "the run backup is no longer the longest entry");
+            // label rules
+            Assert.Eq("cyclotron_cyclotron", RunFolder.Label("cyclotron", "cyclotron"), "a name that fits is kept whole");
+            Assert.Eq(20, RunFolder.Label(new string('l', 30), new string('b', 30)).Length, "never more than 20 characters");
+            Assert.Eq(20, RunFolder.LabelMax, "LabelMax");
+        }
+
+        private static void W2NoFp64Plain()
+        {
+            const string plainText = "This GPU can't run the GPU lightmapper: it has no double-precision (FP64) support (Intel integrated/Arc and Qualcomm Adreno GPUs lack it). Use a PC with an NVIDIA or AMD GPU, or bake with the CPU tool.";
+            Assert.Eq(plainText, GpuCheck.NoFp64Plain, "the exact sentence");
+            // an Intel iGPU as gpucheck reports it
+            string json = "{\"default_adapter\": {\"name\": \"Intel(R) UHD Graphics 630\", \"feature_level\": \"11_1\", \"double_precision_float_shader_ops\": false, \"extended_doubles_shader_instructions\": false}, "
+                        + "\"hybrid\": false, \"verdict\": {\"ok\": false, \"reasons\": [\"the GPU has no double-precision (FP64) shader support\", \"the GPU lacks extended double-precision shader instructions (ddiv/dfma/drcp)\"], \"advice\": []}}";
+            var o = ReadOnly(); o.GpuCheckJson = json; o.GpuCheckExitCode = 1;
+            var r = PreflightChecks.Run(C.MineRoot, o);
+            var g = r.Get("gpu");
+            Assert.Eq(CheckLevel.Fail, g.Level, "refused");
+            Assert.True(g.Message.StartsWith(plainText, StringComparison.Ordinal), "the message STARTS with the plain sentence: " + g.Message);
+            Assert.Contains(g.Message, "Intel(R) UHD Graphics 630", "the technical detail names the adapter");
+            Assert.Contains(g.Message, "(FP64) shader support", "... and the engine's own reason after it");
+            Assert.True(!r.Ok, "preflight not ok");
+            Assert.Contains(r.Gpu.Line, plainText, "the Advanced-panel GPU line says it in plain words too");
+            Assert.Contains(r.Gpu.Line, "FP64 NO", "... and keeps the FP64 flag");
+            // a failure that is NOT about FP64 keeps the generic text (no misleading FP64 sentence)
+            string sw = "{\"default_adapter\": {\"name\": \"Microsoft Basic Render Driver\", \"feature_level\": \"11_0\", \"double_precision_float_shader_ops\": false, \"extended_doubles_shader_instructions\": false}, "
+                      + "\"hybrid\": false, \"verdict\": {\"ok\": false, \"reasons\": [\"the default adapter is the Microsoft Basic Render Driver (no GPU driver installed?)\", \"the GPU has no double-precision (FP64) shader support\"], \"advice\": []}}";
+            var o2 = ReadOnly(); o2.GpuCheckJson = sw; o2.GpuCheckExitCode = 1;
+            var g2 = PreflightChecks.Run(C.MineRoot, o2).Get("gpu");
+            Assert.True(g2.Message.StartsWith("This GPU cannot run the lightmapper: ", StringComparison.Ordinal) && !g2.Message.Contains("Qualcomm"), "a software adapter keeps the generic refusal: " + g2.Message);
         }
 
         private static void GpuCheckTests()

@@ -1,0 +1,26 @@
+# title: P6b gpu_ao.py: stage --exact-vertex-lighting -> lm_tagwriter --exact-vertex-lighting (opt-in; the AO layer's stage is written by gpu_ao, not gpu_bake); not given = the pre-P6b argv
+# source: _research/ao/gpu_ao.py
+# base-md5: c4a0277f4d20807becd07662f20bccc1
+# result-md5: 56eba64dfcf425f9727981cfb6f60019
+--- a/_research/ao/gpu_ao.py
++++ b/_research/ao/gpu_ao.py
+@@ -412,6 +412,10 @@
+     args = [sys.executable, os.path.join(tw, 'lm_tagwriter.py'), '--run-dir', run_dir, '--skeleton', skel, '--stage', stage, '--bsp', sp['bsp'],
+             '--scenario', sp['scn'], '--threads', '4', '--lightmap-name', sp['ltmp'],
+             '--tool', os.path.join(H2, 'tool_fast.exe')]          # P6 (finding 24): the defs_pin gate checks THIS root's tool (H2LM_ROOT); without --tool lmw_tagio's hard-coded H2EKMine path; unset: the same file
++    if getattr(a, 'exact_vertex_lighting', False):          # P6b (0.6.3): the AO layer's stage gets the same opt-in gate as gpu_bake -ExactVertexLighting
++        args.append('--exact-vertex-lighting')
++        for f in ('tbuf_sorted.bin', 'tri_vpos.bin', 'tri_type.bin', 'tnrm.bin', 'inst.bin'):       # lmw_gate.py reads these from the run dir (apply links only the writer's other inputs)
++            if os.path.exists(os.path.join(farm, f)) and not os.path.exists(os.path.join(run_dir, f)): link_or_copy(os.path.join(farm, f), os.path.join(run_dir, f))
+     rc, dt = run(args, os.path.join(out, 'tagwriter.log'))
+     if rc: die('lm_tagwriter exit %d (see %s)' % (rc, os.path.join(out, 'tagwriter.log')))
+     rc2, dt2 = run([sys.executable, os.path.join(tw, 'lmw_validate.py'), '--check-set', stage, '--bsp', sp['bsp'], '--json', os.path.join(out, 'tagw_validate.json')],
+@@ -648,6 +652,8 @@
+     p.add_argument('--ao-shrink-mode', choices=('garrote', 'soft'), default='garrote', help='garrote (empirical Wiener gain, default) or soft (f - k sigma: loses more contact AO)')
+     p.set_defaults(f=cmd_apply)
+     p = sub.add_parser('stage'); common(p); p.add_argument('--overwrite', action='store_true'); p.set_defaults(f=cmd_stage)
++    p.add_argument('--exact-vertex-lighting', action='store_true', help='P6b (0.6.3, opt-in, default off): pass --exact-vertex-lighting to lm_tagwriter '
++                   '(the tool write-back per-vertex gate replica; the same switch as gpu_bake -ExactVertexLighting, which cannot reach this stage)')
+     p = sub.add_parser('install'); common(p); p.add_argument('--write-back', action='store_true', help='REQUIRED: without it nothing is written'); p.set_defaults(f=cmd_install)
+     p = sub.add_parser('selftest'); p.set_defaults(f=cmd_selftest)
+     p = sub.add_parser('check'); common(p, False); p.add_argument('--samples', type=int, default=12); p.add_argument('--grid', type=int, default=64); p.add_argument('--extra', type=int, default=0, help='also check N random texels'); p.set_defaults(f=lambda a: __import__('ao_check').cmd_check(a, sys.modules[__name__]))

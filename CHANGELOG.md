@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.3 (2026-10-20): pre-release
+
+Exe SHA-256 `81264a3c166c3aea392bf57d65db2643993bbc8c18df4c8c4d2687fce3fddcd5`.
+
+- **Keep PC responsive - Slower Bakes!** (Advanced settings, off by default, `--responsive`).
+  - Every GPU submission is kept to about 40 ms, so the desktop, videos and games stay smooth during a bake.
+  - The lightmap is identical (keyed-identical on the tested maps).
+  - Bakes take about 15% longer.
+- **2004 Exact Vertex Lighting?** (Advanced settings, off by default, `--exact-vertex-lighting`).
+  - The tag writer re-runs `tool_fast`'s per-vertex visibility test (7 probes per sample) and drops the samples `tool_fast`
+    drops.
+  - On the stock Steam cyclotron, the vertex-lit records go from 84.6% to 98.1% (colour) and from 90.2% to 95.5%
+    (direction), bit-exact against `tool_fast`'s own write-back.
+  - Lightmap pixels are unchanged. The tag-writing step takes about 2 minutes longer.
+  - With the box off, the output is byte-identical to 0.6.2.
+- **GPU timeout (TDR) risk reduced again.**
+  - The photon cast and the light-probe trace are now paced by measured time. Every piece is timed, and a slow GPU gets
+    smaller pieces while a fast GPU keeps its plan.
+  - The cast was the riskiest step found by a per-stage survey: up to 0.85-1.47 s per submission on an RTX 4090.
+  - Gather pacing grows by at most 1.25x per step.
+  - Results are identical on every tested map.
+  - A per-dispatch survey (`GPULM_DISPATCH_SURVEY=1`) is built in.
+  - **Not fixed:** one unit of the photon lattice is not yet splittable (about 1.7-2 s on vuthatest on an RTX 4090). The log
+    warns above 1.5 s.
+- **Clearer GPU-reset messages.** The engine names the reason for a device loss in plain words and says which step and chunk
+  died. The app explains a Windows GPU reset and suggests the responsive option.
+- **Video memory in use by other programs** (a game, a browser) is taken into account when the work is sized. On an idle
+  24 GB card nothing changes.
+- **Shorter run-folder paths:** `<time>_<label up to 20 chars>\tagbak`. A long scenario name that was refused at 243
+  characters now fits. Older run folders still work with Undo and Restore.
+- **GPUs without FP64 are refused in plain words** and are not supported. This covers Intel integrated and Arc graphics and
+  Qualcomm Adreno.
+- **Fixed:** with AO and exact vertex lighting both on, the AO layer's final tag stage did not pass the option through.
+- **Checked on this build:**
+  - AO neutrality (keyed-identical to production).
+  - Custom on cyclotron (keyed-identical).
+  - Light probes on triplicate (99.533%, unchanged).
+  - An exe bake with both new options on.
+  - All test suites.
+
 ## 0.6.2 (2026-10-20): pre-release
 
 Exe SHA-256 `efc7dc4fa5ccdbb174adcdc2aed14e5f6bda78db8fe27bb4bb8384b9c54b4920`. It fixes the issues listed in 0.6.1's README.

@@ -51,6 +51,19 @@ namespace H2GpuLightmapper.App
         /// <summary>Review fix (finding 9): installing without the light probes on a probe BSP (the map fell back to the tool
         /// writer) resets the BSP's probes to zero; the CLI needs its own --probes-fallback install for that.</summary>
         public AoFallback ProbesFallback = AoFallback.Stop;
+        /// <summary>X2 Advanced settings "Keep PC responsive - Slower Bakes!" / CLI --responsive: every gpu_bake the plan builds gets
+        /// -Responsive (the engine splits its GPU work into short pieces; the lightmap is identical, the bake takes longer). Default off:
+        /// the argv is then byte-identical to before this option existed. Not remembered between launches (like every bake option).</summary>
+        public bool Responsive;
+        /// <summary>W2 (0.6.3) Advanced settings "2004 Exact Vertex Lighting?" / CLI --exact-vertex-lighting: every gpu_bake that writes the tags gets
+        /// -ExactVertexLighting (the direct writer re-runs the CPU's 7-probe per-vertex visibility gate, so vertex-lit records match the 2004 tool
+        /// more closely; the tag writer is about 2 minutes slower on cyclotron). Default off: the argv is then byte-identical to before.</summary>
+        public bool ExactVertexLighting;
+        public const string ExactVertexLightingNote = "exact vertex lighting on (slower tag writer)";
+        public const string ExactVertexLightingLabel = "2004 Exact Vertex Lighting?";
+        public const string ExactVertexLightingTip = "You likely don't need this, this is just to shut Harcs brain up";
+        public const string ResponsiveLabel = "Keep PC responsive - Slower Bakes!";
+        public const string ResponsiveTip = "Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer.";
 
         public static BakeOptions Defaults() { return new BakeOptions(); }
 
@@ -169,6 +182,8 @@ namespace H2GpuLightmapper.App
             s += "   AO " + (Ao ? string.Format(CultureInfo.InvariantCulture, "on (strength {0}, exponent {1})", AoStrength, AoExponent) : "off");
             s += "   capture " + (ReuseCapture ? "reuse" : "new");
             s += "   " + (StageOnly ? "stage only (no tags written)" : "install");
+            if (Responsive) s += "   responsive on";
+            if (ExactVertexLighting) s += "   exact vertex lighting on";
             if (!Fixes) s += "   FIXES OFF (dev)";
             return s;
         }

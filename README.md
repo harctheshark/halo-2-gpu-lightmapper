@@ -8,7 +8,7 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: pre-release (0.6.2).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: pre-release (0.6.3).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in 0.6.2 is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -97,8 +97,11 @@ one PC. Another GPU will be slower or faster, and a card slower than an RTX 4090
 - **Windows 10 version 1903 or later, or Windows 11, 64-bit.** .NET Framework 4.8 is part of Windows from 1903 on. Nothing else
   has to be installed.
 - **A GPU with Direct3D 11 feature level 11_0 and double-precision (FP64) shader support**, including the extended-doubles
-  operations. The app runs a GPU check before every bake and refuses a card that lacks them. Only an RTX 4090 with 24 GB has
-  been tested; the bake does not plan for video memory.
+  operations. The app runs a GPU check before every bake and refuses a card that lacks them. **GPUs without FP64 are not
+  supported**: that includes Intel integrated and Intel Arc graphics and Qualcomm Adreno (Snapdragon / Windows on ARM) GPUs.
+  Any recent NVIDIA or AMD GPU has FP64. On a laptop with two GPUs, the bake must run on the NVIDIA/AMD one (the app tells you
+  how). Only an RTX 4090 with 24 GB has been tested; the app sizes its work to the card's video memory but this is untested
+  below 24 GB.
 - **The stock MCC Halo 2 Editing Kit (H2EK)** from Steam, with `tool_fast.exe` build 2023.06.20 (md5
   `3a889d370a7be537af47ff8035acd201`). Other builds are refused, because the GPU hooks are address-specific.
 - **The H2EK's own prerequisites** (the app checks them and names any that is missing; it never installs anything): a `data`
@@ -144,6 +147,15 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
 7. **Advanced:** Stage only (bake without touching your tags), the work folder, the GPU line, **Undo last install**, **Repair
    runtime**, **Scan and Build Scenery Fix Dependencies** (adds every render model of your tags folder to
    `SceneryFixDependencies.db`; bakes already do this automatically for the scenery of their own scenario).
+   **Advanced settings** (both off by default):
+   - **Keep PC responsive - Slower Bakes!** Splits the GPU work into short pieces (about 40 ms) so your desktop, videos and
+     games stay smooth while it bakes. The lightmap is identical; the bake takes longer (about 15% on the tested maps).
+     Command line: `--responsive`.
+   - **2004 Exact Vertex Lighting?** Makes the per-vertex lit geometry (instanced objects lit per vertex) match `tool_fast`'s own
+     write-back more closely by re-running the CPU's per-vertex visibility test while the tags are written. On the stock
+     Steam cyclotron this moves the vertex-lit records from about 85% to about 98% bit-exact. The lightmap pixels do not
+     change; the tag-writing step takes about 2 minutes longer. You likely don't need it. Command line:
+     `--exact-vertex-lighting`.
 8. **Bake**, **Cancel**, **Restore previous lightmap...**, **Open logs**.
 
 **Before you bake:** close the map in Sapien and Guerilla. A bake that will install is refused while one of its lightmap files is
@@ -211,26 +223,31 @@ Measurements come from one RTX 4090 PC; anything about other hardware is extrapo
 | Gather rays | Per shading call: Low 72, Super 128, Custom 2 x MC^2 (MC 1-64). | HARD |
 | Lights | Halo 2 allows 500 lights, 500 fixtures, 32 skies per scenario. | HARD |
 | Light probes | 281 probe points per BSP at the default buffer cap. A BSP above that is refused before anything runs, with a message to use Lightmap Only. | HARD |
-| Video memory | 24 GB held every tested map. Since 0.6.2 the app sizes its work parts from your card's VRAM; on 24 GB nothing changes. | SOFT, not tested below 24 GB |
+| Video memory | 24 GB held every tested map. The app sizes its work parts from your card's VRAM and, since 0.6.3, from what other programs are using; on an idle 24 GB card nothing changes. | SOFT, not tested below 24 GB |
 | Bake time | Super: 22 s to 17.4 min on the tested maps (RTX 4090). | SOFT |
-| GPU timeout (TDR) | The slowest GPU step is now split into smaller submissions: on cyclotron the worst one went from about 1.45 s to 0.67 s against Windows' 2 s limit. A GPU about 3x slower than an RTX 4090 can still time out. | SOFT |
+| GPU timeout (TDR) | Every long GPU step is now paced by measured time (photon cast, probe trace, sky, gather, the photon lattice's tiles), except one unit of the photon lattice that cannot be split yet: it took about 1.7-2 s per submission on vuthatest even on an RTX 4090, against Windows' 2 s limit. The log warns above 1.5 s. | SOFT |
 
 ## Known issues (fix in progress)
 
 These are open problems in this build.
 
-1. **GPU-timeout risk on much slower GPUs.** 0.6.2 splits the photon-lattice step so its worst single submission on cyclotron
-   is about 0.67 s (was 1.45 s) against Windows' 2 s timeout (TDR), but one step cannot be split further, so a card about 3x
-   slower than an RTX 4090 can still be reset by Windows in the middle of a bake. Only cyclotron was measured.
-2. **VRAM sizing is untested below 24 GB.** The app now sizes its work parts from your card's memory, but this has only been
-   checked by calculation, not on a 12 or 16 GB card, and the photon-lattice step is not sized by it.
-3. **Light probes need 281 points or fewer per BSP.** A BSP with more is now refused up front (use Lightmap Only); the limit
-   itself is unchanged.
-4. **Drive-root H2EK folders** (for example `D:\`) are accepted since 0.6.2 but no real bake has been run from one yet.
-5. **Per-vertex lighting on the stock Steam cyclotron.** Measured on that one map only (8,706 per-vertex records of an
-   unmodified Steam H2EK): the records the app stages match `tool_fast`'s own write-back of the same bake for about 84.6% of the
-   colours and about 90.2% of the directions. The lightmap bitmaps are identical. The cause is not known; other stock maps have
-   not been measured.
+1. **GPU-timeout risk (TDR).** 0.6.3 paces the photon cast, the light-probe trace, the sky chain and the gather by measured
+   time, so a slower GPU gets smaller pieces (a fast GPU keeps its plan). One unit of the photon-lattice step cannot be split
+   yet: on vuthatest it took about 1.7-2 s per submission **even on an RTX 4090**, right at Windows' 2 s limit, so Windows can
+   reset the GPU there. The log warns when a submission passes 1.5 s, and the app explains a reset in plain words. A fix is
+   planned.
+2. **VRAM sizing is untested below 24 GB.** The app sizes its work parts from your card's memory (and what other programs
+   use), but this has only been checked by calculation, not on a 12 or 16 GB card, and the photon-lattice step is not sized by it.
+3. **Light probes need 281 points or fewer per BSP.** A BSP with more is refused up front (use Lightmap Only).
+4. **Drive-root H2EK folders** (for example `D:\`) are accepted but no real bake has been run from one yet.
+5. **Per-vertex lighting differs a little from `tool_fast`'s own write-back by default.** About 14-15% of the vertex-lit
+   records include samples that `tool_fast` drops (its visibility test is not reproduced by default). The lightmap bitmaps are
+   identical. **2004 Exact Vertex Lighting?** (Advanced settings) closes most of the gap; a faster fix inside the GPU bake is
+   planned.
+6. **A rare final-check refusal.** One Standard bake of triplicate in this build's own tests stopped at the last check because a
+   single lightmap UV (1 of 35,572) landed exactly on a texel corner that the bake did not cover. Nothing was installed. It
+   is older than 0.6.3 (the 0.6.2 writer gives the same result on that capture) and depends on the capture: earlier bakes of
+   the same map with other captures passed.
 
 Other limits: Custom quality is Experimental; ambient occlusion is not CPU-faithful; the app has not been tested on a clean
 Windows install, with Smart App Control, or on a second PC or GPU.

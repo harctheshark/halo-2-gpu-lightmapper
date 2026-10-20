@@ -38,12 +38,12 @@ SANDBOX = os.path.join(os.environ['TEMP'], 's19')      # short on purpose: WORK\
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '15771590e4358733d7666616236c18f7'),   # W1 2026-10-20: the promoted engine (was fe88bd8b)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '440ce318562d832147db78954b193059'),   # production source _research/ao/dev_AO4 (W1; was dev_AO2 bac932e8)
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'f13328c7c37460d9f88444e65cd0e341'),   # W2 2026-10-20: the 05:38 promotion (was 15771590, fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '1a0318acbcd538a52b90960258e6561a'),   # production source _research/ao/dev_AO5 (W2 0.6.3; was dev_AO4 440ce318, dev_AO2 bac932e8)
 }
 EXPECT_PATCHED = {
     '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', 'ffb288d47846b38ed51e0f313761adf3'),   # P5
-    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', 'c4a0277f4d20807becd07662f20bccc1'),   # P6 (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool)
+    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', '56eba64dfcf425f9727981cfb6f60019'),   # P6 (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
     '_research/ao/ao_seamfix.py': ('93c2fe8c5ce812358b58b7c2073da030', '7b239011f1a9d6becbc11ce593398cd6'),   # N4 (A1 re-make: + stacked-layer rule)
     '_research/ao/ao_denoise.py': ('5da70c2fe14fbb2decd78ce8902b418a', '70522fac1d61f372e6c5af358592e7cf'),   # N4 (A1: ao_denoise.bilateral_raw without scipy)
     # U2 (2026-10-15): the three lmw_tagio.py walkers read SHORT block elements as tool_fast does (patches/tagio/series_tagio.json)
@@ -519,7 +519,7 @@ def t_ao_driver_defaults():
 def t_no_bytecode_in_production():
     """the builder never imports production code: no __pycache__ appeared in the production code dirs it read"""
     dirs = [os.path.join(GLW, d) for d in ('engine_v373', os.path.join('engine_v373', 'v043-tagwriter'), os.path.join('_research', 'ao'),
-                                           os.path.join('_research', 'ao', 'dev_AO'), os.path.join('_research', 'ao', 'dev_AO2'), os.path.join('_research', 'ao', 'dev_AO4'),
+                                           os.path.join('_research', 'ao', 'dev_AO'), os.path.join('_research', 'ao', 'dev_AO2'), os.path.join('_research', 'ao', 'dev_AO4'), os.path.join('_research', 'ao', 'dev_AO5'),
                                            os.path.join('_research', 'lightprobes'))]
     new = []
     for d in dirs:

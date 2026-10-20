@@ -333,7 +333,7 @@ namespace H2GpuLightmapper.Core.Preflight
             if (!g.Ran || g.Raw == null) { rep.Add("gpu", CheckLevel.Warn, "the GPU check could not run" + (g.Error != null ? ": " + g.Error : "")); return; }
             if (!g.Ok)
             {
-                rep.Add("gpu", CheckLevel.Fail, "This GPU cannot run the lightmapper: " + string.Join("; ", g.Reasons), g.Line);
+                rep.Add("gpu", CheckLevel.Fail, GpuCheck.RefusalText(g), g.Line);
                 return;
             }
             rep.Add("gpu", CheckLevel.Ok, g.Line);

@@ -92,7 +92,7 @@ def main():
         cl = ["cl.exe", "/nologo", "/O2", "/MT", "/EHsc", "/W4", "/permissive-", "/Brepro", "/DUNICODE", "/D_UNICODE"] + defs + [
               str(src), "/Fo" + str(obj / (name + ".obj")), "/Fe" + str(tmp),
               "/link", "/Brepro", "/DYNAMICBASE", "/NXCOMPAT", "/IMPLIB:" + str(obj / (name + ".lib")),
-              "d3d11.lib", "dxgi.lib", "advapi32.lib"]
+              "d3d11.lib", "dxgi.lib", "advapi32.lib", "pdh.lib"]
         rc, so, se = run(cl, env=env, cwd=str(obj))
         (obj / (name + "_cl.log")).write_text(so + se, encoding="utf-8")
         if rc != 0 or not tmp.exists():

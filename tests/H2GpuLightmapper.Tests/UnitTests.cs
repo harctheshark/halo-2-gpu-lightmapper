@@ -31,7 +31,257 @@ namespace H2GpuLightmapper.Tests
             yield return T("unit: map-query result parsing", MapQueryParse);
             yield return T("unit: review fixes: on-disk case, install-without-layer flags, the undo time rule, --probes-fallback", ReviewFixes);
             yield return T("unit: V6 --install-retries: parsing (ranges, needs an install) + the Retry answers (N yes, then no; a cancel ends the wait)", InstallRetries);
+            yield return T("unit: X2 Keep PC responsive: unticked argv byte-identical, ticked = + -Responsive last on every gpu_bake argv (36 combinations), --responsive, labels", X2Responsive);
+            yield return T("unit: W2 2004 Exact Vertex Lighting?: unticked argv byte-identical, ticked = + -ExactVertexLighting last on every gpu_bake argv (72 combinations, with and without -Responsive), --exact-vertex-lighting, labels", W2ExactVertex);
+            yield return T("unit: W2 run folder label (<= 20 chars), tagbak, and Undo / the Logs button keep working for OLD-style run folders (<ts>_<leaf>_<bsp>, tag_backup_before_writeback)", W2RunFolders);
+            yield return T("unit: X2 live VRAM sizing: a normal desktop (<= 3 GiB held) = today's argv on every card; a game on top shrinks the parts with a note; gpucheck live figures", X2LiveVram);
+            yield return T("unit: X2 TDR message: the three device-loss signatures -> the plain explanation (parser, log file, composition)", X2TdrMessage);
             yield return T("unit: U3 the direct writer's pre-flight refusal is recognised only before any phase (not a later failure, a cancel, an exit 0)", DirectWriterCannotRun);
+        }
+
+        // ------------------------------------------------------------------ X2: Keep PC responsive / live VRAM / TDR message
+
+        private static void X2Responsive()
+        {
+            var o = BakeOptions.Defaults(); o.ScenarioRel = @"scenarios\multi\cyclotron\cyclotron"; o.Bsp = "cyclotron";
+            Assert.Eq(false, o.Responsive, "default: unticked");
+            Assert.True(!o.Summary().Contains("responsive"), "unticked: the summary says nothing");
+            var six = GpuLimits.Compute(6L << 30, "t", 0);                 // -MaxCallsPerPart and -BufCapMB present
+            int combos = 0;
+            foreach (var lim in new GpuLimits[] { null, GpuLimits.Compute(25310527488L, "t", 0), six })
+                foreach (bool wb in new[] { true, false })
+                    foreach (bool sc in new[] { true, false })
+                        foreach (var q in new[] { Quality.Low, Quality.Super, Quality.Custom })
+                        {
+                            o.Quality = q; o.Photons = 20000000; o.Rays = 8;
+                            o.Responsive = false;
+                            var off = BakePlanner.GpuBakeArgs(o, 200, wb, sc, lim);
+                            Assert.True(!off.Contains("-Responsive"), "unticked: no -Responsive");
+                            o.Responsive = true;
+                            var on = BakePlanner.GpuBakeArgs(o, 200, wb, sc, lim);
+                            Assert.Seq(off.Concat(new[] { "-Responsive" }).ToList(), on, "ticked = the unticked argv + -Responsive LAST (wb " + wb + ", skip " + sc + ", " + q + ")");
+                            combos++;
+                        }
+            Assert.Eq(36, combos, "36 argv combinations compared");
+            // the unticked argv is the literal production one (byte-for-byte what 0.6.2 builds)
+            o.Responsive = false; o.Quality = Quality.Super;
+            Assert.Seq(new[] { "-Scenario", @"scenarios\multi\cyclotron\cyclotron", "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-WriteBack", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct" },
+                       BakePlanner.GpuBakeArgs(o, 200, true, false), "unticked production argv");
+            o.Responsive = true;
+            Assert.Contains(o.Summary(), "responsive on", "the summary (plan + log) says 'responsive on'");
+            // CLI
+            var a = P("--h2ek", @"C:\H2", "--scenario", "s", "--bsp", "b", "--responsive");
+            var co = CliMain.BakeOptionsFrom(a);
+            Assert.Eq(0, a.Errors.Count, "no errors: " + string.Join("; ", a.Errors));
+            Assert.Eq(true, co.Responsive, "--responsive");
+            Assert.Eq(false, CliMain.BakeOptionsFrom(P("--h2ek", @"C:\H2", "--scenario", "s", "--bsp", "b")).Responsive, "absent: off");
+            // the labels the window shows
+            Assert.Eq("Keep PC responsive - Slower Bakes!", BakeOptions.ResponsiveLabel, "label");
+            Assert.Eq("Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer.", BakeOptions.ResponsiveTip, "tooltip");
+            Assert.Eq("2004 Exact Vertex Lighting?", BakeOptions.ExactVertexLightingLabel, "placeholder label");
+            Assert.Eq("You likely don't need this, this is just to shut Harcs brain up", BakeOptions.ExactVertexLightingTip, "placeholder tooltip");
+        }
+
+        private static void W2ExactVertex()
+        {
+            var o = BakeOptions.Defaults(); o.ScenarioRel = @"scenarios\multi\cyclotron\cyclotron"; o.Bsp = "cyclotron";
+            Assert.Eq(false, o.ExactVertexLighting, "default: unticked");
+            Assert.True(!o.Summary().Contains("exact vertex"), "unticked: the summary says nothing");
+            var six = GpuLimits.Compute(6L << 30, "t", 0);
+            int combos = 0;
+            foreach (var lim in new GpuLimits[] { null, GpuLimits.Compute(25310527488L, "t", 0), six })
+                foreach (bool wb in new[] { true, false })
+                    foreach (bool sc in new[] { true, false })
+                        foreach (var q in new[] { Quality.Low, Quality.Super, Quality.Custom })
+                            foreach (bool resp in new[] { false, true })
+                            {
+                                o.Quality = q; o.Photons = 20000000; o.Rays = 8; o.Responsive = resp;
+                                o.ExactVertexLighting = false;
+                                var off = BakePlanner.GpuBakeArgs(o, 200, wb, sc, lim);
+                                Assert.True(!off.Contains("-ExactVertexLighting"), "unticked: no -ExactVertexLighting");
+                                o.ExactVertexLighting = true;
+                                var on = BakePlanner.GpuBakeArgs(o, 200, wb, sc, lim);
+                                Assert.Seq(off.Concat(new[] { "-ExactVertexLighting" }).ToList(), on, "ticked = the unticked argv + -ExactVertexLighting LAST (wb " + wb + ", skip " + sc + ", " + q + ", responsive " + resp + ")");
+                                combos++;
+                            }
+            Assert.Eq(72, combos, "72 argv combinations compared");
+            o.ExactVertexLighting = false; o.Responsive = false; o.Quality = Quality.Super;
+            Assert.Seq(new[] { "-Scenario", @"scenarios\multi\cyclotron\cyclotron", "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-WriteBack", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct" },
+                       BakePlanner.GpuBakeArgs(o, 200, true, false), "unticked production argv (byte-identical to 0.6.2)");
+            o.ExactVertexLighting = true;
+            Assert.Contains(o.Summary(), "exact vertex lighting on", "the summary says so");
+            var a = P("--h2ek", @"C:\H2", "--scenario", "s", "--bsp", "b", "--exact-vertex-lighting");
+            var co = CliMain.BakeOptionsFrom(a);
+            Assert.Eq(0, a.Errors.Count, "no errors: " + string.Join("; ", a.Errors));
+            Assert.Eq(true, co.ExactVertexLighting, "--exact-vertex-lighting");
+            Assert.Eq(false, co.Responsive, "independent of --responsive");
+            Assert.Eq(false, CliMain.BakeOptionsFrom(P("--h2ek", @"C:\H2", "--scenario", "s", "--bsp", "b")).ExactVertexLighting, "absent: off");
+            Assert.Eq("exact vertex lighting on (slower tag writer)", BakeOptions.ExactVertexLightingNote, "plan note text");
+            Assert.Eq("2004 Exact Vertex Lighting?", BakeOptions.ExactVertexLightingLabel, "label");
+            Assert.Eq("You likely don't need this, this is just to shut Harcs brain up", BakeOptions.ExactVertexLightingTip, "tooltip (no '(coming in a later build)')");
+        }
+
+        private static void W2RunFolders()
+        {
+            Assert.Eq("cyclotron_cyclotron", RunFolder.Label("cyclotron", "cyclotron"), "19 chars: whole");
+            Assert.Eq("triplicate_triplicat", RunFolder.Label("triplicate", "triplicate"), "cut to 20");
+            Assert.Eq(20, RunFolder.Label(new string('a', 40), "b").Length, "never more than 20");
+            Assert.Eq("a_b", RunFolder.Label("a", "b"), "short");
+            Assert.Eq("a_b_c", RunFolder.Label("a:b", "c"), "sanitized (the invalid ':')");
+            Assert.Eq(new string('x', 19), RunFolder.Label(new string('x', 19) + ".", "q"), "no trailing dot after the cut");
+            Assert.Eq("_", RunFolder.Label("", ""), "empty names give '_' (never an empty folder name)");
+            Assert.Eq("20261020_123456_cyclotron_cyclotron", RunFolder.TagFor(new DateTime(2026, 10, 20, 12, 34, 56), @"scenarios\multi\cyclotron\cyclotron", "cyclotron"), "TagFor");
+            Assert.Eq("tagbak", RunFolder.BackupDirName, "new backup subfolder");
+            Assert.Eq("tag_backup_before_writeback", RunFolder.LegacyBackupDirName, "old backup subfolder");
+            // NameMatches: both styles
+            Assert.True(RunFolder.NameMatches("20261020_123456_cyclotron_cyclotron", @"scenarios\multi\cyclotron\cyclotron", "cyclotron"), "new style");
+            Assert.True(RunFolder.NameMatches("20261015_101010_triplicate_triplicate", @"scenarios\multi\triplicate\triplicate", "triplicate"), "old style (whole leaf_bsp)");
+            Assert.True(RunFolder.NameMatches("20261020_123456_triplicate_triplicat", @"scenarios\multi\triplicate\triplicate", "triplicate"), "new style (cut)");
+            Assert.True(!RunFolder.NameMatches("20261020_123456_cyclotron_cyclotron", @"scenarios\multi\triplicate\triplicate", "triplicate"), "another map");
+            // Undo / history: old-style and new-style run folders side by side in one work folder (the test sandbox is cleaned by the harness)
+            const string Cyc = @"scenarios\multi\cyclotron\cyclotron";
+            string tmp = C.Sb.Dir("w2");                // short on purpose: MAX_PATH
+            {
+                string work = Path.Combine(tmp, "GPU Lightmap Work");
+                string oldRun = Path.Combine(RunFolder.RunsDir(work), "20261015_101010_cyclotron_cyclotron");
+                string newRun = Path.Combine(RunFolder.RunsDir(work), "20261020_101010_cyclotron_cyclotron");
+                Func<string, string, DateTime, string> mk = (run, sub, started) =>
+                {
+                    string bak = Path.Combine(run, sub);
+                    Directory.CreateDirectory(bak);
+                    File.WriteAllText(Path.Combine(bak, "_install_manifest.json"), "{\"made\": \"" + started.AddSeconds(2).ToString("yyyyMMdd_HHmmss") + "\"}");
+                    File.WriteAllText(Path.Combine(bak, "t.bitmap"), "x");
+                    var st = new RunStatus { RunDir = run, RunTag = Path.GetFileName(run), Scenario = Cyc, Bsp = "cyclotron", State = RunState.Done, InstallBackupDir = bak, StartedUtc = started.ToUniversalTime() };
+                    st.Save();
+                    return bak;
+                };
+                string oldBak = mk(oldRun, "tag_backup_before_writeback", new DateTime(2026, 10, 15, 10, 10, 10, DateTimeKind.Local));
+                var only = CliMain.LastInstall(work, Cyc, "cyclotron");
+                Assert.True(only != null && only.InstallBackupDir == oldBak, "an OLD-style run folder (0.6.2) still offers its install backup for Undo: " + (only == null ? "null" : only.InstallBackupDir));
+                string newBak = mk(newRun, "tagbak", new DateTime(2026, 10, 20, 10, 10, 10, DateTimeKind.Local));
+                var both = CliMain.LastInstall(work, Cyc, "cyclotron");
+                Assert.True(both != null && both.InstallBackupDir == newBak, "the newer run (tagbak) wins: " + (both == null ? "null" : both.InstallBackupDir));
+                foreach (var f in Directory.GetFiles(newBak)) File.Delete(f);
+                Directory.Delete(newBak);
+                var back = CliMain.LastInstall(work, Cyc, "cyclotron");
+                Assert.True(back != null && back.InstallBackupDir == oldBak, "with the new backup gone, the old-style one is the last install again");
+            }
+        }
+
+        private static void X2LiveVram()
+        {
+            const long D = 25310527488L;                 // the RTX 4090's dedicated_video_memory
+            const long GiB = 1L << 30;
+            var o = BakeOptions.Defaults(); o.ScenarioRel = @"scenarios\multi\cyclotron\cyclotron"; o.Bsp = "cyclotron";
+            var plain = GpuLimits.Compute(D, "t", 0);
+            // ---- 'normal' (other programs <= 3 GiB): exactly today's limits, notes and argv, on every card size
+            foreach (long other in new long[] { 0, 1 * GiB, 2 * GiB, 3 * GiB, 3 * GiB - 1 })
+            {
+                var g = GpuLimits.Compute(D, "t", 0, other);
+                Assert.Eq(plain.MaxCallsPerPart, g.MaxCallsPerPart, "4090, other use " + other + ": same -MaxCallsPerPart");
+                Assert.Eq(plain.BufCapMB, g.BufCapMB, "same -BufCapMB");
+                Assert.Seq(plain.Notes, g.Notes, "same notes (nothing about other programs)");
+                Assert.True(!g.EffectiveVramBytes.HasValue, "no effective-VRAM override");
+                foreach (bool wb in new[] { true, false })
+                    Assert.Seq(BakePlanner.GpuBakeArgs(o, 200, wb, false), BakePlanner.GpuBakeArgs(o, 200, wb, false, g), "argv unchanged (wb " + wb + ")");
+            }
+            foreach (long card in new long[] { 8000000000L, 12000000000L, 16000000000L, 6L << 30 })
+            {
+                var base1 = GpuLimits.Compute(card, "t", 0);
+                var idle = GpuLimits.Compute(card, "t", 0, 3 * GiB);
+                Assert.Eq(base1.MaxCallsPerPart, idle.MaxCallsPerPart, "card " + card + ": a normal desktop changes nothing");
+                Assert.Seq(base1.Notes, idle.Notes, "card " + card + ": same notes");
+            }
+            // this PC at the time of the build: ~3.2 GiB used system-wide, budget 24,505,221,120 -> still the production argv
+            long? now = GpuLimits.ComputeOtherUse(D, 24505221120L, 0, 3438923776L);
+            Assert.Eq((long?)3438923776L, now, "system counter beats the budget-implied 0.75 GiB");
+            Assert.Eq(0L, GpuLimits.Compute(D, "t", 0, now).MaxCallsPerPart, "4090 with a 3.2 GiB desktop: argv unchanged");
+            // ---- another program holds a lot: the parts shrink, with the plain note
+            var game = GpuLimits.Compute(D, "t", 0, 12 * GiB);
+            Assert.True(game.MaxCallsPerPart > 0 && game.MaxCallsPerPart < GpuLimits.PlannerCapRows, "4090 + 12 GiB held: -MaxCallsPerPart " + game.MaxCallsPerPart);
+            Assert.Eq((long?)(D - 9 * GiB), game.EffectiveVramBytes, "sized for the VRAM left after the 3 GiB a desktop is allowed");
+            Assert.True(game.Notes.Any(n => n.StartsWith("12,288 MiB of VRAM is in use by other programs; parts sized for 14,", StringComparison.Ordinal)), "note: " + string.Join(" | ", game.Notes));
+            var ag = BakePlanner.GpuBakeArgs(o, 200, false, false, game);
+            Assert.Seq(BakePlanner.GpuBakeArgs(o, 200, false, false), ag.Take(ag.IndexOf("-MaxCallsPerPart")).ToList(), "the production argv is the prefix");
+            Assert.Eq(game.MaxCallsPerPart.ToString(), ag[ag.IndexOf("-MaxCallsPerPart") + 1], "value");
+            Assert.Eq(0, game.BufCapMB, "D3D11's per-resource limit belongs to the adapter, not to what others hold");
+            // monotone: the more others hold, the smaller the parts; never below the 1 M floor; a nearly full card warns
+            long prev = long.MaxValue;
+            foreach (int g2 in new[] { 6, 9, 12, 16, 20 })
+            {
+                var x = GpuLimits.Compute(D, "t", 0, (long)g2 * GiB);
+                long m = x.MaxCallsPerPart > 0 ? x.MaxCallsPerPart : GpuLimits.PlannerCapRows;
+                Assert.True(m <= prev, "monotone at " + g2 + " GiB held");
+                prev = m;
+            }
+            var nearly = GpuLimits.Compute(D, "t", 0, 23 * GiB);
+            Assert.True(nearly.MaxCallsPerPart > 1000000L && nearly.MaxCallsPerPart < GpuLimits.TinyRows && nearly.Notes.Any(n => n.StartsWith("WARNING ")), "a card nearly full: tiny parts with a warning: " + nearly.MaxCallsPerPart);
+            var full = GpuLimits.Compute(D, "t", 0, 24 * GiB);
+            Assert.True(full.MaxCallsPerPart == 1000000L && full.Notes.Any(n => n.StartsWith("WARNING ")), "a card full: the 1 M floor with a warning");
+            // a 16 GB card with a game on top is cut further than the same card idle
+            Assert.True(GpuLimits.Compute(16000000000L, "t", 0, 9 * GiB).MaxCallsPerPart < GpuLimits.Compute(16000000000L, "t", 0).MaxCallsPerPart, "16 GB + game < 16 GB idle");
+            // unknown live figure = today
+            Assert.Seq(plain.Notes, GpuLimits.Compute(D, "t", 0, null).Notes, "not measured: unchanged");
+            // ---- ComputeOtherUse
+            Assert.Eq((long?)null, GpuLimits.ComputeOtherUse(null, null, null, null), "nothing known -> null");
+            Assert.Eq((long?)5000L, GpuLimits.ComputeOtherUse(null, null, null, 5000L), "system counter only");
+            Assert.Eq((long?)(2 * GiB), GpuLimits.ComputeOtherUse(24 * GiB, 22 * GiB, 0, null), "budget only: dedicated - budget");
+            Assert.Eq((long?)(2 * GiB), GpuLimits.ComputeOtherUse(24 * GiB, 22 * GiB + 100, 100, null), "the process's own use is not 'other'");
+            Assert.Eq((long?)(10 * GiB), GpuLimits.ComputeOtherUse(24 * GiB, 22 * GiB, 0, 10 * GiB), "the larger of the two");
+            Assert.Eq((long?)0L, GpuLimits.ComputeOtherUse(24 * GiB, 30 * GiB, 0, null), "a budget above the dedicated size: 0, never negative");
+            // ---- gpucheck JSON: the live figures of the default adapter
+            string js = "{\"adapters\":[{\"luid\":\"0:2\",\"software\":false,\"dedicated_video_memory\":" + D
+                        + ",\"video_memory\":{\"queried\":true,\"budget\":24505221120,\"current_usage\":4096,\"available_for_reservation\":12386828288,\"current_reservation\":0,\"system_dedicated_usage\":3412492288}}],"
+                        + "\"default_adapter\":{\"luid\":\"0:2\",\"name\":\"X\",\"feature_level\":\"12_1\"},\"verdict\":{\"ok\":true}}";
+            var gc = Core.Preflight.GpuCheck.Parse(js, 0);
+            Assert.Eq((long?)24505221120L, gc.LiveBudgetBytes, "budget");
+            Assert.Eq((long?)4096L, gc.LiveProcessUsageBytes, "process usage");
+            Assert.Eq((long?)3412492288L, gc.SystemDedicatedUsageBytes, "system dedicated usage");
+            var old = Core.Preflight.GpuCheck.Parse(js.Replace("\"video_memory\"", "\"video_memory_x\""), 0);
+            Assert.True(!old.LiveBudgetBytes.HasValue && !old.SystemDedicatedUsageBytes.HasValue && old.DedicatedVideoMemoryBytes == D, "an older gpucheck (no live figures): dedicated only");
+            // the REAL gpucheck.exe 1.1.0 output recorded on the dev PC (build\gpucheck\gpucheck_<host>.json): the parser reads its live figures
+            foreach (var real in System.IO.Directory.GetFiles(System.IO.Path.Combine(C.Project, @"build\gpucheck"), "gpucheck_*.json").Where(x => !x.Contains("_plain_")))
+            {
+                string txt = System.IO.File.ReadAllText(real);
+                if (!txt.Contains("\"video_memory\"")) continue;
+                var rg = Core.Preflight.GpuCheck.Parse(txt, 0);
+                Assert.True(rg.DedicatedVideoMemoryBytes > 0 && rg.LiveBudgetBytes > 0 && rg.LiveBudgetBytes <= rg.DedicatedVideoMemoryBytes, "real JSON: dedicated " + rg.DedicatedVideoMemoryBytes + ", budget " + rg.LiveBudgetBytes);
+                Assert.True(rg.SystemDedicatedUsageBytes.HasValue, "real JSON: the system-wide counter is there");
+                var other = GpuLimits.ComputeOtherUse(rg.DedicatedVideoMemoryBytes, rg.LiveBudgetBytes, rg.LiveProcessUsageBytes, rg.SystemDedicatedUsageBytes);
+                Assert.True(other.HasValue && other.Value >= 0 && other.Value < rg.DedicatedVideoMemoryBytes, "real JSON: other use " + other);
+            }
+            var failed = Core.Preflight.GpuCheck.Parse(js.Replace("\"queried\":true", "\"queried\":false").Replace("\"system_dedicated_usage\":3412492288", "\"system_dedicated_usage\":null"), 0);
+            Assert.True(!failed.LiveBudgetBytes.HasValue && !failed.SystemDedicatedUsageBytes.HasValue, "query failed / counter null: no figures");
+        }
+
+        private static void X2TdrMessage()
+        {
+            const string expect = "Windows reset the GPU because one GPU step ran too long (a TDR). Try \"Keep PC responsive - Slower Bakes!\", close other GPU programs, or report your GPU.";
+            Assert.Eq(expect, DeviceLoss.Explanation, "the exact sentence");
+            Assert.True(DeviceLoss.IsDeviceLossLine("DIRECT: *** GPU CAST DEVICE REMOVED (0x887A0006)"), "banner at the start");
+            Assert.True(DeviceLoss.IsDeviceLossLine("   DIRECT: *** GPU CAST DEVICE REMOVED"), "leading blanks");
+            Assert.True(DeviceLoss.IsDeviceLossLine("the GPU device was RESET by Windows (TDR)"), "TDR sentence anywhere");
+            Assert.True(DeviceLoss.IsDeviceLossLine("fullgpu: DXGI_ERROR_DEVICE_HUNG during Dispatch"), "DEVICE_HUNG anywhere");
+            Assert.True(!DeviceLoss.IsDeviceLossLine("x DIRECT: *** GPU CAST DEVICE REMOVED"), "the banner only counts at the start of the line");
+            Assert.True(!DeviceLoss.IsDeviceLossLine("DIRECT: *** GPU CAST started") && !DeviceLoss.IsDeviceLossLine("") && !DeviceLoss.IsDeviceLossLine(null) && !DeviceLoss.IsDeviceLossLine("device removed"), "ordinary lines");
+            Assert.Eq("plain", DeviceLoss.Compose("plain", false), "no device loss: the text is unchanged");
+            var c = DeviceLoss.Compose("the bake stopped (exit 1): x", true);
+            Assert.True(c.StartsWith(expect, StringComparison.Ordinal) && c.EndsWith("the bake stopped (exit 1): x", StringComparison.Ordinal), "explanation first, the technical reason kept: " + c);
+            // the parser collects them from either stream
+            var p = new ProgressParser();
+            p.Feed("[3] GPU BAKE", false);
+            Assert.True(!p.DeviceLost, "none yet");
+            p.Feed("DIRECT: *** GPU CAST DEVICE REMOVED (hung)", false);
+            p.Feed("pwsh: DEVICE_HUNG", true);
+            Assert.Eq(2, p.DeviceLossLines.Count, "both streams");
+            Assert.True(p.DeviceLost, "flag");
+            Assert.True(DeviceLoss.AnyDeviceLoss(new[] { "a", "b was RESET by Windows (TDR)" }) && !DeviceLoss.AnyDeviceLoss(new[] { "a", "b" }) && !DeviceLoss.AnyDeviceLoss(null), "AnyDeviceLoss");
+            // a log file (the AO driver's own log)
+            string f = System.IO.Path.Combine(C.Sb.Dir("x2_tdr"), "drv.log");
+            System.IO.File.WriteAllText(f, "tracing\nDIRECT: *** GPU CAST DEVICE REMOVED\nexit 3\n");
+            Assert.True(DeviceLoss.FileHasDeviceLoss(f), "log file with the banner");
+            System.IO.File.WriteAllText(f, "tracing\nexit 3\n");
+            Assert.True(!DeviceLoss.FileHasDeviceLoss(f) && !DeviceLoss.FileHasDeviceLoss(f + ".missing") && !DeviceLoss.FileHasDeviceLoss(null), "clean / missing / null");
         }
 
         private static void DirectWriterCannotRun()
@@ -199,7 +449,7 @@ namespace H2GpuLightmapper.Tests
         {
             var args = new[] { "--cli", "bake" }.Concat(a).ToArray();
             var x = CliArgs.Parse(args, 2, new HashSet<string> { "--h2ek", "--scenario", "--bsp", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback", "--worker", "--probe-worker" },
-                                  new HashSet<string> { "--ao", "--reuse-capture", "--no-install", "--yes", "--dev-no-fixes", "--reuse-unrecorded" });
+                                  new HashSet<string> { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--dev-no-fixes", "--reuse-unrecorded" });
             return x;
         }
 

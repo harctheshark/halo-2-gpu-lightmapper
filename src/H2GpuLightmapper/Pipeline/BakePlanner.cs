@@ -97,6 +97,12 @@ namespace H2GpuLightmapper.Pipeline
             // X1: sized for the adapter's VRAM. Both are 0 on a 24 GB card (the planner's own cap binds first), so that argv is unchanged.
             if (limits != null && limits.MaxCallsPerPart > 0) { a.Add("-MaxCallsPerPart"); a.Add(limits.MaxCallsPerPart.ToString(CultureInfo.InvariantCulture)); }
             if (limits != null && limits.BufCapMB > 0) { a.Add("-BufCapMB"); a.Add(limits.BufCapMB.ToString(CultureInfo.InvariantCulture)); }
+            // X2: "Keep PC responsive - Slower Bakes!": the engine's own switch (it sets GPULM_RESPONSIVE=1 for its fullgpu runs). Last, and only
+            // when ticked, so an unticked bake's argv is exactly what it was before this option.
+            if (o.Responsive) a.Add("-Responsive");
+            // W2 (0.6.3): "2004 Exact Vertex Lighting?": the engine's opt-in switch (lm_tagwriter --exact-vertex-lighting). Every gpu_bake the plan
+            // builds writes the direct-writer stage, so every one gets it; unticked = no byte of the argv changes.
+            if (o.ExactVertexLighting) a.Add("-ExactVertexLighting");
             return a;
         }
 
@@ -144,6 +150,12 @@ namespace H2GpuLightmapper.Pipeline
                 }
             if (!string.IsNullOrEmpty(pi.ProbeWarning)) p.Warnings.Add(pi.ProbeWarning);
             if (!o.Fixes) p.Warnings.Add("the Plücker and Scenery fixes are OFF (dev flag): this is not the validated configuration");
+            if (o.Responsive)
+                p.Notes.Add("responsive on (\"" + BakeOptions.ResponsiveLabel + "\"): every gpu_bake gets -Responsive; the GPU work is split into short pieces so the desktop stays smooth, the lightmap is identical, the bake takes longer"
+                            + (o.Ao || NeedsProbes(o, pi.ProbePoints) ? "; the AO trace and the light probe bake are run by driver scripts that cannot take the switch, so they get GPULM_RESPONSIVE=1 in their environment instead" : ""));
+            if (o.ExactVertexLighting)
+                p.Notes.Add(BakeOptions.ExactVertexLightingNote + " (\"" + BakeOptions.ExactVertexLightingLabel + "\"): every gpu_bake gets -ExactVertexLighting; the tag writer re-runs the CPU's per-vertex visibility gate (about 2 minutes longer on cyclotron); it changes only the vertex-lit records, the lightmap bitmaps are unaffected"
+                            + (o.Ao ? "; the AO layer's final stage is written by 'gpu_ao stage', which gets --exact-vertex-lighting too" : ""));
             string runDir = pi.RunDir;
             string work = rt.Work;
             string py = rt.PyExe;
@@ -222,11 +234,13 @@ namespace H2GpuLightmapper.Pipeline
                     var tr = p.Add(new PlanStep { Id = StepIds.AoTrace, UiStep = StepId.AO, Kind = PlanStepKind.Process, Title = "gpu_ao trace (dev_AO gpu_bake -AOOnly on the capture, quality " + o.AoTraceQuality + ")", FileName = py, Cwd = work });
                     tr.Args.Add(drv); tr.Args.Add("trace"); tr.Args.AddRange(common); tr.Args.Add("--quality"); tr.Args.Add(o.AoTraceQuality);
                     if (o.Fixes) { tr.Args.Add("--plucker-fix"); tr.Args.Add("--scenery-fix"); }
+                    if (o.Responsive) tr.EnvExtra["GPULM_RESPONSIVE"] = "1";    // X2: the gpu_ao driver runs gpu_bake -AOOnly itself and has no -Responsive argument
                     var ap = p.Add(new PlanStep { Id = StepIds.AoApply, UiStep = StepId.AO, Kind = PlanStepKind.Process, Title = "gpu_ao apply (strength " + Num(o.AoStrength) + ", exponent " + Num(o.AoExponent) + ")", FileName = py, Cwd = work });
                     ap.Args.Add(drv); ap.Args.Add("apply"); ap.Args.AddRange(common);
                     ap.Args.AddRange(new[] { "--tag", o.AoTag, "--strength", Num(o.AoStrength), "--exponent", Num(o.AoExponent), "--overwrite" });
                     var st = p.Add(new PlanStep { Id = StepIds.AoStage, UiStep = StepId.AO, Kind = PlanStepKind.Process, Title = "gpu_ao stage (lm_tagwriter + lmw_validate -> OUT\\ao\\" + o.AoTag + "\\tagw_stage)", FileName = py, Cwd = work });
                     st.Args.Add(drv); st.Args.Add("stage"); st.Args.AddRange(common); st.Args.AddRange(new[] { "--tag", o.AoTag, "--overwrite" });
+                    if (o.ExactVertexLighting) st.Args.Add("--exact-vertex-lighting");        // W2 (0.6.3): the AO layer final stage is written by gpu_ao stage (P6b), not by gpu_bake
                     rest = Path.Combine(outN, "ao", o.AoTag, "tagw_stage");
                     p.Notes.Add("ambient occlusion is an artistic layer, not CPU-faithful");
                 }
@@ -249,7 +263,7 @@ namespace H2GpuLightmapper.Pipeline
                     p.Marker = Path.Combine(outN, StartupRecovery.MarkerName);
                     // U3: the default path keeps EXACTLY [4b]'s install command: the baking engine's own lmw_install.py and the
                     // worker's OUT\tag_backup_before_writeback (lmw_install renames an older copy there .older_<ts>, never deletes)
-                    p.InstallBackupDir = shellInstallsLightmap ? Path.Combine(outN, "tag_backup_before_writeback") : Path.Combine(runDir, "tag_backup_before_writeback");
+                    p.InstallBackupDir = shellInstallsLightmap ? Path.Combine(outN, "tag_backup_before_writeback") : Path.Combine(runDir, RunFolder.BackupDirName);
                     p.LmwInstallPy = shellInstallsLightmap ? Path.Combine(engineDir, "v043-tagwriter", "lmw_install.py") : rt.LmwInstallPy;
                 }
             }
@@ -277,7 +291,7 @@ namespace H2GpuLightmapper.Pipeline
                     ck.Params.Add("live", Path.Combine(set.TagDir, set.LtmpName)).Add("report", Path.Combine(ps, "tagw_report.json")).Add("copy", live);
                     p.InstallStage = ps;
                     p.Marker = Path.Combine(p.OutProbe, StartupRecovery.MarkerName);
-                    p.InstallBackupDir = Path.Combine(runDir, "tag_backup_before_writeback");
+                    p.InstallBackupDir = Path.Combine(runDir, RunFolder.BackupDirName);
                     p.LmwInstallPy = rt.LmwInstallPy;
                 }
             }
@@ -342,6 +356,7 @@ namespace H2GpuLightmapper.Pipeline
             if (pi.ReuseProbe) s.Args.Add("--skip-capture");
             s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", outM, "--pwsh", rt.PwshExe });
             if (o.Fixes) { s.Args.Add("--plucker-fix"); s.Args.Add("--scenery-fix"); }
+            if (o.Responsive) s.EnvExtra["GPULM_RESPONSIVE"] = "1";             // X2: gpu_lightprobes.py runs gpu_bake itself and has no -Responsive argument
             s.Params.Add("adds", "GPULM_PROBES=RUN\\probes\\probes.bin and GPULM_SKY_HI=1 for its gpu_bake only (the lightmap capture never sees SKY_HI)");
         }
 

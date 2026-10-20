@@ -51,6 +51,10 @@ namespace H2GpuLightmapper.Pipeline
         public int BufCapMB;
         /// <summary>Call rows the VRAM holds in one part before the margin (information).</summary>
         public long RowsFit;
+        /// <summary>X2: video memory other programs held when the plan was made (null = not measured).</summary>
+        public long? OtherUseBytes;
+        /// <summary>X2: the VRAM the parts were sized for when other programs held more than a normal desktop (null = the dedicated figure, i.e. today).</summary>
+        public long? EffectiveVramBytes;
         public readonly List<string> Notes = new List<string>();
 
         /// <summary>True when gpu_bake gets an extra argument for this adapter.</summary>
@@ -71,8 +75,30 @@ namespace H2GpuLightmapper.Pipeline
             return (int)Math.Min(Math.Max(128.0, Math.Floor(mib / 4.0)), 2048.0);
         }
 
+        /// <summary>X2: how much video memory other programs may hold before the part sizing reacts: the 1 GiB the model already assumes for
+        /// the desktop plus 2 GiB of slack (a browser, a chat client and a video player are normal). Up to this much, the argv is exactly
+        /// today's; every byte beyond it comes off the VRAM the parts are sized for.</summary>
+        public const double NormalOtherUseBytes = DesktopReserveBytes + 2.0 * 1073741824.0;
+
+        /// <summary>X2: the live video memory held by programs other than the bake, in bytes (null = unknown: nothing changes). From
+        /// gpucheck: the system-wide GPU Adapter Memory "Dedicated Usage" counter, and what the OS budget (QueryVideoMemoryInfo, LOCAL)
+        /// implies (dedicated - budget + this process's own usage); the larger of the two.</summary>
+        public static long? ComputeOtherUse(long? dedicatedBytes, long? budgetBytes, long? processUsageBytes, long? systemDedicatedUsageBytes)
+        {
+            long? best = null;
+            if (systemDedicatedUsageBytes.HasValue && systemDedicatedUsageBytes.Value >= 0) best = systemDedicatedUsageBytes.Value;
+            if (dedicatedBytes.HasValue && dedicatedBytes.Value > 0 && budgetBytes.HasValue && budgetBytes.Value > 0)
+            {
+                long implied = Math.Max(0L, dedicatedBytes.Value - (budgetBytes.Value - Math.Max(0L, processUsageBytes ?? 0L)));
+                if (!best.HasValue || implied > best.Value) best = implied;
+            }
+            return best;
+        }
+
         /// <param name="photons">Custom only: the photon budget (an upper bound of the stored photons); 0 = the Low / Super assumption.</param>
-        public static GpuLimits Compute(long? vramBytes, string source, long photons)
+        /// <param name="otherUseBytes">X2: video memory other programs hold right now (see <see cref="ComputeOtherUse"/>); null = not measured.
+        /// Beyond <see cref="NormalOtherUseBytes"/> the parts are sized for the VRAM that is left; below it nothing changes.</param>
+        public static GpuLimits Compute(long? vramBytes, string source, long photons, long? otherUseBytes = null)
         {
             var g = new GpuLimits { VramBytes = vramBytes, Source = source };
             if (!vramBytes.HasValue || vramBytes.Value <= 0)
@@ -80,12 +106,30 @@ namespace H2GpuLightmapper.Pipeline
                 g.Notes.Add("the adapter's dedicated memory is unknown: parts are sized by the engine alone (the production behaviour)");
                 return g;
             }
-            long v = vramBytes.Value;
+            long dedicated = vramBytes.Value;
+            long v = dedicated;
             string mib = (v / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB";
             if (v < MinSizedVramBytes)
             {
                 g.Notes.Add("the adapter reports only " + mib + " of dedicated memory (an integrated GPU shares system RAM): parts are not sized from it");
                 return g;
+            }
+            // X2: another program holds more than a normal desktop does -> size the parts for what is left (the 24 GB / idle-desktop path
+            // never gets here: other use <= NormalOtherUseBytes leaves v == dedicated and every figure below is today's)
+            if (otherUseBytes.HasValue)
+            {
+                g.OtherUseBytes = otherUseBytes.Value;
+                double excess = otherUseBytes.Value - NormalOtherUseBytes;
+                if (excess > 0)
+                {
+                    v = Math.Max(0L, dedicated - (long)excess);
+                    g.EffectiveVramBytes = v;
+                    string other = (otherUseBytes.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB";
+                    string eff = (v / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB";
+                    g.Notes.Add(other + " of VRAM is in use by other programs; parts sized for " + eff + " (close them to get the full size back; a normal desktop's "
+                                + ((long)(NormalOtherUseBytes / 1048576.0)).ToString("N0", CultureInfo.InvariantCulture) + " MiB is already allowed for)");
+                    mib = eff;
+                }
             }
             // rows that fit: (VRAM - desktop - fixed base - stored photons) / bytes per call row, with the margin
             long stored = Math.Max(DefaultStoredPhotons, photons);
@@ -104,11 +148,11 @@ namespace H2GpuLightmapper.Pipeline
                     g.Notes.Add("WARNING this adapter has very little free memory for the main pass: parts of " + g.MaxCallsPerPart.ToString("N0", CultureInfo.InvariantCulture)
                                 + " rows may still be too small for the biggest lightmap charts, and the photon lattice pass (which -MaxCallsPerPart does not size) may not fit");
             }
-            int d3d = D3d11ResourceLimitMB(v);
+            int d3d = D3d11ResourceLimitMB(dedicated);   // X2: a property of the adapter, not of what other programs hold
             if (d3d < DefaultBufCapMB)
             {
                 g.BufCapMB = Math.Max(d3d, MinBufCapMB);
-                g.Notes.Add("D3D11's documented per-resource limit on " + mib + " is " + d3d + " MiB, below fullgpu's default " + DefaultBufCapMB + " MiB cap: -BufCapMB " + g.BufCapMB);
+                g.Notes.Add("D3D11's documented per-resource limit on " + (dedicated / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB is " + d3d + " MiB, below fullgpu's default " + DefaultBufCapMB + " MiB cap: -BufCapMB " + g.BufCapMB);
             }
             if (v < (14L << 30))
                 g.Notes.Add("the photon lattice pass (6-14 GiB on the big maps) is its own process and is not sized by the part knob: a map the lattice does not fit is not made to fit");

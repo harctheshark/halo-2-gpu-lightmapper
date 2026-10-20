@@ -150,6 +150,15 @@
                 <!-- 7. Advanced -->
                 <Expander x:Name="AdvancedExpander" Header="Advanced" IsExpanded="False">
                     <StackPanel>
+                        <!-- X2: Advanced settings (not remembered between launches, like every bake option) -->
+                        <GroupBox x:Name="AdvancedSettings" Header="Advanced settings" Margin="0,0,0,6">
+                            <StackPanel>
+                                <CheckBox x:Name="ResponsiveCheck" Content="Keep PC responsive - Slower Bakes!" Checked="Option_Changed" Unchecked="Option_Changed"
+                                          ToolTip="Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer."/>
+                                <CheckBox x:Name="ExactVertexCheck" Content="2004 Exact Vertex Lighting?" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
+                                          ToolTip="You likely don't need this, this is just to shut Harcs brain up"/>
+                            </StackPanel>
+                        </GroupBox>
                         <CheckBox x:Name="StageOnlyCheck" Content="Stage only (don't write tags)" Checked="Option_Changed" Unchecked="Option_Changed"/>
                         <DockPanel Margin="0,4,0,0">
                             <TextBlock DockPanel.Dock="Left" Style="{StaticResource FieldLabel}" Text="Work folder"/>

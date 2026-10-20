@@ -1,0 +1,79 @@
+# title: P8 promotion 2026-10-20 05:38 (0.6.3): the promoted engine's -Responsive / -ExactVertexLighting / log-pattern / lmw_gate.py changes merged into the AO engine (dev_AO5)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: cfe7a9eb0ee16e49babb9c40aba855d9
+# result-md5: 8bb4c88697c620af6c089783af41d479
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -217,6 +217,7 @@
+     [switch]$SunCullForceSkip,   # GPULM_SUN_CULL_FORCE_SKIP=1: the deferred sun pass runs UNCULLED (the F10 gate)
+     [switch]$NoNqFast,           # v372K2: phase 4 with the tool's own NeuQuant (GPULM_NQ_FAST off) -- pre-v372K2, ~4x slower P8 palettes
+     [switch]$NoCastCache,        # v372M: the main pass casts again instead of loading the pre-pass's cast_cache.bin
++    [switch]$ExactVertexLighting,   # v373E (2026-10-20, opt-in, exe "2004 Exact Vertex Lighting?"): the direct writer re-runs the CPU's 7-probe per-vertex gate (lmw_gate.py) so vertex-lit records drop the samples tool_fast's own write-back drops
+     [switch]$NoVtxAllGate,       # v372K3: phase 1 WITHOUT GPULM_VTXCAP_ALLGATE (the capture's per-vertex gate draws the RNG -> the write-back may ask positions it never saw)
+     [switch]$NoVtxCapSkip,       # v372K: phase 1 WITHOUT GPULM_VTXCAP_SKIP (the original compute_light_value runs after the record,
+                                  # so the write-back's per-vertex queries drift from the captured set -- pre-v372K behaviour)
+@@ -314,7 +315,13 @@
+     [ValidateRange(1,4096)][int]$AORays = 64,
+     [switch]$AOShadingNormal,    # hemisphere about the shading normal instead of the plane normal (A/B only)
+     [switch]$AORep,              # also write ao_rep.bin (the sample points, for gpu_ao.py check)
+-    [switch]$AOStrictWindow      # layer-0 window t > 1e-5 instead of the gather's NEAR0 t >= -1e-5 (A/B)
++    [switch]$AOStrictWindow,     # layer-0 window t > 1e-5 instead of the gather's NEAR0 t >= -1e-5 (A/B)
++    # v373D (2026-10-20, dev_C) RESPONSIVE MODE (opt-in, default OFF): sets GPULM_RESPONSIVE=1 for every fullgpu run of this bake (lattice pre-pass, main
++    # pass, part runs, light probes) -- every pacing target drops to ~40 ms (gather packets, r.e. lattice, sky chain, photon cast, surface pass, sun
++    # cull masks) and every growth step is capped at 1.25x, so no GPU submission blocks the desktop for long. Results are bit-identical; the bake is
++    # SLOWER. Without it nothing changes: the RTX-4090 fast path keeps its submission sizes. An inherited GPULM_RESPONSIVE=1 (the light-probe
++    # python tool starts this script with the caller's environment) is treated exactly like -Responsive.
++    [switch]$Responsive
+ )
+ $ErrorActionPreference = "Stop"
+ 
+@@ -339,6 +346,14 @@
+ Clear-Gpulm 'GPULM_VTXSCN','GPULM_VTX_STRICT','GPULM_ENUM_SCENERY','GPULM_SCNOBS_DIR'
+ # dev_AO: a leftover shell value of the AO switches must never reach a bake (the binary's AO mode is GPULM_AO alone)
+ Clear-Gpulm 'GPULM_AO','GPULM_AO_DIST','GPULM_AO_RAYS','GPULM_AO_NORMAL','GPULM_AO_REP','GPULM_AO_SLICE_RAYS','GPULM_AO_STRICT0'
++# >>> v373D RESPONSIVE MODE (-Responsive, or GPULM_RESPONSIVE=1 inherited): set ONCE here, so every fullgpu run below inherits it. NO Clear-Gpulm call
++# below names GPULM_RESPONSIVE, and the one that clears every GPULM_* for the skeleton run (phase 2b) snapshots and RESTORES it. Any other inherited
++# value is removed (Remove-Item, never SetEnvironmentVariable($null)).
++if ($Responsive -or $env:GPULM_RESPONSIVE -eq '1') {
++    $Responsive = [switch]$true; $env:GPULM_RESPONSIVE = '1'
++    Write-Host '*** RESPONSIVE MODE: shorter GPU submissions keep the desktop smooth; the bake is slower' -ForegroundColor Yellow
++} elseif (Test-Path Env:GPULM_RESPONSIVE) { Clear-Gpulm 'GPULM_RESPONSIVE' }
++# <<< v373D
+ 
+ # >>> H2LM P1 (standalone exe, 2026-10-14): H2LM_ROOT / H2LM_WORK / H2LM_CODE override the three roots. UNSET -- every production
+ # caller -- they are the production paths, unchanged ($WC = $W). The standalone sets all three: $ROOT = the user's H2EK, $W = its
+@@ -752,6 +767,8 @@
+     # $ROOT\tool_fast.exe); without --tool it fell back to lmw_tagio's hard-coded H2EKMine path. H2LM_ROOT unset: the same path.
+     $twArgs = @("$TW\lm_tagwriter.py", "--run-dir", $OUT, "--skeleton", "$OUT\skeleton", "--stage", $stage, "--bsp", $bspLive,
+                 "--scenario", $scnLive, "--threads", "$WriterThreads", "--lightmap-name", "$scenRel\$ltmpName", "--tool", $TOOL)
++    if ($ExactVertexLighting) { $twArgs += "--exact-vertex-lighting"
++        Write-Host "      v373E -ExactVertexLighting: the writer re-runs the CPU per-vertex visibility gate (slower writer; vertex-lit records closer to tool_fast)" -ForegroundColor Yellow }
+     & py @twArgs 2>&1 | ForEach-Object { Write-Host "      $_" }
+     $twx = $LASTEXITCODE
+     # 2026-10-08 (user): pages may grow to 4096 x 4096; past that the writer exits 6 and the bake STOPS -- never the tool fallback,
+@@ -770,6 +787,7 @@
+     $twMiss = @()
+     foreach ($f in "$TW\lm_tagwriter.py", "$TW\lmw_validate.py", "$TW\lmw_install.py", "$TW\lmw_skeleton.py", "$TW\lmw_grid.py",
+                    "$TW\lmw_scenery.py", "$TW\lmw_scen_defs.json",   # 2026-10-08 lit-scenery support (scenery_writer\SCENERY_WRITER.md)
++                   "$TW\lmw_gate.py",                                # v373E exact vertex lighting (imported only with --exact-vertex-lighting)
+                    "$TW\bin\p8group.exe", $SKDLL, $INJ) { if (-not (Test-Path $f)) { $twMiss += $f } }
+     if (-not $twMiss.Count -and -not (Select-String -Path $SKDLL -SimpleMatch -Pattern "[GPULM SKEL] SKELFILL" -Quiet)) {
+         $twMiss += "$SKDLL is not the SKELETON-mode build" }
+@@ -1691,7 +1709,7 @@
+         if (-not $NoReWin) { $env:GPULM_RE_WIN = "1" }     # v368: the r.e. kernel runs HERE
+         # -CaseSensitive: "OVERFLOWED" only (the benign "(0 overflowed)" census line must not echo)
+         & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake_lattice.log" |
+-            Select-String -CaseSensitive -Pattern "DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
++            Select-String -CaseSensitive -Pattern "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
+         $lx = $LASTEXITCODE
+     } finally {
+         Clear-Gpulm 'GPULM_LATTICE_ONLY','GPULM_CC_EXIT_AFTER_RE','GPULM_RE_WIN','GPULM_CAST_CACHE_OUT','GPULM_PART_RANGE'
+@@ -1750,7 +1768,7 @@
+ if ((-not $NoCastCache) -and (-not $UseLattice) -and (Test-Path "$OUT\cast_cache.bin")) { $env:GPULM_CAST_CACHE_IN = "$OUT\cast_cache.bin" }
+ elseif (-not $NoCastCache -and -not $UseLattice) { Write-Host "      *** v372M: the pre-pass wrote no cast_cache.bin -- the main pass casts again" -ForegroundColor Yellow }
+ if ($RescueSalt -gt 0) { $env:GPULM_WALK_RDONE = "$RescueSalt"; Write-Host "      -RescueSalt $($RescueSalt) (default since 2026-10-08, validated on high_10 / mainmenu / Needle): the gate-walk rescue's RNG salt is the constant $($RescueSalt+1) (single and part bakes alike), not the whole-run walk depth + 1 -- NOT the default's draw for the rescued texels" }
+-$mainPat = "DEVICE REMOVED|FATAL|REFUSING|GATHER: \*\*\*|SUNX: \*\*\*|SUNX: status|SKYX: \*\*\*|SKYX: all|OVERFLOWED|COMPOSE: wrote atlas_out|SEAM:|SKY: sky_gate|SKY: \*\*\*|VERTEX: \*\*\*|SUNCULL: APPLIED|SUNCULL: \*\*\*|SUNCULL: SUN|SUNCULL: BOX|SUNCULL: v372|SUNCULL: sum|SURFCULL: v372H|CULLR:|SURFCULL:|SURFACE pass|GATHER2:|SURFQ:|GATEWALK:|NEAR0:|SUNWALK|SCENERY:|COMPOSE: wrote scenery_out|PLK64: (ON|off|scenery)|BUFCAP: (v372 cap|FATAL|texelgen used|v372 consolidated|\d+ calls after)|GPU CAST v372|v372 analytic census|v372 G6 ON|ANACULL: (v372|\*\*\*)"
++$mainPat = "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|GATHER: \*\*\*|SUNX: \*\*\*|SUNX: status|SKYX: \*\*\*|SKYX: all|OVERFLOWED|COMPOSE: wrote atlas_out|SEAM:|SKY: sky_gate|SKY: \*\*\*|VERTEX: \*\*\*|SUNCULL: APPLIED|SUNCULL: \*\*\*|SUNCULL: SUN|SUNCULL: BOX|SUNCULL: v372|SUNCULL: sum|SURFCULL: v372H|CULLR:|SURFCULL:|SURFACE pass|GATHER2:|SURFQ:|GATEWALK:|NEAR0:|SUNWALK|SCENERY:|COMPOSE: wrote scenery_out|PLK64: (ON|off|scenery)|BUFCAP: (v372 cap|FATAL|texelgen used|v372 consolidated|\d+ calls after)|GPU CAST v372|v372 analytic census|v372 G6 ON|ANACULL: (v372|\*\*\*)"
+ try {
+   if ($nParts -le 1) {
+     & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake.log" |
