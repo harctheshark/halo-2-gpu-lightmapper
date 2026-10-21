@@ -117,9 +117,11 @@ one PC. Another GPU will be slower or faster; a card much slower than an RTX 409
 
 ## Download and first start
 
-1. Download `H2 GPU Lightmapper.exe` and `H2 GPU Lightmapper.exe.config` from the **Releases** page of this repository and put
-   them in the same folder. Check the download with
-   `certutil -hashfile "H2 GPU Lightmapper.exe" SHA256` and compare it with the `SHA256SUMS.txt` of the release.
+1. Download `H2 GPU Lightmapper.exe` from the **Releases** page of this repository. **That one file is all you need**: it
+   carries the engine, PowerShell, Python and the licence texts inside itself. The other release files are optional
+   (`.exe.config` only names .NET Framework 4.8, which Windows 10 1903+ and Windows 11 already have; `SHA256SUMS.txt`,
+   `NOTICES.txt` and `build_record.json` are for checking and reference). Check the download with
+   `certutil -hashfile "H2 GPU Lightmapper.exe" SHA256` and compare it with the SHA-256 in the release notes.
 2. **SmartScreen.** The exe is **not code-signed**, so Windows SmartScreen will probably show "Windows protected your PC".
    Click **More info**, then **Run anyway**. Do this only for a file whose SHA-256 matches the one published with the release.
    If Smart App Control is on, Windows may block the exe outright (not tested).
