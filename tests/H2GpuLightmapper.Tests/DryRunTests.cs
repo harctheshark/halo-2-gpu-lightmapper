@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using H2GpuLightmapper.Core.Preflight;
 using H2GpuLightmapper.Core.Util;
 using static H2GpuLightmapper.Tests.Program;
 
@@ -32,7 +33,10 @@ namespace H2GpuLightmapper.Tests
             yield return T("dry: X1 VRAM-aware parts: 24 GB leaves every argv unchanged; 16 GB adds -MaxCallsPerPart; 6 GB adds -BufCapMB too", VramParts);
             yield return T("dry: X2 Keep PC responsive: unticked plans carry no 'Responsive' at all; ticked = + -Responsive last on gpu_bake (incl. the fallback argv), GPULM_RESPONSIVE=1 on the AO trace / probe driver", ResponsivePlan);
             yield return T("dry: W2 2004 Exact Vertex Lighting?: unticked plans carry no -ExactVertexLighting; ticked = + it on every gpu_bake argv (after -Responsive), the note, no other step changes", ExactVertexPlan);
-            yield return T("dry: W2 run folder = <ts>_<label <= 20 chars> and the run's install backup is 'tagbak' (the worker's [4b] backup keeps its name)", RunFolderPlan);
+            yield return T("dry: Scenery Multi Permutation Fix: unticked plans carry no -SceneryOwnPermutationOnly; ticked = + it last on every gpu_bake argv (after the other two), the note, warnings for AO / probes, no other step changes", SceneryPermPlan);
+            yield return T("dry: Scenery Multi Permutation Fix is engine-gated: a payload whose gpu_bake.ps1 lacks the parameter refuses the flag (exit 2, 'Needs engine 0.6.4 or newer.'), never plans it; Custom uses engine_custom's own answer", SceneryPermGate);
+            yield return T("dry: DF64 Compatibility mode: every plan states the precision (JSON + text); --assume-no-fp64 plans Compatibility mode on an engine with it and refuses on one without; --force-compat = GPULM_COMPAT=1 on exactly the GPU steps, argv unchanged, refused (dry too) on an engine without the mode", Df64Plan);
+            yield return T("dry: W2 run folder =<ts>_<label <= 20 chars> and the run's install backup is 'tagbak' (the worker's [4b] backup keeps its name)", RunFolderPlan);
             yield return T("dry: X2 live VRAM: a 4090 with <= 3 GiB held by others = today's argv; a game on top shrinks -MaxCallsPerPart with a plain note", LiveVramPlan);
             yield return T("dry: X1 light-probe preflight refuses a BSP past the GPU probe pass's limit (282+) before anything runs", ProbePreflight);
             yield return T("dry: X1 H2EK at a drive root (a SUBST drive): refused without features.driveRoot, planned with it, no drive-relative or doubled paths", DriveRoot);
@@ -151,6 +155,221 @@ namespace H2GpuLightmapper.Tests
         }
 
         private static JObj offFullEvl(TestRoot r) { return Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao", "--responsive"); }
+
+        // ------------------------------------------------------------------ Scenery Multi Permutation Fix (Experimental Improvement)
+
+        private static void SceneryPermPlan()
+        {
+            const string sw = "-SceneryOwnPermutationOnly";
+            var r = C.NewRoot();
+            foreach (var extra in new[] { new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" },
+                                          new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install" },
+                                          new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "low", "--ao" },
+                                          new[] { "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao" } })
+            {
+                var off = Plan(r, extra); var on = Plan(r, extra.Concat(new[] { "--scenery-permutation-fix" }).ToArray());
+                Assert.Eq(false, off.Obj("options").Bool("sceneryPermutationFix"), "unticked: options.sceneryPermutationFix false");
+                Assert.Eq(true, on.Obj("options").Bool("sceneryPermutationFix"), "ticked: options.sceneryPermutationFix true");
+                Assert.Seq(Ids(off), Ids(on), "same steps");
+                Assert.True(!Json.Write(off, false).Contains("SceneryOwnPermutationOnly"), "unticked plan: no SceneryOwnPermutationOnly anywhere (argv, params, env, notes)");
+                Assert.True(!off.Arr("notes").Cast<string>().Any(n => n.Contains("permutation fix")), "unticked: no note");
+                Assert.True(on.Arr("notes").Cast<string>().Any(n => n.StartsWith("scenery multi permutation fix on (experimental; differs from the 2004 tool on purpose)", StringComparison.Ordinal)), "ticked: the plan says 'scenery multi permutation fix on'");
+                Assert.Contains(on.Str("engine"), "gpu_bake.ps1", "engine named");
+                bool layered = extra.Contains("--ao") || extra.Contains("--probe-points");
+                Assert.Eq(layered, on.Arr("warnings").Cast<string>().Any(w => w.Contains("Scenery Multi Permutation Fix") && w.Contains("untested")), "the AO / probe layers get a warning, a plain lightmap bake does not");
+                int gb = 0;
+                foreach (var st in Steps(off))
+                {
+                    var so = Steps(on).First(x => x.Str("id") == st.Str("id"));
+                    if (st.Arr("args") == null) continue;
+                    var ao = Args(st); var an = Args(so);
+                    if (st.Str("id") == "gpu-bake")
+                    {
+                        gb++;
+                        Assert.Seq(ao.Concat(new[] { sw }).ToList(), an, "gpu-bake: unticked argv + " + sw + " last");
+                        var fo = st.Obj("params").Arr("fallbackArgs"); var fn = so.Obj("params").Arr("fallbackArgs");
+                        if (fo != null) Assert.Seq(fo.Cast<string>().Concat(new[] { sw }).ToList(), fn.Cast<string>().ToList(), "the tool write-back fallback argv gets it too");
+                    }
+                    else Assert.Seq(ao.Select(NoStamp).ToList(), an.Select(NoStamp).ToList(), st.Str("id") + ": argv unchanged (the AO trace / stage and the probe bake never get the switch)");
+                    Assert.True(st.Obj("envExtra") == null || so.Obj("envExtra").Count == st.Obj("envExtra").Count, st.Str("id") + ": env unchanged");
+                }
+                Assert.Eq(1, gb, "one gpu_bake step");
+            }
+            // after the other two Advanced options, behind the VRAM sizing
+            var all = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--assume-vram-mb", "6144", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix");
+            var aa = Args(Step(all, "gpu-bake"));
+            Assert.Seq(new[] { "-BufCapMB", "1536", "-Responsive", "-ExactVertexLighting", sw }, aa.Skip(aa.Count - 5).ToList(), "VRAM sizing, -Responsive, -ExactVertexLighting, then the new switch");
+            // Lightprobes only: no lightmap bake, so nothing to pass it to -- said plainly
+            var pr = Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--mode", "probes", "--scenery-permutation-fix");
+            Assert.True(!Json.Write(pr.Arr("steps"), false).Contains(sw), "Lightprobes only: no step carries the switch");
+            Assert.True(pr.Arr("warnings").Cast<string>().Any(w => w.Contains("no effect in Lightprobes mode")), "and the plan warns");
+            // the text form (what --dry-run prints without --json) and the bake log header list the option
+            var l = C.Base("bake"); l.AddRange(new[] { "--h2ek", r.Root, "--dry-run", "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--scenery-permutation-fix" });
+            var tx = C.Run(l);
+            Assert.Eq(0, tx.Exit, "text dry run: " + tx);
+            Assert.Contains(tx.Out, "scenery multi permutation fix on", "the text plan's options line");
+            Assert.Contains(tx.Out, sw, "and the gpu_bake argv");
+        }
+
+        private static void SceneryPermGate()
+        {
+            var r = C.NewRoot();
+            var cyc = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" };
+            string oldPayload = C.BuildPayload(C.Sb.Dir("payload_gate_old"), sceneryEngine: false);
+            Func<string, string[], CliResult> run = (payload, extra) =>
+            {
+                var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = payload;
+                l.AddRange(new[] { "--h2ek", r.Root, "--dry-run", "--json" }); l.AddRange(extra);
+                return C.Run(l, 120000);
+            };
+            // an older engine: the flag is refused plainly, in a dry run too -- nothing is planned, so no argv carries the unknown parameter
+            var bad = run(oldPayload, cyc.Concat(new[] { "--scenery-permutation-fix" }).ToArray());
+            Assert.Eq(2, bad.Exit, "refused: " + bad);
+            string reason = bad.Json().Str("refused");
+            Assert.Contains(reason, "Scenery Multi Permutation Fix (Experimental Improvement) is not available", "plain reason");
+            Assert.Contains(reason, "-SceneryOwnPermutationOnly", "names the missing parameter");
+            Assert.Contains(reason, "Needs engine 0.6.4 or newer.", "and the requirement");
+            Assert.True(!bad.Out.Contains("\"steps\""), "no plan was produced");
+            // the text form refuses the same way, never a plan
+            var l2 = C.Base("bake"); l2[l2.IndexOf("--payload-dir") + 1] = oldPayload;
+            l2.AddRange(new[] { "--h2ek", r.Root, "--dry-run" }); l2.AddRange(cyc); l2.Add("--scenery-permutation-fix");
+            var tx = C.Run(l2);
+            Assert.Eq(2, tx.Exit, "text refusal: " + tx);
+            Assert.Contains(tx.Out + tx.Err, "Needs engine 0.6.4 or newer.", "plain message in the text form");
+            // the same old payload without the flag plans exactly as before (the unticked path is untouched)
+            var fine = run(oldPayload, cyc);
+            Assert.Eq(0, fine.Exit, "old engine, option off: plans: " + fine);
+            Assert.True(!fine.Out.Contains("SceneryOwnPermutationOnly"), "and carries nothing of it");
+            // a payload whose engine declares it plans it
+            var ok = run(C.PayloadDir, cyc.Concat(new[] { "--scenery-permutation-fix" }).ToArray());
+            Assert.Eq(0, ok.Exit, "new engine: " + ok);
+            Assert.True(Args(Step(ok.Json(), "gpu-bake")).Contains("-SceneryOwnPermutationOnly"), "planned");
+            // Custom runs engine_custom: its own answer decides (engine_v373 declaring it is not enough)
+            string mixed = C.BuildPayload(C.Sb.Dir("payload_gate_mixed"), customEngine: true, customSceneryEngine: false);
+            var cust = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "custom", "--photons", "20000000", "--rays", "8" };
+            var cbad = run(mixed, cust.Concat(new[] { "--scenery-permutation-fix" }).ToArray());
+            Assert.Eq(2, cbad.Exit, "Custom on an engine_custom without the parameter: refused: " + cbad);
+            Assert.Contains(cbad.Json().Str("refused"), "engine_custom/gpu_bake.ps1", "names engine_custom");
+            Assert.Eq(0, run(mixed, cyc.Concat(new[] { "--scenery-permutation-fix" }).ToArray()).Exit, "Super on the same payload: engine_v373 declares it: planned");
+            Assert.Eq(0, run(C.BuildPayload(C.Sb.Dir("payload_gate_cust_ok"), customEngine: true), cust.Concat(new[] { "--scenery-permutation-fix" }).ToArray()).Exit, "Custom with a declaring engine_custom: planned");
+        }
+
+        // ------------------------------------------------------------------ Compatibility mode (DF64), engine 0.6.4
+
+        private static CliResult DfDry(string payload, TestRoot r, params string[] extra)
+        {
+            var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = payload;
+            l.AddRange(new[] { "--h2ek", r.Root, "--dry-run", "--json" }); l.AddRange(extra);
+            return C.Run(l, 120000);
+        }
+
+        private static string EnvOf(JObj step, string name) { var e = step.Obj("envExtra"); return e == null ? null : e.Str(name); }
+
+        private static void Df64Plan()
+        {
+            const string Var = "GPULM_COMPAT";
+            var r = C.NewRoot();
+            string oldP = C.PayloadDir;                                                         // the default test payload = the 0.6.3 engine: no Compatibility mode
+            string newP = C.BuildPayload(C.Sb.Dir("payload_df64_new"), compatEngine: true);     // engine 0.6.4: gpu_bake.ps1 validates GPULM_COMPAT
+            var cyc = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" };
+            Func<string[], string[], string[]> cat = (a, b) => a.Concat(b).ToArray();
+
+            // ---- every plan states the precision. Engine with the mode, GPU unknown at planning time: automatic. Engine without: FP64 required.
+            var auto = DfDry(newP, r, cyc); Assert.Eq(0, auto.Exit, "plan: " + auto);
+            var pa = auto.Json();
+            Assert.Eq("automatic", pa.Obj("precision").Str("mode"), "new engine: automatic");
+            Assert.Eq(true, pa.Obj("precision").Bool("engineHasCompatMode"), "engine has the mode");
+            Assert.Eq(GpuCheck.PrecisionAutomatic, pa.Obj("precision").Str("text"), "text");
+            Assert.Eq(false, pa.Obj("options").Bool("forceCompat"), "not forced");
+            Assert.True(!Json.Write(pa, false).Contains(Var), "an unforced plan never mentions " + Var + " (nothing is passed; the engine chooses by the GPU)");
+            Assert.True(Steps(pa).All(s => s.Obj("envExtra") == null || s.Obj("envExtra").Count == 0), "no step gets any env");
+            var po = DfDry(oldP, r, cyc).Json();
+            Assert.Eq("full-fp64-required", po.Obj("precision").Str("mode"), "old engine");
+            Assert.Eq(false, po.Obj("precision").Bool("engineHasCompatMode"), "old engine has no mode");
+            Assert.Eq(GpuCheck.PrecisionNeedsFp64, po.Obj("precision").Str("text"), "old engine text");
+            // the text form (what --dry-run prints) carries the same line, in the header block
+            var lt = C.Base("bake"); lt[lt.IndexOf("--payload-dir") + 1] = newP; lt.AddRange(new[] { "--h2ek", r.Root, "--dry-run" }); lt.AddRange(cyc);
+            var tx = C.Run(lt); Assert.Eq(0, tx.Exit, "text: " + tx);
+            Assert.Contains(tx.Out, "  precision " + GpuCheck.PrecisionAutomatic, "the text plan's precision line");
+
+            // ---- --assume-no-fp64 (dry run only): Compatibility mode on an engine with it; no argv / env / step change
+            var nf = DfDry(newP, r, cat(cyc, new[] { "--assume-no-fp64" })); Assert.Eq(0, nf.Exit, "assume-no-fp64 on the new engine: " + nf);
+            var pn = nf.Json();
+            Assert.Eq("compat-df64", pn.Obj("precision").Str("mode"), "mode");
+            Assert.Eq(GpuCheck.PrecisionCompat, pn.Obj("precision").Str("text"), "the user-facing sentence");
+            Assert.True(pn.Arr("notes").Cast<string>().Any(n => n.StartsWith("compatibility mode (DF64): this GPU has no FP64", StringComparison.Ordinal)), "a plan note says it");
+            Assert.Seq(Ids(pa), Ids(pn), "same steps");
+            foreach (var s in Steps(pn)) if (s.Arr("args") != null) Assert.Seq(Args(Step(pa, s.Str("id"))).Select(NoStamp).ToList(), Args(s).Select(NoStamp).ToList(), s.Str("id") + ": argv identical (the engine picks the kernels itself)");
+            Assert.True(!Json.Write(pn, false).Contains(Var), "nothing passed");
+            var nfOld = DfDry(oldP, r, cat(cyc, new[] { "--assume-no-fp64" }));
+            Assert.Eq(2, nfOld.Exit, "an engine without the mode refuses a GPU without FP64, as 0.6.3 did: " + nfOld);
+            Assert.Contains(nfOld.Json().Str("refused"), GpuCheck.NoFp64Plain, "with the plain sentence");
+            Assert.True(!nfOld.Out.Contains("\"steps\""), "no plan");
+            var bad = C.Base("bake"); bad.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron", "--assume-no-fp64", "--dev-skip-preflight", "--dev-skip-gpucheck" });
+            var badR = C.Run(bad); Assert.Eq(2, badR.Exit, "a real run asks gpucheck: " + badR);
+            Assert.Contains(badR.Err + badR.Out, "--assume-no-fp64 is only for --dry-run", "dry-run only");
+
+            // ---- --force-compat: GPULM_COMPAT=1 on exactly the steps that run the GPU engine, nothing else changes
+            foreach (var extra in new[] { cyc, cat(cyc, new[] { "--no-install" }), cat(cyc, new[] { "--ao" }), new[] { "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--ao" },
+                                          new[] { "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--mode", "probes" } })
+            {
+                var off = DfDry(newP, r, extra).Json();
+                var onR = DfDry(newP, r, cat(extra, new[] { "--force-compat" })); Assert.Eq(0, onR.Exit, "forced plan: " + onR);
+                var on = onR.Json();
+                Assert.Eq(true, on.Obj("options").Bool("forceCompat"), "options.forceCompat");
+                Assert.Eq("compat-df64-forced", on.Obj("precision").Str("mode"), "mode");
+                Assert.Eq(GpuCheck.PrecisionCompatForced, on.Obj("precision").Str("text"), "forced text");
+                Assert.True(on.Arr("notes").Cast<string>().Any(n => n.StartsWith("Compatibility mode (DF64) FORCED for testing (--force-compat: GPULM_COMPAT=1", StringComparison.Ordinal)), "plan note");
+                Assert.Seq(Ids(off), Ids(on), "same steps");
+                int gpuSteps = 0;
+                foreach (var st in Steps(on))
+                {
+                    string id = st.Str("id");
+                    bool gpu = id == "gpu-bake" || id == "ao-trace" || id == "probe-bake";
+                    Assert.Eq(gpu ? "1" : null, EnvOf(st, Var), id + ": " + Var + (gpu ? "=1" : " absent"));
+                    if (gpu) gpuSteps++;
+                    var so = Step(off, id);
+                    Assert.True(EnvOf(so, Var) == null, id + ": the unforced plan has none");
+                    if (st.Arr("args") != null) Assert.Seq(Args(so).Select(NoStamp).ToList(), Args(st).Select(NoStamp).ToList(), id + ": argv unchanged");
+                    if (id == "stage-or-tool-fallback") Assert.Eq(Var + "=1", st.Obj("params").Str("fallbackEnv"), "the tool write-back fallback (a gpu_bake re-run) is told");
+                }
+                Assert.True(gpuSteps >= 1, "at least one GPU step carries it");
+                // only the intended variable was added to any step's env
+                Assert.True(Steps(on).All(s => s.Obj("envExtra") == null || s.Obj("envExtra").Keys.All(k => k == Var || (off != null && Step(off, s.Str("id")).Obj("envExtra") != null && Step(off, s.Str("id")).Obj("envExtra").Keys.Contains(k)))), "no other env added");
+            }
+            var l2 = C.Base("bake"); l2[l2.IndexOf("--payload-dir") + 1] = newP; l2.AddRange(new[] { "--h2ek", r.Root, "--dry-run" }); l2.AddRange(cat(cyc, new[] { "--force-compat" }));
+            var tx2 = C.Run(l2); Assert.Eq(0, tx2.Exit, "text forced: " + tx2);
+            Assert.Contains(tx2.Out, "    env+  GPULM_COMPAT=1", "the step's env line");
+            Assert.Contains(tx2.Out, "compatibility mode (DF64) FORCED", "and the options line");
+            Assert.Contains(tx2.Out, "  precision " + GpuCheck.PrecisionCompatForced, "and the precision line");
+
+            // ---- an engine without the mode: --force-compat is refused (dry too), the variable is never passed, nothing is planned
+            var fo = DfDry(oldP, r, cat(cyc, new[] { "--force-compat" }));
+            Assert.Eq(2, fo.Exit, "old engine: refused: " + fo);
+            string why = fo.Json().Str("refused");
+            Assert.Contains(why, "--force-compat is not available", "plain reason");
+            Assert.Contains(why, "engine_v373/gpu_bake.ps1", "names the engine script");
+            Assert.Contains(why, "Compatibility mode needs engine 0.6.4 or newer.", "and the requirement");
+            Assert.True(!fo.Out.Contains("\"steps\"") && !fo.Out.Contains("env+"), "no plan, no env");
+            var lf = C.Base("bake"); lf.AddRange(new[] { "--h2ek", r.Root, "--dry-run" }); lf.AddRange(cat(cyc, new[] { "--force-compat" }));
+            var tf = C.Run(lf); Assert.Eq(2, tf.Exit, "text refusal: " + tf);
+            Assert.Contains(tf.Out + tf.Err, "Compatibility mode needs engine 0.6.4 or newer.", "plain message in the text form");
+
+            // ---- the engines a bake runs ALL need the mode: Custom runs engine_custom, AO adds the AO engine copy
+            string mixedCustom = C.BuildPayload(C.Sb.Dir("payload_df64_cust"), customEngine: true, compatEngine: true, customCompatEngine: false);
+            var cust = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "custom", "--photons", "20000000", "--rays", "8" };
+            var cf = DfDry(mixedCustom, r, cat(cust, new[] { "--force-compat" }));
+            Assert.Eq(2, cf.Exit, "Custom on an engine_custom without the mode: refused: " + cf);
+            Assert.Contains(cf.Json().Str("refused"), "engine_custom/gpu_bake.ps1", "names engine_custom");
+            Assert.Eq(0, DfDry(mixedCustom, r, cat(cyc, new[] { "--force-compat" })).Exit, "Super on the same payload (engine_v373 has it): planned");
+            Assert.Eq(2, DfDry(mixedCustom, r, cat(cust, new[] { "--assume-no-fp64" })).Exit, "and a GPU without FP64 under Custom is refused plainly");
+            string mixedAo = C.BuildPayload(C.Sb.Dir("payload_df64_ao"), compatEngine: true, aoCompatEngine: false);
+            var af = DfDry(mixedAo, r, cat(cyc, new[] { "--ao", "--force-compat" }));
+            Assert.Eq(2, af.Exit, "AO with an AO engine copy without the mode: refused: " + af);
+            Assert.Contains(af.Json().Str("refused"), "dev_AO/gpu_bake.ps1", "names the AO engine");
+            Assert.Eq(0, DfDry(mixedAo, r, cat(cyc, new[] { "--force-compat" })).Exit, "the same payload without AO: planned");
+            Assert.Eq("full-fp64-required", DfDry(mixedAo, r, cat(cyc, new[] { "--ao" })).Json().Obj("precision").Str("mode"), "with AO the plan says the AO engine needs FP64");
+        }
 
         private static void RunFolderPlan()
         {

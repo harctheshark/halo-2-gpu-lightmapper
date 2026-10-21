@@ -24,14 +24,19 @@ param(
     [switch]$SkipCapture,
     [switch]$PluckerFix,
     [switch]$SceneryFix,
+    [switch]$WriterOnly,                      # engine 0.6.4 cross-folder BSP (dev_S): the marker the shell gates on. FAKE_CROSSBSP_ENGINE: Ctx.BuildPayload drops this line and the next to make an older engine.
+    [switch]$ToolOverlay,                     # engine 0.6.4 cross-folder BSP (dev_S). FAKE_CROSSBSP_ENGINE
     [switch]$Responsive,                      # X2: the engine's "Keep PC responsive" switch (the fake only records that it was bound)
     [switch]$ExactVertexLighting,             # W2 (0.6.3): the engine's "2004 Exact Vertex Lighting?" switch (recorded only)
+    [switch]$SceneryOwnPermutationOnly,       # engine 0.6.4: "Scenery Multi Permutation Fix (Experimental Improvement)" (recorded only). Ctx.BuildPayload drops THIS line to make an older engine.
     [ValidateRange(1000000,100000000)][int]$Photons = 0,
     [ValidateRange(1,64)][int]$MCSamples = 0
 )
 $ErrorActionPreference = "Stop"
 function Phase($n, $t) { Write-Host ""; Write-Host ("[{0}] {1}" -f $n, $t) }
 function Note([string]$m) { Write-Host "      *** $m" }
+# engine 0.6.4 Compatibility mode (DF64): gpu_bake validates GPULM_COMPAT (0 / 1 / unset). Every line ending in the marker below is DROPPED by Ctx.BuildPayload to make an older engine (0.6.3: no such variable anywhere in the script).
+if (Test-Path Env:GPULM_COMPAT) { if ($env:GPULM_COMPAT -ne '' -and $env:GPULM_COMPAT -ne '0' -and $env:GPULM_COMPAT -ne '1') { throw "GPULM_COMPAT='$($env:GPULM_COMPAT)' -- expected 0, 1 or unset" }; if ($env:GPULM_COMPAT -eq '1') { Note "GPULM_COMPAT=1: the FP32-only double-single (df64) kernel set is FORCED" } }   # FAKE_COMPAT_ENGINE
 
 foreach ($v in "H2LM_ROOT", "H2LM_WORK", "H2LM_CODE") {
     $x = [Environment]::GetEnvironmentVariable($v)
@@ -82,6 +87,7 @@ if (-not $SkipCapture) {
 }
 Phase 2 "DERIVE - fake derive"
 Phase 3 "GPU BAKE - fake bake"
+if ($env:GPULM_COMPAT -eq '1' -or $mode -eq 'nofp64') { Write-Host "      Compatibility mode (no FP64): fake -- the FP32-only double-single kernels" } else { Write-Host "      Compatibility mode: off (native FP64 kernels; fake)" }   # FAKE_COMPAT_ENGINE
 if ($env:GPULM_PROBES) { Write-Host ("      PROBE: traced {0}" -f $env:GPULM_PROBES); Set-Content -LiteralPath (Join-Path $OUT "vertex_out.bin") -Value "v" }
 if ($mode -eq "fail_bake") { throw "PHASE 3: the fake bake failed on purpose" }
 if ($mode -eq "fail_tdr") {      # X2: the engine's device-loss lines, then the throw (stdout like the real DIRECT: lines)

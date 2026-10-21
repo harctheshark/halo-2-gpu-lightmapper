@@ -134,6 +134,7 @@ namespace H2GpuLightmapper
                         case "stageonly": StageOnlyCheck.IsChecked = true; break;
                         case "responsive": ResponsiveCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "exactvertex": ExactVertexCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
+                        case "sceneryperm": SceneryPermCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                     }
                 }
                 UpdateOptionUi();
@@ -304,7 +305,7 @@ namespace H2GpuLightmapper
 
         private void GpuProbe(int ver, ResolvedRuntime rt, PayloadComponent inst)
         {
-            if (rt.GpuCheckExe == null) { Dispatcher.BeginInvoke(new Action(() => GpuLine.Text = "GPU: the payload has no gpucheck.exe")); return; }
+            if (rt.GpuCheckExe == null) { Dispatcher.BeginInvoke(new Action(() => { GpuLine.Text = "GPU: the payload has no gpucheck.exe"; _gpuChecked = true; _gpu = null; UpdatePrecisionUi(); })); return; }
             var r = GpuCheck.Run(rt.GpuCheckExe);
             Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -316,9 +317,47 @@ namespace H2GpuLightmapper
                     vram = "   VRAM " + (r.DedicatedVideoMemoryBytes.Value / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB"
                            + (other.HasValue ? ", " + (other.Value / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB in use by programs now" : "");
                 }
-                GpuLine.Text = r.Line + vram + (r.Advice != null && r.Advice.Count > 0 ? "\n" + string.Join("\n", r.Advice) : "");
-                GpuLine.Foreground = r.Ok ? Palette.Dim : Palette.Bad;
+                _gpu = r; _gpuChecked = true;
+                _gpuExtra = vram + (r.Advice != null && r.Advice.Count > 0 ? "\n" + string.Join("\n", r.Advice) : "");
+                UpdatePrecisionUi();
             }));
+        }
+
+        // ---- Graphics card group (always visible): the GPU line + the precision the bake will run in. Compatibility mode (DF64) is automatic: a GPU without
+        // FP64 is accepted when the engine this bake would run has the mode (EngineHasCompat), else the plain 0.6.3 refusal text shows here too.
+        private GpuCheckResult _gpu;
+        private bool _gpuChecked;
+        private string _gpuExtra = "";
+
+        private void UpdatePrecisionUi()
+        {
+            if (!IsInitialized || GpuLine == null || PrecisionLine == null) return;
+            if (!_gpuChecked) return;       // the XAML text ("checking the graphics card") stays until the probe answers
+            List<string> perr;
+            var o = ReadOptions(out perr);
+            bool compat = _host.EngineHasCompat(o);
+            string text; Brush brush; string tip = null;
+            if (_gpu == null || !_gpu.Ran || _gpu.Raw == null)
+            {
+                text = GpuCheck.PrecisionText(PrecisionMode.Unknown, compat); brush = Palette.Dim;
+            }
+            else
+            {
+                var mode = GpuCheck.ApplyEngine(_gpu, compat);
+                GpuLine.Text = _gpu.Line + _gpuExtra;
+                GpuLine.Foreground = _gpu.Ok ? Palette.Dim : Palette.Bad;
+                if (mode == PrecisionMode.Full) { text = GpuCheck.PrecisionFull; brush = Palette.Good; }
+                else if (mode == PrecisionMode.Compat)
+                {
+                    text = GpuCheck.PrecisionCompat; brush = Palette.Warn;
+                    tip = "Your graphics card has no double-precision (FP64) support. The engine runs its FP32-only double-single (DF64) kernels instead, picked automatically; there is nothing to switch on. "
+                          + "Experimental: the lightmap matched full precision in testing, and it may be slower. Not tested on Intel or Qualcomm GPUs or on Windows on ARM yet.";
+                }
+                else if (GpuCheck.NoFp64(_gpu)) { text = "Precision: not possible - " + GpuCheck.NoFp64Plain; brush = Palette.Bad; }
+                else { text = "Precision: unknown (the GPU check failed)"; brush = Palette.Bad; }
+            }
+            if (_gpu == null || !_gpu.Ran || _gpu.Raw == null) { GpuLine.Foreground = Palette.Dim; }
+            PrecisionLine.Text = text; PrecisionLine.Foreground = brush; PrecisionLine.ToolTip = tip;
         }
 
         /// <summary>Startup recovery (section 9): interrupted runs are marked, an own stale lock is released, a half-finished
@@ -479,14 +518,66 @@ namespace H2GpuLightmapper
             var s = ScenarioCombo.SelectedItem as string;
             if (s == null || _root == null) return;
             _scenarioFilter = "";
-            var bsps = MapQuery.Bsps(_root, s);
+            // first the BSPs beside the scenario (instant, from the folder); the map query then adds the ones the scenario references from other folders (0.6.4)
+            var bsps = MapQuery.Bsps(_root, s).Select(BspChoice.Plain).ToList();
+            _bspNotes = new List<string>();
             _suppress = true;
             BspCombo.ItemsSource = bsps;
             _suppress = false;
             string want = _g.Bsp ?? (string.Equals(s, _settings.LastScenario, StringComparison.OrdinalIgnoreCase) ? _settings.LastBsp : null);
-            BspCombo.SelectedItem = bsps.FirstOrDefault(b => string.Equals(b, want, StringComparison.OrdinalIgnoreCase)) ?? bsps.FirstOrDefault();
-            if (bsps.Count == 0) MapInfo.Text = "No .scenario_structure_bsp in this scenario's folder.";
+            BspCombo.SelectedItem = bsps.FirstOrDefault(b => string.Equals(b.Name, want, StringComparison.OrdinalIgnoreCase)) ?? bsps.FirstOrDefault();
+            if (bsps.Count == 0)
+            {
+                MapInfo.Text = "No .scenario_structure_bsp in this scenario's folder.";
+                ListBspsFromScenario(s, want);       // none beside the scenario: they may all be in other folders
+            }
         }
+
+        /// <summary>0.6.4: nothing in the scenario's own folder to run the per-BSP map query on, so ask the scenario alone for its structure_bsps list.</summary>
+        private void ListBspsFromScenario(string scen, string want)
+        {
+            var rt = _rt; var env = _env; string root = _root;
+            if (rt == null || !_runtimeReady || root == null || !_host.HasPayload) return;
+            Task.Run(() =>
+            {
+                MapInfo mi;
+                var set = TagSet.For(root, scen, "");
+                var args = MapQuery.Args(Path.Combine(rt.InstDir, InstLayout.TagIoDir), set.ScenarioFile, "", Path.Combine(set.TagDir, set.LtmpName));
+                try { mi = MapQuery.Run(rt.PyExe, args, rt.Work, env); } catch (Exception ex) { mi = new MapInfo { Error = ex.Message }; }
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!string.Equals(CurScenario, scen, StringComparison.OrdinalIgnoreCase) || CurBsp != null || mi == null || !mi.Ok) return;
+                    ApplyBspChoices(root, scen, mi, want);
+                    if (CurBsp != null) RefreshMap();
+                    else MapInfo.Text = "No BSP of this scenario can be baked." + (_bspNotes.Count > 0 ? "  " + string.Join("  ", _bspNotes) : "");
+                }));
+            });
+        }
+
+        /// <summary>The BSP picker's entries from a map query: every BSP the scenario's structure_bsps references, by its tag path wherever it lives; one in
+        /// another folder is labelled "name  (from folder)" and only offered when the engine can bake it (AppHost.CrossFolderBspWhy). Keeps the current
+        /// selection when it is still listed. Returns false when the list is unchanged.</summary>
+        private bool ApplyBspChoices(string root, string scen, MapInfo mi, string preferName)
+        {
+            string why = _host.HasPayload ? _host.CrossFolderBspWhy(BakeOptions.Defaults()) : "no payload";
+            List<string> notes;
+            var ordered = MapQuery.BspChoices(root, scen, mi.BspRefs, why, out notes);
+            _bspNotes = notes;
+            if (ordered.Count == 0) return false;
+            var cur = BspCombo.ItemsSource as List<BspChoice>;
+            if (cur != null && ordered.Select(b => b.Label).SequenceEqual(cur.Select(b => b.Label), StringComparer.OrdinalIgnoreCase)) return false;
+            var keep = BspCombo.SelectedItem as BspChoice;
+            string keepLabel = keep == null ? null : keep.Label;
+            _suppress = true;
+            BspCombo.ItemsSource = ordered;
+            BspCombo.SelectedItem = ordered.FirstOrDefault(b => keepLabel != null && string.Equals(b.Label, keepLabel, StringComparison.OrdinalIgnoreCase))
+                                    ?? ordered.FirstOrDefault(b => preferName != null && string.Equals(b.Name, preferName, StringComparison.OrdinalIgnoreCase))
+                                    ?? ordered.FirstOrDefault();
+            _suppress = false;
+            return true;
+        }
+
+        private List<string> _bspNotes = new List<string>();
 
         private void BspCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
@@ -495,7 +586,9 @@ namespace H2GpuLightmapper
         }
 
         private string CurScenario { get { return ScenarioCombo.SelectedItem as string; } }
-        private string CurBsp { get { return BspCombo.SelectedItem as string; } }
+        private string CurBsp { get { var b = BspCombo.SelectedItem as BspChoice; return b == null ? null : b.Name; } }
+        /// <summary>The selected BSP's tags-relative tag path when it lives in another folder than the scenario (0.6.4), else null.</summary>
+        private string CurBspRel { get { var b = BspCombo.SelectedItem as BspChoice; return b == null ? null : b.Rel; } }
 
         /// <summary>Info line: probe points, lightmap + environments, the last capture, the last bake. Then the reuse gate.</summary>
         private void RefreshMap()
@@ -520,25 +613,24 @@ namespace H2GpuLightmapper
                 {
                     if (ver != _mapVersion) return;
                     _mapInfo = mi;
-                    if (mi != null && mi.Bsps.Count > 0)
+                    if (mi != null && mi.Ok && mi.BspRefs.Count + mi.Bsps.Count > 0)
                     {
-                        var ordered = MapQuery.Bsps(root, scen, mi.Bsps);
-                        var cur = BspCombo.ItemsSource as List<string>;
-                        if (cur == null || !ordered.SequenceEqual(cur, StringComparer.OrdinalIgnoreCase))
-                        {
-                            _suppress = true; BspCombo.ItemsSource = ordered; BspCombo.SelectedItem = ordered.FirstOrDefault(b => string.Equals(b, bsp, StringComparison.OrdinalIgnoreCase)) ?? ordered.FirstOrDefault(); _suppress = false;
-                        }
+                        // 0.6.4: every BSP the scenario references, other folders included (labelled); the BSP asked about stays selected
+                        var qi = mi.BspRefs.Count > 0 ? mi : new MapInfo { BspRefs = mi.Bsps.ToList() };
+                        string keepName = bsp;
+                        if (ApplyBspChoices(root, scen, qi, keepName) && CurBsp != null && !string.Equals(CurBsp, bsp, StringComparison.OrdinalIgnoreCase)) { RefreshMap(); return; }
                     }
-                    MapInfo.Text = MapInfoText(mi, hist, scen, bsp);
+                    MapInfo.Text = MapInfoText(mi, hist, scen, bsp, CurBspRel) + (_bspNotes.Count > 0 ? "  ·  " + string.Join("  ", _bspNotes) : "");
                     UpdateOptionUi();
                     RefreshReuse();
                 }));
             });
         }
 
-        private static string MapInfoText(MapInfo mi, List<HistoryEntry> hist, string scen, string bsp)
+        private static string MapInfoText(MapInfo mi, List<HistoryEntry> hist, string scen, string bsp, string bspRel = null)
         {
             var parts = new List<string>();
+            if (bspRel != null) parts.Add("BSP tag in " + BakeOptions.BspFolder(bspRel) + " (the lightmap is written beside the scenario)");
             if (mi == null) parts.Add("probe points: (runtime not ready)");
             else if (!mi.Ok) parts.Add("map query failed: " + (mi.Error ?? mi.PointsError));
             else
@@ -627,7 +719,7 @@ namespace H2GpuLightmapper
         {
             errors = new List<string>();
             var o = BakeOptions.Defaults();
-            o.Root = _root; o.ScenarioRel = CurScenario; o.Bsp = CurBsp;
+            o.Root = _root; o.ScenarioRel = CurScenario; o.Bsp = CurBsp; o.BspRel = CurBspRel;
             o.Quality = QLow.IsChecked == true ? Quality.Low : QCustom.IsChecked == true && QCustom.Visibility == Visibility.Visible ? Quality.Custom : Quality.Super;
             long p; int r; double d;
             if (long.TryParse((PhotonsBox.Text ?? "").Replace(",", "").Replace("_", "").Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out p)) o.Photons = p;
@@ -644,10 +736,12 @@ namespace H2GpuLightmapper
             o.StageOnly = StageOnlyCheck.IsChecked == true;
             o.Responsive = ResponsiveCheck.IsChecked == true;        // X2
             o.ExactVertexLighting = ExactVertexCheck.IsChecked == true;        // W2 (0.6.3): "2004 Exact Vertex Lighting?" -> gpu_bake -ExactVertexLighting
+            o.SceneryPermutationFix = SceneryPermCheck.IsChecked == true && SceneryPermCheck.IsEnabled;     // engine-gated: a greyed box is never passed on
             return o;
         }
 
         private bool _busy;
+        private string _sceneryTip;
 
         private void UpdateOptionUi()
         {
@@ -659,6 +753,21 @@ namespace H2GpuLightmapper
             AoPanel.IsEnabled = AoCheck.IsChecked == true && !probesMode && !_busy && _aoAvailable;
             AoNote.Text = !_aoAvailable ? "Not available in this build (its AO engine is out of date for the lightmap engine)." : probesMode ? "Not available in Lightprobes mode." : "An artistic layer, not CPU-faithful.";
             AoNote.ToolTip = !_aoAvailable ? _aoWhy : null;
+            // "Scenery Multi Permutation Fix": enabled only when the engine this quality would run declares -SceneryOwnPermutationOnly
+            {
+                var eq = BakeOptions.Defaults();
+                eq.Quality = custom ? Quality.Custom : Quality.Super;
+                string sceneryWhy = _host.SceneryPermutationFixWhy(eq);
+                SceneryPermCheck.IsEnabled = sceneryWhy == null;
+                // a long tooltip would be one unbroken line: wrap it (rebuilt only when the text changes)
+                string sceneryTip = sceneryWhy == null ? BakeOptions.SceneryPermutationFixTip : BakeOptions.SceneryPermutationFixTip + " " + BakeOptions.SceneryPermutationFixNeedsEngine;
+                if (_sceneryTip != sceneryTip)
+                {
+                    _sceneryTip = sceneryTip;
+                    SceneryPermCheck.ToolTip = new ToolTip { Content = new TextBlock { Text = sceneryTip, TextWrapping = TextWrapping.Wrap, MaxWidth = 440 } };
+                }
+                if (sceneryWhy != null && SceneryPermCheck.IsChecked == true) SceneryPermCheck.IsChecked = false;      // a greyed box never stays ticked
+            }
             // the AO / custom field checks
             List<string> perr;
             var o = ReadOptions(out perr);
@@ -690,6 +799,7 @@ namespace H2GpuLightmapper
             }
             else ModeNotice.Visibility = Visibility.Collapsed;
             if (!_busy) BakeBtn.IsEnabled = _host.HasPayload && _attachRunDir == null && _op == null;
+            UpdatePrecisionUi();       // the quality / AO choice can change which engine the bake runs: re-read whether it has Compatibility mode
         }
 
         private static void MarkBox(TextBox b, bool bad) { b.BorderBrush = bad ? Palette.Bad : Palette.Edge; }
@@ -809,6 +919,7 @@ namespace H2GpuLightmapper
             }
             if (code == 0) Bar.Value = 1000;
             Log(code == 0 ? Palette.Good : Palette.Bad, "RESULT " + msg + (s.Run != null ? "   (run folder " + s.Run.RunDir + ")" : ""));
+            if (s.PrecisionSummary != null) Log(Palette.Dim, s.PrecisionSummary);
             if (_g.AutoBake && _g.Snapshot != null)
             {
                 FlushLog();
@@ -946,12 +1057,15 @@ namespace H2GpuLightmapper
                 var r = SceneryFixDeps.Run(rt.PyExe, rt.ScanSceneryPy, root, null, rt.Work, env, SceneryFixDeps.FullScanTimeoutMs, json,
                                            l => Dispatcher.BeginInvoke(new Action(() => SetStatus(Palette.Fg, title + ": " + l))));
                 return r;
-            }, r => r.Ran ? string.Format(CultureInfo.InvariantCulture, "{0} model(s) scanned, {1} added, {2} updated, {3} conflict(s) -- {4}", r.Models, r.Added.Count, r.Updated.Count, r.Conflicts.Count, r.Db)
+            }, r => r.Ran ? string.Format(CultureInfo.InvariantCulture, "{0} model(s) scanned, {1} added{2}, {3} updated, {4} conflict(s){5} -- {6}", r.Models, r.Added.Count, SceneryFixDeps.AddedSample(r), r.Updated.Count, r.Conflicts.Count,
+                                                                  r.SkyExcluded.Count > 0 ? ", " + r.SkyExcluded.Count + " sky model(s) skipped" : "", r.Db)
                           : "did not complete: " + r.Error,
                r => r.Ran, title,
                (r, good) =>
                {
                    foreach (var m in r.Added.Take(200)) Log(Palette.Good, m + " added to the Scenery Fix Dependencies database");
+                   if (r.Added.Count > 200) Log(Palette.Good, "... and " + (r.Added.Count - 200) + " more model(s) added (the result window lists them all)");
+                   if (r.SkyExcluded.Count > 0) Log(Palette.Dim, r.SkyExcluded.Count + " sky model(s) skipped: a sky never needs the scenery fix");
                    foreach (var m in r.Updated.Take(200)) Log(Palette.Good, m + " updated in the Scenery Fix Dependencies database (its tag changed)");
                    foreach (var c in r.Conflicts.Take(200)) Log(Palette.Warn, SceneryFixDeps.ConflictLine(c));
                    new ScanResultWindow(this, title, SceneryFixDeps.Summarize(r), r.Db).ShowDialog();

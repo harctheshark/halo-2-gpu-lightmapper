@@ -22,11 +22,13 @@ namespace H2GpuLightmapper.Tests
         {
             var c = new Ctx();
             string filter = null;
+            var skips = new List<string>();
             for (int i = 0; i < args.Length; i++)
             {
                 string a = args[i];
                 Func<string> next = () => { if (i + 1 >= args.Length) throw new ArgumentException(a + " needs a value"); return args[++i]; };
                 if (a == "--filter") filter = next();
+                else if (a == "--skip") skips.Add(next());
                 else if (a == "--keep") c.Keep = true;
                 else if (a == "--exe") c.Exe = next();
                 else if (a == "--pwsh") c.PwshDir = next();
@@ -54,6 +56,7 @@ namespace H2GpuLightmapper.Tests
             foreach (var t in tests)
             {
                 if (filter != null && t.Key.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (skips.Any(k => t.Key.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)) { Console.WriteLine("SKIPPED(--skip)  " + t.Key); continue; }
                 var tsw = Stopwatch.StartNew();
                 try
                 {

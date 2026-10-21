@@ -110,6 +110,15 @@
                         </StackPanel>
                     </StackPanel>
                 </GroupBox>
+
+                <!-- 3b. Graphics card: the GPU, its memory and the precision the bake will run in (always visible; Compatibility mode (DF64) is automatic, no option) -->
+                <GroupBox Header="Graphics card">
+                    <StackPanel>
+                        <TextBlock x:Name="GpuLine" TextWrapping="Wrap" Style="{StaticResource Dim}" Text="GPU: not checked yet"/>
+                        <TextBlock x:Name="PrecisionLine" Margin="0,4,0,0" TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource FgDim}" Text="Precision: checking the graphics card…"
+                                   ToolTipService.ShowDuration="30000"/>
+                    </StackPanel>
+                </GroupBox>
             </StackPanel>
 
             <StackPanel Grid.Column="2">
@@ -157,6 +166,10 @@
                                           ToolTip="Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer."/>
                                 <CheckBox x:Name="ExactVertexCheck" Content="2004 Exact Vertex Lighting?" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
                                           ToolTip="You likely don't need this, this is just to shut Harcs brain up"/>
+                                <!-- engine-gated: greyed (code-behind, UpdateOptionUi) unless the engine's gpu_bake.ps1 declares -SceneryOwnPermutationOnly; the tooltip then ends "Needs engine 0.6.4 or newer." -->
+                                <CheckBox x:Name="SceneryPermCheck" Content="Scenery Multi Permutation Fix (Experimental Improvement)" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
+                                          ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="30000"
+                                          ToolTip="Fallback for scenery that draws more than one shape from one tag, e.g. a rock whose shape changes when you move it, or a lifepod placed with a named variant like 'crashed'. Only the shape the game actually draws casts shadows, ground hidden inside scenery is filled from its surroundings, and a variant's own pieces get lit instead of rendering black. Differs from the 2004 tool on purpose. Most maps never need this: giving each shape its own scenery tag avoids the problem."/>
                             </StackPanel>
                         </GroupBox>
                         <CheckBox x:Name="StageOnlyCheck" Content="Stage only (don't write tags)" Checked="Option_Changed" Unchecked="Option_Changed"/>
@@ -165,7 +178,6 @@
                             <Button x:Name="OpenWorkBtn" DockPanel.Dock="Right" Content="Open" Margin="6,0,0,0" Padding="8,1" Click="OpenWorkBtn_Click"/>
                             <TextBox x:Name="WorkBox" IsReadOnly="True" FontSize="11.5"/>
                         </DockPanel>
-                        <TextBlock x:Name="GpuLine" Margin="0,4,0,0" Style="{StaticResource Dim}" Text="GPU: not checked yet"/>
                         <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                             <Button x:Name="UndoInstallBtn" Content="Undo last install" Padding="8,1" Click="UndoInstallBtn_Click"
                                     ToolTip="Put back the files this app's last install of this BSP replaced (lmw_install restore)"/>

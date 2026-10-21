@@ -48,6 +48,8 @@ namespace H2GpuLightmapper.Core.Preflight
         /// <summary>Models whose tag bound changed since their line was written; a new line was added.</summary>
         public List<string> Updated = new List<string>();
         public List<SceneryConflict> Conflicts = new List<SceneryConflict>();
+        /// <summary>0.6.4: sky render_models the scanner left out (a sky never needs the scenery fix): tags-relative paths.</summary>
+        public List<string> SkyExcluded = new List<string>();
         public double Seconds;
         public string JsonPath;
         public List<string> Output = new List<string>();
@@ -175,6 +177,8 @@ namespace H2GpuLightmapper.Core.Preflight
             if (j.Has("added_models")) AddModels(j.Arr("added_models"), res.Added);
             else if (res.Applied) AddModels(j.Arr("missing"), res.Added);
             AddModels(j.Arr("updated_models"), res.Updated);
+            res.SkyExcluded.Clear();
+            AddModels(j.Arr("sky_excluded"), res.SkyExcluded);
             var other = j.Arr("also_added_models");
             res.OtherAdded = other == null ? 0 : other.Count;
             var conf = j.Arr("conflict");
@@ -188,8 +192,23 @@ namespace H2GpuLightmapper.Core.Preflight
             return null;
         }
 
+        /// <summary>" (name, name, name, ...)" with the first few added model names for a one-line status; empty when none were added.</summary>
+        public static string AddedSample(SceneryScanResult r, int n = 3)
+        {
+            if (r == null || r.Added.Count == 0) return "";
+            return " (" + string.Join(", ", r.Added.Take(n).Select(m => ModelLeaf(m))) + (r.Added.Count > n ? ", ..." : "") + ")";
+        }
+
+        private static string ModelLeaf(string rel)
+        {
+            string s = rel.Replace('/', '\\');
+            if (s.EndsWith(".render_model", StringComparison.OrdinalIgnoreCase)) s = s.Substring(0, s.Length - ".render_model".Length);
+            int i = s.LastIndexOf('\\');
+            return i < 0 ? s : s.Substring(i + 1);
+        }
+
         /// <summary>The result as lines for the window's result dialog and the CLI.</summary>
-        public static List<string> Summarize(SceneryScanResult r, int maxList = 60)
+        public static List<string> Summarize(SceneryScanResult r, int maxList = 1000)
         {
             var l = new List<string>();
             if (!r.Ran) { l.Add("The scan did not complete: " + r.Error); l.Add("The existing database (if any) is used as it is."); return l; }
@@ -199,7 +218,13 @@ namespace H2GpuLightmapper.Core.Preflight
             l.Add(r.Added.Count == 0 ? "Added: none -- every scenery model with a compressed section was already in the database."
                                      : "Added " + r.Added.Count + " model(s) the database did not know:");
             foreach (var m in r.Added.Take(maxList)) l.Add("    " + m);
-            if (r.Added.Count > maxList) l.Add("    ... and " + (r.Added.Count - maxList) + " more");
+            if (r.Added.Count > maxList) l.Add("    ... and " + (r.Added.Count - maxList) + " more (all of them are in " + (string.IsNullOrEmpty(r.JsonPath) ? "the scan report" : r.JsonPath) + ")");
+            if (r.SkyExcluded.Count > 0)
+            {
+                l.Add("Skipped " + r.SkyExcluded.Count + " sky model(s): a sky is not scenery and never needs the scenery fix:");
+                foreach (var m in r.SkyExcluded.Take(Math.Min(maxList, 40))) l.Add("    " + m);
+                if (r.SkyExcluded.Count > Math.Min(maxList, 40)) l.Add("    ... and " + (r.SkyExcluded.Count - Math.Min(maxList, 40)) + " more");
+            }
             if (r.OtherAdded > 0) l.Add("(" + r.OtherAdded.ToString("N0", CultureInfo.InvariantCulture) + " more model(s) elsewhere in the tags folder were not in the database either and were added too.)");
             if (r.Updated.Count > 0)
             {

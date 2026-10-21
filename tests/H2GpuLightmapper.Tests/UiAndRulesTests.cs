@@ -19,6 +19,26 @@ namespace H2GpuLightmapper.Tests
             yield return T("ui: the XAML carries the section-4 defaults (Super, Standard, AO off 1.0 / 0.5, reuse off, 50M / 16)", XamlDefaults);
             yield return T("ui: the window's Bake (defaults: Super / Standard / install) on triplicate runs the whole probe path (sandbox)", UiAutoBake);
             yield return T("rules: no recursive delete in the exe and its tests (code rule)", NoRecursiveDelete);
+            yield return T("ui 0.6.4: the BSP picker lists structure_bsps entries (labels from BspChoice, engine-gated), selection feeds BakeOptions.BspRel; the scenario picker skips tags\\temp_scenario; the scan result shows names", PickerWiring);
+        }
+
+        private static void PickerWiring()
+        {
+            string cs = File.ReadAllText(Path.Combine(C.Project, @"src\H2GpuLightmapper\MainWindow.xaml.cs"));
+            Assert.Contains(cs, "MapQuery.BspChoices(root, scen, mi.BspRefs, why, out notes)", "the picker is built from the scenario's structure_bsps entries");
+            Assert.Contains(cs, "_host.CrossFolderBspWhy(BakeOptions.Defaults())", "other-folder BSPs are offered only when the engine can bake them");
+            Assert.Contains(cs, "o.BspRel = CurBspRel;", "the selected other-folder BSP reaches the bake options");
+            Assert.Contains(cs, "BspCombo.SelectedItem as BspChoice", "the combo holds BspChoice items (label = 'name  (from folder)')");
+            Assert.Contains(cs, "SceneryFixDeps.AddedSample(r)", "the scan status line shows the first added names");
+            // the scenario picker skips the tool's scratch folder
+            var r = C.NewRoot();
+            Directory.CreateDirectory(Path.Combine(r.Tags, "temp_scenario"));
+            File.WriteAllText(Path.Combine(r.Tags, @"temp_scenario\sapien_temp_scenario_0.scenario"), "x");
+            File.WriteAllText(Path.Combine(r.CycDir, "cyclotron (auto-backup 2026-10-21 05-00-00).scenario"), "x");
+            var list = H2GpuLightmapper.Pipeline.MapQuery.Scenarios(r.Root);
+            Assert.True(list.Contains(@"scenarios\multi\cyclotron\cyclotron"), "the real scenario is listed");
+            Assert.True(!list.Any(s => s.IndexOf("temp_scenario", StringComparison.OrdinalIgnoreCase) >= 0), "Sapien's temp_scenario scratch scenario is not a map: " + string.Join(", ", list));
+            Assert.True(!list.Any(s => s.IndexOf("auto-backup", StringComparison.OrdinalIgnoreCase) >= 0), "and neither is an auto-backup copy");
         }
 
         private static void Snapshot()
@@ -111,6 +131,32 @@ namespace H2GpuLightmapper.Tests
             Assert.Contains(tag("ExactVertexCheck"), "ToolTip=\"You likely don't need this, this is just to shut Harcs brain up\"", "tooltip, exactly");
             Assert.NotContains(tag("ExactVertexCheck"), "later build", "no '(coming in a later build)' suffix any more");
             Assert.Contains(tag("ExactVertexCheck"), "Checked=\"Option_Changed\"", "wired to the option refresh");
+            // Scenery Multi Permutation Fix (Experimental Improvement): below the other two, unchecked, engine-gated (greyed + tooltip suffix by code)
+            Assert.True(x.IndexOf("x:Name=\"ExactVertexCheck\"", StringComparison.Ordinal) < x.IndexOf("x:Name=\"SceneryPermCheck\"", StringComparison.Ordinal)
+                        && x.IndexOf("x:Name=\"SceneryPermCheck\"", StringComparison.Ordinal) < x.IndexOf("</GroupBox>", x.IndexOf("x:Name=\"SceneryPermCheck\"", StringComparison.Ordinal), StringComparison.Ordinal)
+                        && x.IndexOf("x:Name=\"SceneryPermCheck\"", StringComparison.Ordinal) < x.IndexOf("x:Name=\"StageOnlyCheck\"", StringComparison.Ordinal), "in the Advanced settings group, below the other two");
+            Assert.NotContains(tag("SceneryPermCheck"), "IsChecked", "Scenery Multi Permutation Fix: unchecked by default");
+            Assert.Contains(tag("SceneryPermCheck"), "Content=\"Scenery Multi Permutation Fix (Experimental Improvement)\"", "label");
+            Assert.Contains(tag("SceneryPermCheck"), "ToolTip=\"" + BakeOptions.SceneryPermutationFixTip + "\"", "tooltip, exactly (the XAML text = the constant the disabled tooltip is built from)");
+            Assert.Contains(tag("SceneryPermCheck"), "ToolTipService.ShowOnDisabled=\"True\"", "the tooltip shows while greyed");
+            Assert.Contains(tag("SceneryPermCheck"), "Checked=\"Option_Changed\"", "wired to the option refresh");
+            string cs = File.ReadAllText(Path.Combine(C.Project, @"src\H2GpuLightmapper\MainWindow.xaml.cs"));
+            Assert.Contains(cs, "SceneryPermCheck.IsEnabled = sceneryWhy == null;", "the box is greyed from the engine gate (AppHost.SceneryPermutationFixWhy)");
+            Assert.Contains(cs, "BakeOptions.SceneryPermutationFixTip + \" \" + BakeOptions.SceneryPermutationFixNeedsEngine", "disabled tooltip = tooltip + ' Needs engine 0.6.4 or newer.'");
+            Assert.Contains(cs, "SceneryPermCheck.IsChecked == true && SceneryPermCheck.IsEnabled", "a greyed box is never passed on");
+            // Compatibility mode (DF64): the GPU and its precision are on the MAIN window (a "Graphics card" group), never under Advanced; it is automatic, so there is no option
+            int adv = x.IndexOf("x:Name=\"AdvancedExpander\"", StringComparison.Ordinal);
+            Assert.Contains(x, "Header=\"Graphics card\"", "the Graphics card group");
+            Assert.True(x.IndexOf("x:Name=\"GpuLine\"", StringComparison.Ordinal) > 0 && x.IndexOf("x:Name=\"GpuLine\"", StringComparison.Ordinal) < adv, "the GPU line is above (outside) the Advanced expander");
+            Assert.True(x.IndexOf("x:Name=\"PrecisionLine\"", StringComparison.Ordinal) > x.IndexOf("x:Name=\"GpuLine\"", StringComparison.Ordinal) && x.IndexOf("x:Name=\"PrecisionLine\"", StringComparison.Ordinal) < adv, "the precision line sits under it, outside Advanced");
+            Assert.True(x.IndexOf("Header=\"Graphics card\"", StringComparison.Ordinal) > x.IndexOf("Header=\"Quality\"", StringComparison.Ordinal) && x.IndexOf("Header=\"Graphics card\"", StringComparison.Ordinal) < x.IndexOf("Header=\"Mode\"", StringComparison.Ordinal), "in the left column under Quality");
+            Assert.Contains(tag("PrecisionLine"), "Text=\"Precision: checking the graphics card", "placeholder until gpucheck answers");
+            Assert.True(!Regex.IsMatch(x, "x:Name=\"[^\"]*[Cc]ompat"), "no checkbox / option control for Compatibility mode (it is automatic; --force-compat is CLI only)");
+            Assert.Contains(cs, "GpuCheck.ApplyEngine(_gpu, compat)", "the window applies the engine's capability (AppHost.EngineHasCompat) to the GPU check");
+            Assert.Contains(cs, "text = GpuCheck.PrecisionFull; brush = Palette.Good", "full precision shows 'Precision: Full FP64' in the normal/green colour");
+            Assert.Contains(cs, "text = GpuCheck.PrecisionCompat; brush = Palette.Warn", "Compatibility mode shows its sentence in the warning colour");
+            Assert.Contains(cs, "UpdatePrecisionUi();       // the quality / AO choice can change which engine", "re-evaluated when the quality / AO choice changes the engine");
+            Assert.NotContains(cs, "ForceCompat", "--force-compat is not in the window");
             foreach (var b in new[] { "BakeBtn", "CancelBtn", "RestoreBtn", "LogsBtn" }) tag(b);
             Assert.Contains(x, "Reset to 50M / 16", "reset link");
             Assert.Contains(x, "Gather rays (Monte-Carlo samples)", "rays label");

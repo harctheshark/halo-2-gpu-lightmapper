@@ -38,8 +38,8 @@ SANDBOX = os.path.join(os.environ['TEMP'], 's19')      # short on purpose: WORK\
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'f13328c7c37460d9f88444e65cd0e341'),   # W2 2026-10-20: the 05:38 promotion (was 15771590, fe88bd8b)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '1a0318acbcd538a52b90960258e6561a'),   # production source _research/ao/dev_AO5 (W2 0.6.3; was dev_AO4 440ce318, dev_AO2 bac932e8)
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '7a033e064ef1c222b41e8fbdfcdaa884'),   # W3 2026-10-21: the 0.6.4 promotion (W2: f13328c7, 15771590, fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', 'cd4883222df27f1c4c7a1924c5787af1'),   # production source _research/ao/dev_AO6 (W3 0.6.4; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
 }
 EXPECT_PATCHED = {
     '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', 'ffb288d47846b38ed51e0f313761adf3'),   # P5
@@ -202,7 +202,7 @@ def t_roles_layout():
     slots = sorted(p for p, f in paths.items() if 'dllslot' in f.get('role', '').split(','))
     nslot = 6 if custom_shipped() else 4          # engine_custom/ adds its own pair (the same two pristine builds)
     check(len(slots) == nslot and all(p.endswith('gpulm_estimator.dll') for p in slots), 'dllslot %s' % slots)
-    check(sorted(paths[p]['md5'] for p in slots) == sorted(['b2370477f36db8c74e6749d5389f2a57', 'f0fb73ac9cd42f8f716f26b64584759b'] * (nslot // 2)),   # W1 2026-10-20: b2370477 = the promoted gpulm_estimator.dll (was aaf10a0f)
+    check(sorted(paths[p]['md5'] for p in slots) == sorted(['d6147fce6e3979a37178d2e14d092227', '5c6aeea9d1ffbaaaa6351d7ba5e77360'] * (nslot // 2)),   # W3 2026-10-21: the 0.6.4 estimator DLLs (W1: b2370477 / f0fb73ac; was aaf10a0f)
           'slot md5s')
     roles = lambda r: [p for p, f in paths.items() if r in f.get('role', '').split(',')]
     check(roles('boundsdb') == ['standalone/h2v_scenery_bounds.db'], 'boundsdb')

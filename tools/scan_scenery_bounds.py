@@ -20,6 +20,10 @@ What this does, per scanned render_model (tags-relative path):
   conflict  TRUE conflict only: two sections of ONE model share a key but have different bounds (a name cannot tell them
             apart). Reported, still appended; exit 3.
   nobound   compressed sections whose bound could not be read from the tag (the DB cannot fix those)
+Sky models are skipped (0.6.4): a sky never needs the scenery fix (it is not scenery; no lightmap occluder is built from it), so every render_model that a .sky
+tag reaches (sky -> .model -> .render_model, or a direct render_model reference) or that lives in a folder named 'sky' / 'skies' is left out of the scan, the
+database and the report; the report lists them under sky_excluded. With --scenario the scenario's own skies block (its .sky references) is read; a full scan reads
+every .sky tag under tags\\. --include-sky turns the skip off.
 First run (no named lines in SceneryFixDependencies.db, e.g. absent or a copy of the legacy file): the file is SEEDED from a
 full scan of every render_model under tags\\ ; --scenario then only decides which models are reported as 'added'.
 The legacy file is kept in step (models of the scanned set whose key+bound is not in it and does not clash with another bound
@@ -28,7 +32,7 @@ ever appended (existing lines stay byte-for-byte), via a temp file + os.replace.
 
 Usage:
   py scan_scenery_bounds.py <root> [--db SFD_PATH] [--legacy-db PATH] [--no-legacy] [--json OUT] [--apply]
-                            [--allow-conflicts] [--scenery-only] [--scenario tags-relative-scenario] [subdir ...]
+                            [--allow-conflicts] [--scenery-only] [--include-sky] [--scenario tags-relative-scenario] [subdir ...]
     <root>   the folder that CONTAINS tags\\ (the H2EK root; the hook reads <root>\\SceneryFixDependencies.db)
     --db     the SceneryFixDependencies.db to compare with / update (default <root>\\SceneryFixDependencies.db). A path whose
              file name is h2v_scenery_bounds.db is taken as --legacy-db (old callers) and the SFD file goes next to it.
@@ -169,6 +173,46 @@ def scenario_render_models(tags, scenario_rel):
     return sorted(rms), scen, bad
 
 
+SKY_DIRS = ('sky', 'skies')
+
+
+def is_sky_path(rel):
+    """True when a tags-relative path has a folder named exactly 'sky' or 'skies' (the stock layout: scenarios\\skies\\...)"""
+    parts = rel.replace('/', '\\').lower().split('\\')[:-1]
+    return any(p in SKY_DIRS for p in parts)
+
+
+def scenario_sky_tags(tags, scenario_rel):
+    """-> tags-relative .sky tags the scenario's skies block references (found as path strings, like scenario_render_models does)"""
+    srel = scenario_rel if scenario_rel.lower().endswith('.scenario') else scenario_rel + '.scenario'
+    try:
+        d = open(os.path.join(tags, srel), 'rb').read()
+    except OSError:
+        return []
+    return sorted(p + '.sky' for p in tag_path_strings(d) if os.path.isfile(os.path.join(tags, p + '.sky')))
+
+
+def sky_render_models(tags, sky_tag_rels):
+    """-> set of lowercase tags-relative .render_model paths that the given .sky tags use: sky -> .model -> .render_model, or a direct
+    .render_model reference"""
+    out = set()
+
+    def rd(rel):
+        try:
+            return open(os.path.join(tags, rel), 'rb').read()
+        except OSError:
+            return b''
+    for s in sky_tag_rels:
+        for p in tag_path_strings(rd(s)):
+            if os.path.isfile(os.path.join(tags, p + '.render_model')):
+                out.add((p + '.render_model').lower())
+            if os.path.isfile(os.path.join(tags, p + '.model')):
+                for q in tag_path_strings(rd(p + '.model')):
+                    if os.path.isfile(os.path.join(tags, q + '.render_model')):
+                        out.add((q + '.render_model').lower())
+    return out
+
+
 def canon(rel):
     """canonical model name the hook compares: tags-relative, lowercase, backslashes, no .render_model extension"""
     r = rel.replace('/', '\\').lower()
@@ -287,6 +331,7 @@ def main(argv):
     ap.add_argument('--apply', action='store_true')
     ap.add_argument('--allow-conflicts', action='store_true')    # kept for old callers (legacy file: append clashing keys anyway)
     ap.add_argument('--scenery-only', action='store_true')
+    ap.add_argument('--include-sky', action='store_true', help='also scan sky render_models (skipped by default: skies never need the scenery fix)')
     ap.add_argument('--scenario', help='tags-relative scenario path: scan only the render_models its scenery places')
     a = ap.parse_intermixed_args(argv)
     tags = os.path.join(a.root, 'tags')
@@ -315,10 +360,15 @@ def main(argv):
             res.append((rel, st, secs))
         return res
 
+    sky_tags = []                                                      # every .sky tag the walk met (tags-relative)
+
     def walk(roots):
         out = []
         for r in roots:
             for dirpath, _, files in os.walk(r):
+                for fn in files:
+                    if fn.lower().endswith('.sky'):
+                        sky_tags.append(os.path.relpath(os.path.join(dirpath, fn), tags))
                 if a.scenery_only and not any(f.lower().endswith('.scenery') for f in files):
                     continue
                 for fn in files:
@@ -342,11 +392,20 @@ def main(argv):
             rels += [r for r in walk([tags]) if r.lower() not in seen]
     else:
         rels = walk([os.path.join(tags, s) for s in a.subdirs] if a.subdirs else [tags])
+    sky_excluded = []
+    if not a.include_sky:
+        if a.scenario:
+            sky_tags = sorted(set(sky_tags) | set(scenario_sky_tags(tags, a.scenario)))
+        skyset = sky_render_models(tags, sky_tags)
+        keep = []
+        for r in rels:
+            (sky_excluded if (r.lower() in skyset or is_sky_path(r)) else keep).append(r)
+        rels = keep
     models = scan(rels)
 
     report = dict(root=a.root, db=sfd_path, legacy_db=None if a.no_legacy else legacy_path, db_lines=len(sfd.lines),
                   models=len(models), ok=[], missing=[], conflict=[], nobound=[], updated=[],
-                  nosec=[m[0] for m in models if m[1] != 'ok'], seeded=False)
+                  nosec=[m[0] for m in models if m[1] != 'ok'], seeded=False, sky_excluded=sorted(sky_excluded, key=str.lower))
     # key usage over the scan + the existing named lines: informational (the name resolves every one of these)
     key_models = {}
     for rel, st, secs in models:
@@ -451,6 +510,8 @@ def main(argv):
     print(f"  ok {len(report['ok'])}   missing/updated {len(report['missing'])}   true conflicts {len(report['conflict'])}   "
           f"no bound {len(report['nobound'])}   unparsed {len(report['nosec'])}   -> {len(add_sfd)} line(s) to add"
           f"   [{key_collisions} shared key(s) with different bounds, told apart by tag name]")
+    if sky_excluded:
+        print(f"  skipped {len(sky_excluded)} sky render_model(s): a sky never needs the scenery fix")
     for m in added_models[:60]:
         print(f"  NEW MODEL  {m}  (was not in our database)")
     if len(added_models) > 60:

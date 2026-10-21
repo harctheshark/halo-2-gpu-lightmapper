@@ -29,10 +29,16 @@ namespace H2GpuLightmapper.Tests
             yield return T("unit: after our install only the .scenario line is restamped; other changes keep warning", Restamp);
             yield return T("unit: history + Custom ETA scaling", HistoryEta);
             yield return T("unit: map-query result parsing", MapQueryParse);
+            yield return T("unit 0.6.4: cross-folder BSP picker: every structure_bsps entry by tag path, other folders labelled 'name  (from folder)', old engine keeps the beside-the-scenario list, ambiguity / missing tag notes, options (BspRel validation, summary, tag file)", CrossFolderPicker);
+            yield return T("unit 0.6.4: cross-folder BSP engine gate (gpu_bake.ps1 declares -WriterOnly and -ToolOverlay): new engine supported, older engine / Custom engine / no payload refused with the plain sentence", CrossFolderGate);
+            yield return T("unit 0.6.4: write-back fallback detector: the engine's three direct->tool lines (and a tool->direct one) are recognised, ordinary lines and the shell's own warning are not; warning + summary texts", FallbackDetect);
             yield return T("unit: review fixes: on-disk case, install-without-layer flags, the undo time rule, --probes-fallback", ReviewFixes);
             yield return T("unit: V6 --install-retries: parsing (ranges, needs an install) + the Retry answers (N yes, then no; a cancel ends the wait)", InstallRetries);
             yield return T("unit: X2 Keep PC responsive: unticked argv byte-identical, ticked = + -Responsive last on every gpu_bake argv (36 combinations), --responsive, labels", X2Responsive);
             yield return T("unit: W2 2004 Exact Vertex Lighting?: unticked argv byte-identical, ticked = + -ExactVertexLighting last on every gpu_bake argv (72 combinations, with and without -Responsive), --exact-vertex-lighting, labels", W2ExactVertex);
+            yield return T("unit: Scenery Multi Permutation Fix: unticked argv byte-identical, ticked = + -SceneryOwnPermutationOnly last on every gpu_bake argv (144 combinations), --scenery-permutation-fix, labels, summary", SceneryPermArgv);
+            yield return T("unit: Scenery Multi Permutation Fix engine gate: param-block parser (comments / strings / types), the real engines' param blocks, the payload gate (Super, Custom), disabled-when-unsupported", SceneryPermEngineGate);
+            yield return T("unit: Scenery Multi Permutation Fix capture identity: a capture is reusable only by a bake with the same setting (older records count as off; the probe capture never carries it)", SceneryPermCaptureIdentity);
             yield return T("unit: W2 run folder label (<= 20 chars), tagbak, and Undo / the Logs button keep working for OLD-style run folders (<ts>_<leaf>_<bsp>, tag_backup_before_writeback)", W2RunFolders);
             yield return T("unit: X2 live VRAM sizing: a normal desktop (<= 3 GiB held) = today's argv on every card; a game on top shrinks the parts with a note; gpucheck live figures", X2LiveVram);
             yield return T("unit: X2 TDR message: the three device-loss signatures -> the plain explanation (parser, log file, composition)", X2TdrMessage);
@@ -80,6 +86,159 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq("Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer.", BakeOptions.ResponsiveTip, "tooltip");
             Assert.Eq("2004 Exact Vertex Lighting?", BakeOptions.ExactVertexLightingLabel, "placeholder label");
             Assert.Eq("You likely don't need this, this is just to shut Harcs brain up", BakeOptions.ExactVertexLightingTip, "placeholder tooltip");
+        }
+
+        // ------------------------------------------------------------------ Scenery Multi Permutation Fix (Experimental Improvement)
+
+        private const string ScenerySwitch = "-SceneryOwnPermutationOnly";
+
+        private static void SceneryPermArgv()
+        {
+            var o = BakeOptions.Defaults(); o.ScenarioRel = @"scenarios\multi\cyclotron\cyclotron"; o.Bsp = "cyclotron";
+            Assert.Eq(false, o.SceneryPermutationFix, "default: unticked");
+            Assert.True(!o.Summary().Contains("permutation"), "unticked: the summary says nothing");
+            var six = GpuLimits.Compute(6L << 30, "t", 0);
+            int combos = 0;
+            foreach (var lim in new GpuLimits[] { null, GpuLimits.Compute(25310527488L, "t", 0), six })
+                foreach (bool wb in new[] { true, false })
+                    foreach (bool sc in new[] { true, false })
+                        foreach (var q in new[] { Quality.Low, Quality.Super, Quality.Custom })
+                            foreach (bool resp in new[] { false, true })
+                                foreach (bool evl in new[] { false, true })
+                                {
+                                    o.Quality = q; o.Photons = 20000000; o.Rays = 8; o.Responsive = resp; o.ExactVertexLighting = evl;
+                                    o.SceneryPermutationFix = false;
+                                    var off = BakePlanner.GpuBakeArgs(o, 200, wb, sc, lim);
+                                    Assert.True(!off.Contains(ScenerySwitch), "unticked: no " + ScenerySwitch);
+                                    o.SceneryPermutationFix = true;
+                                    var on = BakePlanner.GpuBakeArgs(o, 200, wb, sc, lim);
+                                    Assert.Seq(off.Concat(new[] { ScenerySwitch }).ToList(), on, "ticked = the unticked argv + " + ScenerySwitch + " LAST (wb " + wb + ", skip " + sc + ", " + q + ", resp " + resp + ", evl " + evl + ")");
+                                    combos++;
+                                }
+            Assert.Eq(144, combos, "144 argv combinations compared");
+            o.SceneryPermutationFix = false; o.ExactVertexLighting = false; o.Responsive = false; o.Quality = Quality.Super;
+            Assert.Seq(new[] { "-Scenario", @"scenarios\multi\cyclotron\cyclotron", "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-WriteBack", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct" },
+                       BakePlanner.GpuBakeArgs(o, 200, true, false), "unticked production argv (byte-identical to 0.6.3)");
+            o.SceneryPermutationFix = true; o.Responsive = true; o.ExactVertexLighting = true;
+            var all = BakePlanner.GpuBakeArgs(o, 200, true, false);
+            Assert.Seq(new[] { "-Responsive", "-ExactVertexLighting", ScenerySwitch }, all.Skip(all.Count - 3).ToList(), "after the other two Advanced options");
+            Assert.Contains(o.Summary(), "scenery multi permutation fix on", "the summary (plan + log header) says so");
+            // CLI
+            var a = P("--h2ek", @"C:\H2", "--scenario", "s", "--bsp", "b", "--scenery-permutation-fix");
+            var co = CliMain.BakeOptionsFrom(a);
+            Assert.Eq(0, a.Errors.Count, "no errors: " + string.Join("; ", a.Errors));
+            Assert.Eq(true, co.SceneryPermutationFix, "--scenery-permutation-fix");
+            Assert.True(!co.Responsive && !co.ExactVertexLighting, "independent of the other two");
+            Assert.Eq(false, CliMain.BakeOptionsFrom(P("--h2ek", @"C:\H2", "--scenario", "s", "--bsp", "b")).SceneryPermutationFix, "absent: off");
+            Assert.True(CliMain.Usage.Contains("--scenery-permutation-fix") && CliMain.Usage.Contains("Needs engine 0.6.4 or newer"), "the usage text lists the flag and the engine requirement");
+            // the window's texts, exactly
+            Assert.Eq("Scenery Multi Permutation Fix (Experimental Improvement)", BakeOptions.SceneryPermutationFixLabel, "label");
+            Assert.Eq("Needs engine 0.6.4 or newer.", BakeOptions.SceneryPermutationFixNeedsEngine, "suffix of the disabled tooltip");
+            Assert.Eq("SceneryOwnPermutationOnly", BakeOptions.SceneryPermutationFixSwitch, "the engine-side switch name");
+            Assert.Eq("Fallback for scenery that draws more than one shape from one tag, e.g. a rock whose shape changes when you move it, or a lifepod placed with a named variant like 'crashed'. "
+                      + "Only the shape the game actually draws casts shadows, ground hidden inside scenery is filled from its surroundings, and a variant's own pieces get lit instead of rendering black. "
+                      + "Differs from the 2004 tool on purpose. Most maps never need this: giving each shape its own scenery tag avoids the problem.", BakeOptions.SceneryPermutationFixTip, "tooltip");
+        }
+
+        private static string Script(params string[] lines) { return string.Join("\r\n", lines); }
+
+        private static void SceneryPermEngineGate()
+        {
+            Func<string, bool> decl = s => Core.Payload.EngineSwitches.DeclaresSwitch(s, "SceneryOwnPermutationOnly");
+            // declared, in the shapes real scripts use
+            Assert.True(decl(Script("param(", "  [string]$Scenario = \"\",", "  [switch]$SceneryOwnPermutationOnly,   # opt-in", "  [switch]$Responsive", ")", "Write-Host hi")), "declared");
+            Assert.True(decl(Script("[CmdletBinding()]", "param([switch] $sceneryownpermutationonly)")), "case-insensitive, space before the name, [CmdletBinding()] first");
+            Assert.True(decl(Script("PARAM (", "  [Parameter(Mandatory=$false)][System.Management.Automation.SwitchParameter]$SceneryOwnPermutationOnly", ")")), "attribute + full SwitchParameter type");
+            Assert.True(decl(Script("<# header mentioning param( and [switch]$Other #>", "param(", "  [switch]$SceneryOwnPermutationOnly", ")")), "a block comment above that mentions param( is skipped");
+            Assert.True(decl(Script("param(", "  [ValidateSet(\"low\",\"super\")][string]$Quality = \"super\",   # (nested parens) )", "  [switch]$SceneryOwnPermutationOnly", ")")), "nested parentheses and a ')' in a comment do not end the block early");
+            // NOT declared
+            Assert.True(!decl(Script("param(", "  [switch]$Responsive,", "  [switch]$ExactVertexLighting", ")")), "an older engine");
+            Assert.True(!decl(Script("param(", "  [switch]$Responsive   # SceneryOwnPermutationOnly arrives in 0.6.4: [switch]$SceneryOwnPermutationOnly", ")")), "named only in a comment");
+            Assert.True(!decl(Script("param(", "  [string]$Note = \"[switch]$SceneryOwnPermutationOnly\"", ")")), "named only inside a string");
+            Assert.True(!decl(Script("param(", "  [string]$SceneryOwnPermutationOnly", ")")), "declared, but not as a switch");
+            Assert.True(!decl(Script("param(", "  [switch]$SceneryOwnPermutationOnlyX", ")")), "a longer name is not the name");
+            Assert.True(!decl(Script("param(", "  [switch]$Responsive", ")", "function F { param([switch]$SceneryOwnPermutationOnly) }", "if ($SceneryOwnPermutationOnly) { }")), "a function's own param block / a later use does not count");
+            Assert.True(!decl(Script("$x = 1", "if ($SceneryOwnPermutationOnly) { 1 }")), "no param block at all");
+            Assert.True(!decl(""), "empty script");
+            Assert.True(!decl(null), "null script");
+            Assert.True(!decl(Script("param(", "  [switch]$SceneryOwnPermutationOnly")), "an unterminated param block fails closed");
+            // the real engines (read-only): production 0.6.3 has Responsive + ExactVertexLighting but not the new switch; the dev engine has it
+            string prod = Path.Combine(C.MineWork, @"engine_v373\gpu_bake.ps1");
+            if (File.Exists(prod))
+            {
+                string t = File.ReadAllText(prod);
+                Assert.True(Core.Payload.EngineSwitches.DeclaresSwitch(t, "Responsive") && Core.Payload.EngineSwitches.DeclaresSwitch(t, "ExactVertexLighting"), "production engine_v373 declares -Responsive and -ExactVertexLighting");
+                Assert.True(decl(t), "production engine_v373 (promoted to 0.6.4 on 2026-10-21) declares -SceneryOwnPermutationOnly");
+            }
+            string old063 = Path.Combine(C.MineWork, @"engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
+            if (File.Exists(old063))
+            {
+                string t = File.ReadAllText(old063);
+                Assert.True(Core.Payload.EngineSwitches.DeclaresSwitch(t, "Responsive") && Core.Payload.EngineSwitches.DeclaresSwitch(t, "ExactVertexLighting"), "the 0.6.3 engine (pre-promotion backup) declares -Responsive and -ExactVertexLighting");
+                Assert.True(!decl(t), "the 0.6.3 engine (pre-promotion backup) does NOT declare -SceneryOwnPermutationOnly");
+            }
+            string dev = Path.Combine(C.MineWork, @"_research\permself\dev_CO\gpu_bake.ps1");
+            if (File.Exists(dev)) Assert.True(decl(File.ReadAllText(dev)), "the dev_CO engine declares -SceneryOwnPermutationOnly");
+            else if (!File.Exists(prod)) throw new TestSkip("neither the production nor the dev_CO engine is on this PC");
+            // the payload gate (in-process: AppHost over the test payloads; nothing extracted, nothing started)
+            var good = AppHost.Create(new HostConfig { PayloadDir = C.PayloadDir });
+            Assert.True(good.HasPayload, "test payload loads: " + good.PayloadError);
+            var o = BakeOptions.Defaults();
+            Assert.Eq(null, good.SceneryPermutationFixWhy(o), "a payload whose engine_v373 declares it: supported");
+            var old = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_nosp"), sceneryEngine: false) });
+            string why = old.SceneryPermutationFixWhy(o);
+            Assert.True(why != null, "an older engine: not supported");
+            Assert.Contains(why, "Needs engine 0.6.4 or newer.", "the plain reason ends with the engine requirement");
+            Assert.Contains(why, "engine_v373/gpu_bake.ps1", "and names the engine file");
+            Assert.Contains(why, "-SceneryOwnPermutationOnly", "and the parameter");
+            // Custom runs engine_custom: that engine decides for Custom
+            var mixed = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_nosp_custom"), customEngine: true, customSceneryEngine: false) });
+            var oc = BakeOptions.Defaults(); oc.Quality = Quality.Custom;
+            Assert.Eq(null, mixed.SceneryPermutationFixWhy(BakeOptions.Defaults()), "Super: engine_v373 declares it");
+            string cwhy = mixed.SceneryPermutationFixWhy(oc);
+            Assert.True(cwhy != null && cwhy.Contains("engine_custom/gpu_bake.ps1") && cwhy.Contains("Needs engine 0.6.4 or newer."), "Custom: engine_custom lacks it -> refused, naming engine_custom: " + cwhy);
+            var both = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_sp_custom"), customEngine: true) });
+            Assert.Eq(null, both.SceneryPermutationFixWhy(oc), "Custom with a declaring engine_custom: supported");
+            // no payload at all: never supported
+            var none = AppHost.Create(new HostConfig { PayloadDir = Path.Combine(C.Sb.Dir("payload_empty")) });
+            Assert.True(!none.HasPayload && none.SceneryPermutationFixWhy(o) != null, "no payload: not supported");
+        }
+
+        private static void SceneryPermCaptureIdentity()
+        {
+            var sb = C.Sb.Dir("unit_reuse_scn");
+            string root = Path.Combine(sb, "H2");
+            Directory.CreateDirectory(Path.Combine(root, @"tags\scenarios\m\m"));
+            File.WriteAllText(Path.Combine(root, @"tags\scenarios\m\m\m.scenario"), "s");
+            var set = TagSet.For(root, @"scenarios\m\m\m", "m");
+            string farm = Path.Combine(sb, "farm_w200");
+            Directory.CreateDirectory(farm);
+            File.WriteAllText(Path.Combine(farm, "capture_id.json"), "{\"soup_crc32\": \"ABCD1234\"}");
+            Func<TagsFingerprint> tags = () => TagsFingerprint.Compute(root, set);
+            Func<bool, CaptureIdentity> id = scn => { var i = Id(); i.SceneryPermutationFix = scn; return i; };
+            Func<CaptureIdentity, ReuseVerdict> eval = want => CaptureRecord.Evaluate(farm, want, @"scenarios\m\m\m", "m", false, tags);
+            Assert.Eq(null, CaptureRecord.Write(farm, id(false), @"scenarios\m\m\m", "m", 200, "run1", tags(), DateTime.Now), "capture made without the option");
+            Assert.True(eval(id(false)).Allowed, "off -> off: reusable");
+            var r = eval(id(true));
+            Assert.True(!r.Allowed && r.Reason.Contains("made without") && r.Reason.Contains("Scenery Multi Permutation Fix"), "off -> on: refused, says why: " + r.Reason);
+            Assert.Eq(null, CaptureRecord.Write(farm, id(true), @"scenarios\m\m\m", "m", 200, "run2", tags(), DateTime.Now), "capture made WITH the option");
+            Assert.True(eval(id(true)).Allowed, "on -> on: reusable");
+            r = eval(id(false));
+            Assert.True(!r.Allowed && r.Reason.Contains("this bake has it off"), "on -> off: refused, says why: " + r.Reason);
+            Assert.Eq(true, CaptureRecord.Read(farm).Bool("sceneryPermutationFix"), "the record carries sceneryPermutationFix");
+            // an OLDER record (before this option existed) has no key: it counts as off
+            var j = CaptureRecord.Read(farm);
+            string text = File.ReadAllText(CaptureRecord.PathIn(farm));
+            File.WriteAllText(CaptureRecord.PathIn(farm), System.Text.RegularExpressions.Regex.Replace(text, "\"sceneryPermutationFix\"\\s*:\\s*(true|false),?", ""));
+            Assert.True(CaptureRecord.Read(farm) != null && !CaptureRecord.Read(farm).Has("sceneryPermutationFix"), "key removed from the record");
+            Assert.True(eval(id(false)).Allowed, "older record + off: reusable (old captures are not invalidated)");
+            Assert.True(!eval(id(true)).Allowed, "older record + on: refused");
+            // the identity a bake builds: the lightmap capture carries the option, the probe worker's own SKY_HI capture never does
+            var o = BakeOptions.Defaults(); o.SceneryPermutationFix = true;
+            Assert.Eq(true, CaptureIdentity.For(o, null, root, InstLayout.GpuBake, false).SceneryPermutationFix, "lightmap capture: on");
+            Assert.Eq(false, CaptureIdentity.For(o, null, root, InstLayout.GpuBake, true).SceneryPermutationFix, "probe capture (SKY_HI): never");
+            o.SceneryPermutationFix = false;
+            Assert.Eq(false, CaptureIdentity.For(o, null, root, InstLayout.GpuBake, false).SceneryPermutationFix, "off: off");
         }
 
         private static void W2ExactVertex()
@@ -449,7 +608,7 @@ namespace H2GpuLightmapper.Tests
         {
             var args = new[] { "--cli", "bake" }.Concat(a).ToArray();
             var x = CliArgs.Parse(args, 2, new HashSet<string> { "--h2ek", "--scenario", "--bsp", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback", "--worker", "--probe-worker" },
-                                  new HashSet<string> { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--dev-no-fixes", "--reuse-unrecorded" });
+                                  new HashSet<string> { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--dev-no-fixes", "--reuse-unrecorded" });
             return x;
         }
 
@@ -697,6 +856,135 @@ namespace H2GpuLightmapper.Tests
             Assert.Contains(basis, "scaled from the Super run", "basis");
             Assert.True(History.CustomEta(h, "s", "other", 1, 1, out basis) == null, "no super run -> unknown");
             Assert.Eq(50.0, History.PlainEta(h, "s", "b", "super").Value, "plain ETA = last finished");
+        }
+
+        private const string Tut = @"scenarios\solo\01a_tutorial", Spc = @"scenarios\solo\01b_spacestation";
+
+        private static void CrossFolderPicker()
+        {
+            string root = C.Sb.Dir("unit_xbsp");
+            Action<string> mk = rel => { string p = Path.Combine(root, "tags", rel); Directory.CreateDirectory(Path.GetDirectoryName(p)); File.WriteAllText(p, "x"); };
+            string scen = Spc + @"\01b_spacestation";
+            mk(scen + ".scenario");
+            mk(Spc + @"\01_bsp_2.scenario_structure_bsp");
+            mk(Spc + @"\01outro_bsp.scenario_structure_bsp");
+            mk(Tut + @"\01_bsp_0.scenario_structure_bsp");
+            mk(Tut + @"\01_bsp_1.scenario_structure_bsp");
+            var refs = new[] { Tut + @"\01_bsp_0", Tut + @"\01_bsp_1", Spc + @"\01_bsp_2", Spc + @"\01outro_bsp", Tut + @"\missing_bsp" };
+            List<string> notes;
+            // an engine that resolves the BSP from the scenario: every referenced BSP, other folders labelled
+            var c = MapQuery.BspChoices(root, scen, refs, null, out notes);
+            Assert.Seq(new[] { "01_bsp_0  (from " + Tut + ")", "01_bsp_1  (from " + Tut + ")", "01_bsp_2", "01outro_bsp" }, c.Select(x => x.Label).ToList(), "labels, in the scenario's order");
+            Assert.Seq(new[] { "01_bsp_0", "01_bsp_1", "01_bsp_2", "01outro_bsp" }, c.Select(x => x.Name).ToList(), "the plain name is what gpu_bake -Bsp gets");
+            Assert.Eq(Tut + @"\01_bsp_1", c[1].Rel, "the tag path of an other-folder BSP");
+            Assert.True(c[0].CrossFolder && c[1].CrossFolder && !c[2].CrossFolder && !c[3].CrossFolder && c[2].Rel == null, "beside-the-scenario entries carry no path (every pre-0.6.4 bake)");
+            Assert.Eq("01_bsp_1  (from scenarios\\solo\\01a_tutorial)", c[1].ToString(), "the exact label the user sees");
+            Assert.Eq(1, notes.Count, "one note: " + string.Join(" | ", notes));
+            Assert.Contains(notes[0], "missing_bsp", "the missing tag is named");
+            Assert.Contains(notes[0], "does not exist", "and said to be missing");
+            // an older engine: the pre-0.6.4 list (only a BSP file beside the scenario) + a plain note naming the others
+            var o = MapQuery.BspChoices(root, scen, refs, BakeOptions.CrossFolderBspNeedsEngine, out notes);
+            Assert.Seq(new[] { "01_bsp_2", "01outro_bsp" }, o.Select(x => x.Label).ToList(), "old engine: only the BSPs beside the scenario");
+            Assert.True(o.All(x => !x.CrossFolder), "no other-folder entry");
+            Assert.Eq(1, notes.Count, "one plain message");
+            Assert.Contains(notes[0], "3 BSP(s) in other folders", "counts the ones it cannot offer");
+            Assert.Contains(notes[0], "01_bsp_1 (" + Tut + ")", "names them with their folder");
+            Assert.Contains(notes[0], "needs engine 0.6.4 or newer", "and says what is needed");
+            // two entries with one name in different folders: the engine refuses them, so the picker does not offer them
+            mk(@"scenarios\solo\other\01_bsp_1.scenario_structure_bsp");
+            var amb = MapQuery.BspChoices(root, scen, refs.Concat(new[] { @"scenarios\solo\other\01_bsp_1" }), null, out notes);
+            Assert.True(!amb.Any(x => x.Name == "01_bsp_1"), "ambiguous name not offered");
+            Assert.True(notes.Any(n => n.Contains("2 structure_bsps entries named 01_bsp_1")), "and explained: " + string.Join(" | ", notes));
+            // no usable reference: the folder listing, as before
+            var folderList = MapQuery.Bsps(root, scen).ToArray();       // the folder listing's own order (ordinal, ignoring case)
+            Assert.Seq(new[] { "01_bsp_2", "01outro_bsp" }.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(), folderList, "the folder listing");
+            Assert.Seq(folderList, MapQuery.BspChoices(root, scen, null, null, out notes).Select(x => x.Label).ToList(), "no references: the folder listing");
+            Assert.Seq(folderList, MapQuery.BspChoices(root, scen, new[] { Tut + @"\missing_bsp" }, null, out notes).Select(x => x.Label).ToList(), "only a missing reference: the folder listing");
+            // a referenced BSP that is ALSO copied beside the scenario: the referenced one (other folder) is what is offered
+            mk(Spc + @"\01_bsp_1.scenario_structure_bsp");
+            var dup = MapQuery.BspChoices(root, scen, refs, null, out notes);
+            Assert.True(dup.Single(x => x.Name == "01_bsp_1").CrossFolder, "the copy beside the scenario does not hide the referenced BSP");
+
+            // the map query's JSON carries the references
+            var mi = MapQuery.Parse(new[] { "MAPQUERY {\"bsps\": [\"01_bsp_0\"], \"bspRefs\": [\"scenarios\\\\solo\\\\01a_tutorial\\\\01_bsp_0\", \"scenarios\\\\solo\\\\01a_tutorial\\\\01_bsp_1\"], \"points\": 0, \"pointsError\": null, \"ltmpExists\": false, \"envs\": null, \"groups\": null, \"envsError\": null}" }, 0, "");
+            Assert.True(mi.Ok, "ok");
+            Assert.Seq(new[] { Tut + @"\01_bsp_0", Tut + @"\01_bsp_1" }, mi.BspRefs, "bspRefs parsed, full paths");
+            Assert.Seq(new[] { "01_bsp_0" }, mi.Bsps, "bsps unchanged (leaf names)");
+            Assert.Eq(0, MapQuery.Parse(new[] { "MAPQUERY {\"bsps\": [], \"points\": 0, \"pointsError\": null, \"ltmpExists\": false}" }, 0, "").BspRefs.Count, "an old-format result has no refs");
+            Assert.Contains(MapQuery.Code, "out['bspRefs'].append", "the snippet collects the full tag paths");
+
+            // options
+            var bo = BakeOptions.Defaults(); bo.Root = root; bo.ScenarioRel = scen; bo.Bsp = "01_bsp_1";
+            Assert.Eq(0, bo.Validate(true).Count, "no BspRel: valid");
+            Assert.Eq(null, bo.BspRel, "default: beside the scenario");
+            Assert.Eq(Path.Combine(root, "tags", Spc, "01_bsp_1.scenario_structure_bsp"), bo.BspTagFile(Path.Combine(root, "tags", Spc)), "no BspRel: the file beside the scenario");
+            bo.BspRel = Tut + @"\01_bsp_1";
+            Assert.Eq(0, bo.Validate(true).Count, "an other-folder BSP path: valid");
+            Assert.Eq(Path.Combine(root, "tags", Tut, "01_bsp_1.scenario_structure_bsp"), bo.BspTagFile(Path.Combine(root, "tags", Spc)), "BspRel: that tag");
+            Assert.Contains(bo.Summary(), "BSP from " + Tut, "the options line says where the BSP is");
+            Assert.True(!BakeOptions.Defaults().Summary().Contains("BSP from"), "default: nothing said");
+            bo.BspRel = @"..\x\01_bsp_1"; Assert.True(bo.Validate(true).Any(e => e.Contains("not a plain tags-relative path")), "leaving the tags folder is refused");
+            bo.BspRel = Tut + @"\other"; Assert.True(bo.Validate(true).Any(e => e.Contains("does not end in the BSP name")), "the path must end in the BSP name");
+            bo.BspRel = @"C:\x\01_bsp_1"; Assert.True(bo.Validate(true).Count > 0, "a rooted path is refused");
+            Assert.Eq(Tut, BakeOptions.BspFolder(Tut + @"\01_bsp_1"), "BspFolder");
+            Assert.Eq("", BakeOptions.BspFolder("01_bsp_1"), "BspFolder of a bare name");
+        }
+
+        private static void CrossFolderGate()
+        {
+            var good = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_xbsp_gate"), crossBspEngine: true) });
+            Assert.True(good.HasPayload, "payload loads: " + good.PayloadError);
+            var o = BakeOptions.Defaults();
+            Assert.Eq(null, good.CrossFolderBspWhy(o), "an engine whose gpu_bake.ps1 declares -WriterOnly and -ToolOverlay: supported");
+            var old = AppHost.Create(new HostConfig { PayloadDir = C.PayloadDir });
+            string why = old.CrossFolderBspWhy(o);
+            Assert.True(why != null, "the default (0.6.3-shaped) test engine: not supported");
+            Assert.Contains(why, BakeOptions.CrossFolderBspNeedsEngine, "ends with the plain requirement");
+            Assert.Contains(why, "Baking a BSP from another folder needs engine 0.6.4 or newer.", "the exact sentence");
+            Assert.Contains(why, "engine_v373/gpu_bake.ps1", "names the engine file");
+            Assert.Contains(why, "-WriterOnly", "and the missing parameter");
+            // Custom runs engine_custom: that engine decides for Custom
+            var cust = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_xbsp_gate_c"), customEngine: true, crossBspEngine: true) });
+            var oc = BakeOptions.Defaults(); oc.Quality = Quality.Custom;
+            Assert.Eq(null, cust.CrossFolderBspWhy(oc), "Custom with a declaring engine_custom: supported");
+            var none = AppHost.Create(new HostConfig { PayloadDir = Path.Combine(C.Sb.Dir("payload_xbsp_gate_none")) });
+            Assert.True(!none.HasPayload && none.CrossFolderBspWhy(o) != null, "no payload: not supported");
+            // the BSP selection is the only thing it gates: Compatibility mode and the Scenery fix gates are independent
+            Assert.Eq(null, good.SceneryPermutationFixWhy(o), "independent of the scenery gate");
+            Assert.True(good.CompatEngineWhy(o) != null, "independent of the compat gate (this payload has no compat engine)");
+        }
+
+        private static void FallbackDetect()
+        {
+            // the exact texts of engine 0.6.4 gpu_bake.ps1 (all printed by its Note function as "      *** <text>")
+            var a = WriteBackFallback.Detect("      *** direct tag writer FAILED -- falling back to the tool write-back: PHASE 4a: the skeleton tool run failed (exit 1)");
+            Assert.True(a != null && a.Direction == FallbackDirection.DirectToTool && !a.HeadsUp, "FAILED -- falling back: direct -> tool, an actual fallback");
+            Assert.Eq("PHASE 4a: the skeleton tool run failed (exit 1)", a.Why, "the engine's reason");
+            var b = WriteBackFallback.Detect(@"      *** -WriteBackMode direct cannot run: C:\x\v043-tagwriter\lm_tagwriter.py; a py with numpy -- using -WriteBackMode tool");
+            Assert.True(b != null && b.Direction == FallbackDirection.DirectToTool && !b.HeadsUp, "cannot run -- using tool: direct -> tool");
+            Assert.Eq(@"C:\x\v043-tagwriter\lm_tagwriter.py; a py with numpy", b.Why, "the missing pieces");
+            var h = WriteBackFallback.Detect("      *** tag writer: the skeleton run did not start (boom) -- phase 4a will fall back");
+            Assert.True(h != null && h.HeadsUp && h.Direction == FallbackDirection.DirectToTool && h.Why == "boom", "the heads-up before the fallback");
+            Assert.True(h.Key != a.Key, "a heads-up and the fallback are different warnings");
+            var r = WriteBackFallback.Detect("      *** falling back to the direct tag writer: tool write-back refused");
+            Assert.True(r != null && r.Direction == FallbackDirection.ToolToDirect, "the opposite direction is recognised too");
+            // not fallbacks
+            Assert.True(WriteBackFallback.Detect("      *** tag writer FAILED: fake skeleton refused") == null, "a stage-only writer failure has no fallback");
+            Assert.True(WriteBackFallback.Detect("[4] WRITE-BACK - inject the GPU lighting into the tool and let it save the tag") == null, "a phase banner");
+            Assert.True(WriteBackFallback.Detect("      *** GPULM_COMPAT=1: the FP32-only double-single (df64) kernel set is FORCED") == null, "another note");
+            Assert.True(WriteBackFallback.Detect("") == null && WriteBackFallback.Detect(null) == null && WriteBackFallback.Detect("   ") == null, "empty");
+            // the shell's own warning is never detected again (its reason text can contain the engine's phrase)
+            string w = WriteBackFallback.WarningText(a);
+            Assert.True(w.StartsWith("WARNING: the lightmap write-back fell back from the DIRECT tag writer to the older TOOL write-back", StringComparison.Ordinal), "warning text: " + w);
+            Assert.Contains(w, "PHASE 4a: the skeleton tool run failed (exit 1)", "carries the engine's reason");
+            Assert.Contains(w, "ambient occlusion and light probes are not applied by this path", "says what it means");
+            Assert.True(WriteBackFallback.Detect("*** " + w) == null && WriteBackFallback.Detect(w) == null, "own warning ignored");
+            var self = new FallbackInfo { Direction = FallbackDirection.DirectToTool, Why = "direct tag writer FAILED -- falling back to the tool write-back: x" };
+            Assert.True(WriteBackFallback.Detect("*** " + WriteBackFallback.WarningText(self)) == null, "even when the reason contains the phrase");
+            Assert.Contains(WriteBackFallback.WarningText(h), "is about to fall back", "heads-up wording");
+            Assert.Contains(WriteBackFallback.WarningText(r), "fell back from the TOOL write-back to the DIRECT tag writer", "reverse wording");
+            Assert.Eq("WARNING: the write-back fell back from the DIRECT tag writer to the TOOL write-back (PHASE 4a: the skeleton tool run failed (exit 1))", WriteBackFallback.SummaryText(a), "summary sentence");
+            Assert.Eq("WARNING: the write-back fell back from the TOOL write-back to the DIRECT tag writer (tool write-back refused)", WriteBackFallback.SummaryText(r), "reverse summary");
         }
 
         private static void MapQueryParse()

@@ -37,6 +37,8 @@ namespace H2GpuLightmapper.Core.Preflight
         public GpuCheckResult Gpu;
         /// <summary>gpucheck_plain on a hybrid PC (null otherwise).</summary>
         public GpuCheckResult GpuPlain;
+        /// <summary>Which kernel set the bake will run on this GPU (Unknown when the GPU was not checked or was refused).</summary>
+        public PrecisionMode Precision;
         public bool Ok { get { return !Items.Any(i => i.Level == CheckLevel.Fail); } }
         public IEnumerable<PreflightItem> Failures { get { return Items.Where(i => i.Level == CheckLevel.Fail); } }
         public PreflightItem Get(string id) { return Items.FirstOrDefault(i => i.Id == id); }
@@ -52,7 +54,8 @@ namespace H2GpuLightmapper.Core.Preflight
         {
             var a = Items.Select(i => (object)new JObj().Add("id", i.Id).Add("level", i.Level.ToString().ToLowerInvariant()).Add("message", i.Message).Add("detail", i.Detail)).ToList();
             return Json.Write(new JObj().Add("root", Root).Add("work", Work).Add("ok", Ok).Add("tool", Tool == null ? null : Tool.StatusLine)
-                .Add("slotBase", SlotPlan == null ? null : SlotPlan.SlotBase).Add("gpu", Gpu == null ? null : Gpu.Line).Add("items", a), true);
+                .Add("slotBase", SlotPlan == null ? null : SlotPlan.SlotBase).Add("gpu", Gpu == null ? null : Gpu.Line)
+                .Add("precision", Precision == PrecisionMode.Unknown ? null : GpuCheck.PrecisionText(Precision, true)).Add("items", a), true);
         }
     }
 
@@ -90,6 +93,10 @@ namespace H2GpuLightmapper.Core.Preflight
         public string GpuCheckPlainExe;
         public string GpuCheckPlainJson;
         public int GpuCheckPlainExitCode;
+        /// <summary>Compatibility mode (DF64): the engine this bake runs has it (its gpu_bake.ps1 validates GPULM_COMPAT; see
+        /// EngineSwitches.ReadsEnvVar). True: a GPU without FP64 is accepted and runs the FP32-only kernels. False (default; every engine up to
+        /// 0.6.3): a GPU without FP64 is refused in plain words (<see cref="GpuCheck.NoFp64Plain"/>).</summary>
+        public bool CompatEngine;
         /// <summary>The bake's fullgpu carries the NvOptimus / AmdPowerXpress exports (the N3 guarded Custom engine): the plain
         /// verdict on a hybrid PC is then advice only. Default false: Low / Super run the production fullgpu without them.</summary>
         public bool FullgpuSelectsDgpu;
@@ -157,21 +164,29 @@ namespace H2GpuLightmapper.Core.Preflight
 
             // ---- runtime checks that start processes (all hidden)
             if (o.RunToolSmoke && rep.Tool.Verdict == ToolVerdict.Supported) ToolSmoke(rep, o);
-            if (o.GpuCheckJson != null) AddGpu(rep, GpuCheck.Parse(o.GpuCheckJson, o.GpuCheckExitCode));
-            else if (o.GpuCheckExe != null) AddGpu(rep, GpuCheck.Run(o.GpuCheckExe));
+            if (o.GpuCheckJson != null) AddGpu(rep, GpuCheck.Parse(o.GpuCheckJson, o.GpuCheckExitCode), o.CompatEngine);
+            else if (o.GpuCheckExe != null) AddGpu(rep, GpuCheck.Run(o.GpuCheckExe), o.CompatEngine);
             if (rep.Gpu != null && rep.Gpu.Ok && rep.Gpu.Hybrid && (o.GpuCheckPlainJson != null || o.GpuCheckPlainExe != null))
             {
                 var plain = o.GpuCheckPlainJson != null ? GpuCheck.Parse(o.GpuCheckPlainJson, o.GpuCheckPlainExitCode) : GpuCheck.Run(o.GpuCheckPlainExe);
                 rep.GpuPlain = plain;
-                if (plain.Raw != null && !plain.Ok)
+                // Compatibility mode: a plain adapter without FP64 is only acceptable when the adapter the exports pick has none either (then
+                // both run the DF64 kernels). When the discrete GPU has FP64 and Windows would hand the export-less fullgpu the iGPU without
+                // it, the bake would silently run slowly in Compatibility mode on the weaker GPU: that stays the Graphics settings refusal.
+                bool plainNoFp64 = plain.Raw != null && GpuCheck.NoFp64(plain);
+                bool bothNoFp64 = plainNoFp64 && o.CompatEngine && rep.Gpu.CompatAccepted;
+                if (bothNoFp64) { plain.Ok = true; plain.CompatAccepted = true; plain.Notes.AddRange(plain.Reasons); plain.Reasons.Clear(); }
+                if (plain.Raw != null && (!plain.Ok || (plainNoFp64 && !bothNoFp64)))
                 {
                     // review fix (finding 17): Low and Super run the PRODUCTION fullgpu, which has no NvOptimusEnablement /
                     // AmdPowerXpressRequestHighPerformance exports -- exactly like gpucheck_plain. Its verdict is therefore the one
                     // that decides (FAIL), unless the bake runs an fullgpu with the exports (the N3 guarded Custom engine). gpu_bake
                     // copies fullgpu into each worker folder and runs it from there, and Windows keys the preference by exe path.
                     string farms = Path.Combine(rep.Work, "farm_w2NN", "fullgpu.exe");
+                    string plainWhy = plainNoFp64 ? GpuCheck.Fp64Detail(plain) + (o.CompatEngine ? "; the bake would run slowly in Compatibility mode on it instead of on the discrete GPU" : "")
+                                                  : string.Join("; ", plain.Reasons);
                     string msg = "This PC has two GPUs and Windows gives programs without a GPU preference the " + (plain.DefaultAdapter ?? "other adapter")
-                        + ", which cannot run the lightmapper (" + string.Join("; ", plain.Reasons) + "). The bake runs fullgpu.exe from its worker folder ("
+                        + ", which cannot run the lightmapper (" + plainWhy + "). The bake runs fullgpu.exe from its worker folder ("
                         + farms + ", e.g. " + Path.Combine(rep.Work, "farm_w200", "fullgpu.exe") + "). Open Windows Settings > System > Display > Graphics, add the fullgpu.exe of every "
                         + "farm_w2NN folder this app uses (the bake names the exact path) and choose 'High performance'. (The app never changes this setting.)";
                     if (o.FullgpuSelectsDgpu) rep.Add("gpu.hybrid", CheckLevel.Info, "two GPUs; this bake's fullgpu carries the high-performance GPU exports, so Windows gives it the discrete GPU", plain.Line);
@@ -327,16 +342,21 @@ namespace H2GpuLightmapper.Core.Preflight
             catch (Exception e) { rep.Add("tool.smoke", CheckLevel.Fail, "tool_fast.exe could not be started: " + e.Message); }
         }
 
-        private static void AddGpu(PreflightReport rep, GpuCheckResult g)
+        private static void AddGpu(PreflightReport rep, GpuCheckResult g, bool compatEngine)
         {
             rep.Gpu = g;
             if (!g.Ran || g.Raw == null) { rep.Add("gpu", CheckLevel.Warn, "the GPU check could not run" + (g.Error != null ? ": " + g.Error : "")); return; }
+            // Compatibility mode (DF64): decided from the adapter's own FP64 fields, so it holds for gpucheck 1.2.0 (verdict ok + compat_mode) and for
+            // an older gpucheck (verdict not ok, FP64 reasons only) alike. An engine WITHOUT the mode keeps the plain refusal in both cases.
+            rep.Precision = GpuCheck.ApplyEngine(g, compatEngine);
             if (!g.Ok)
             {
                 rep.Add("gpu", CheckLevel.Fail, GpuCheck.RefusalText(g), g.Line);
                 return;
             }
             rep.Add("gpu", CheckLevel.Ok, g.Line);
+            if (rep.Precision == PrecisionMode.Compat) rep.Add("gpu.precision", CheckLevel.Info, GpuCheck.PrecisionCompat, string.Join("; ", g.Notes));
+            else rep.Add("gpu.precision", CheckLevel.Info, GpuCheck.PrecisionFull);
             foreach (var a in g.Advice) rep.Add("gpu.advice", CheckLevel.Warn, a + " (advice only; the app never changes system settings)");
         }
 

@@ -53,6 +53,9 @@ namespace H2GpuLightmapper.Pipeline
         public int? AssumeVramMB;
         /// <summary>--dry-run only (X2): video memory in MiB that other programs are assumed to hold (a real run measures it with gpucheck).</summary>
         public int? AssumeOtherVramUseMB;
+        /// <summary>--dry-run only (Compatibility mode): plan as if the GPU had no FP64 (a real run asks gpucheck). On an engine without Compatibility mode
+        /// that is the plain no-FP64 refusal, exactly as a real run on such a GPU.</summary>
+        public bool AssumeNoFp64;
         public TimeSpan LockWait = TimeSpan.FromMinutes(240);
         public TimeSpan LockPoll = TimeSpan.FromSeconds(20);
         /// <summary>Dev: another file whose appearance requests a cancel (besides RUN\cancel.request).</summary>
@@ -104,10 +107,50 @@ namespace H2GpuLightmapper.Pipeline
         /// Verify compares the live set with OUT\tagw_stage only when this run's direct writer wrote one.</summary>
         private bool _productionWriteBack;
         private string _productionWriteBackWhy;
+        /// <summary>0.6.4 cross-folder BSP: the BSP's tag path is still to be taken from the scenario's structure_bsps (non-dry: right after the map query).</summary>
+        private bool _bspFromScenario;
+        /// <summary>0.6.4: the engine's own write-back fallbacks seen in this run (see <see cref="WriteBackFallback"/>), one entry per distinct warning.</summary>
+        private readonly List<FallbackInfo> _fallbackSeen = new List<FallbackInfo>();
+
+        /// <summary>The run-summary sentences for the write-back fallbacks this run saw ("WARNING: the write-back fell back from the DIRECT tag writer to
+        /// the TOOL write-back (reason)"): the fallbacks that happened; a heads-up only when its fallback line never followed.</summary>
+        public IList<string> WriteBackFallbacks
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    var r = new List<string>();
+                    foreach (var f in _fallbackSeen.Where(x => !x.HeadsUp)) r.Add(WriteBackFallback.SummaryText(f));
+                    foreach (var f in _fallbackSeen.Where(x => x.HeadsUp))
+                        if (!_fallbackSeen.Any(x => !x.HeadsUp && x.Direction == f.Direction)) r.Add(WriteBackFallback.SummaryText(f));
+                    return r;
+                }
+            }
+        }
+
+        /// <summary>0.6.4: an engine output line (or the shell's own fallback) that is a write-back fallback becomes a visible warning in the log -- once per
+        /// kind -- and is remembered for the run summary.</summary>
+        private void NoteWriteBackFallback(BakeRun run, string text)
+        {
+            var f = WriteBackFallback.Detect(text);
+            if (f == null) return;
+            lock (_lock)
+            {
+                if (_fallbackSeen.Any(x => x.Key == f.Key)) return;
+                _fallbackSeen.Add(f);
+            }
+            try { run.Warn(WriteBackFallback.WarningText(f)); } catch (Exception) { }
+        }
         /// <summary>The live tags were written by this run (the shell's install, or gpu_bake -WriteBack's [4b] / [4]).</summary>
         private bool _installed;
         private readonly List<RecoveryItem> _markers = new List<RecoveryItem>();
         private PreflightItem _hybridFail;
+        /// <summary>Compatibility mode (DF64): every engine this bake runs has it (gpu_bake.ps1 validates GPULM_COMPAT); the kernel set the bake runs
+        /// (Unknown = decided by the GPU at run time); and fullgpu's own "Compatibility mode" line as the engine reported it.</summary>
+        private bool _engineHasCompat;
+        private PrecisionMode _precision;
+        private string _engineCompatLine;
 
         public BakeSession(AppHost host, BakeOptions o, SessionOptions so = null)
         {
@@ -119,6 +162,8 @@ namespace H2GpuLightmapper.Pipeline
         public BakeRun Run { get; private set; }
         public int ExitCode { get; private set; } = -1;
         public string Reason { get; private set; }
+        /// <summary>The run summary's precision line (after the run): "Precision: Full FP64" / the Compatibility-mode sentence, + the engine's own line when it printed one.</summary>
+        public string PrecisionSummary { get; private set; }
         public PreflightReport Preflight { get { return _pf; } }
 
         /// <summary>Messages before the run folder exists (and replayed into bake.log once it does).</summary>
@@ -171,6 +216,50 @@ namespace H2GpuLightmapper.Pipeline
 
         private void Refuse(string m) { throw new RefusedException(m); }
 
+        /// <summary>0.6.4 cross-folder BSP: the lightmap is what engine 0.6.4 verifies for a BSP in another folder (its skeleton, direct writer and tool
+        /// write-back overlay). The AO trace and the light-probe pipeline read the BSP by name from the scenario's folder, so for such a BSP they are refused.</summary>
+        private void RefuseCrossFolderLayers()
+        {
+            if (_o.BspRel == null) return;
+            if (_o.Ao || _o.Mode == BakeMode.Probes || BakePlanner.NeedsProbes(_o, _points)) Refuse(BakeOptions.CrossFolderBspNoAoProbes);
+        }
+
+        /// <summary>0.6.4: the map query listed the scenario's structure_bsps. The BSP named <c>_o.Bsp</c> is the entry whose tag path ends in that name -- in
+        /// the scenario's folder or in ANOTHER one (<c>_o.BspRel</c> is then set, and gpu_bake is given the same plain name: engine 0.6.4 resolves the file the
+        /// same way, lmw_skeleton.py resolve-bsp). Two entries with that name are refused (the engine refuses them too). No entry: a BSP file beside the
+        /// scenario is the old behaviour, else nothing to bake.</summary>
+        private void ResolveBspFromScenario(MapInfo m)
+        {
+            string scenFolder = BakeOptions.BspFolder(_o.ScenarioRel);
+            var hits = new List<string>();
+            foreach (var raw in m.BspRefs)
+            {
+                string p = (raw ?? "").Replace('/', '\\').Trim('\\');
+                if (p.Length == 0 || !string.Equals(p.Substring(p.LastIndexOf('\\') + 1), _o.Bsp, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!hits.Contains(p, StringComparer.OrdinalIgnoreCase)) hits.Add(p);
+            }
+            string beside = Path.Combine(_set.TagDir, _o.Bsp + ".scenario_structure_bsp");
+            if (hits.Count > 1) Refuse("the scenario has " + hits.Count + " structure_bsps entries named " + _o.Bsp + " (" + string.Join(", ", hits.Select(BakeOptions.BspFolder)) + "): the engine cannot tell them apart");
+            if (hits.Count == 1)
+            {
+                string rel = hits[0], file = Path.Combine(_root, "tags", rel + ".scenario_structure_bsp");
+                if (File.Exists(file))
+                {
+                    string leaf = BakeOptions.CanonicalBsp(Path.GetDirectoryName(file), _o.Bsp) ?? _o.Bsp;
+                    if (leaf != _o.Bsp) { Say("  BSP name as on disk: " + leaf + " (given: " + _o.Bsp + ")"); _o.Bsp = leaf; _set = TagSet.For(_root, _o.ScenarioRel, _o.Bsp); }
+                    if (string.Equals(BakeOptions.BspFolder(rel), scenFolder, StringComparison.OrdinalIgnoreCase)) { _o.BspRel = null; return; }
+                    _o.BspRel = BakeOptions.BspFolder(rel) + "\\" + leaf;
+                    Say("  BSP tag (from the scenario's structure_bsps): " + _o.BspRel + " -- in another folder than the scenario; the lightmap tags are named and written beside the scenario");
+                    if (File.Exists(beside)) Say("  *** a file " + _o.Bsp + ".scenario_structure_bsp is ALSO beside the scenario; the scenario does not reference it, so it is ignored (the engine bakes the referenced BSP)");
+                    RefuseCrossFolderLayers();
+                    return;
+                }
+                if (!File.Exists(beside)) Refuse("the scenario references the BSP " + rel + " but that tag does not exist");
+                Say("  *** the scenario references " + rel + " which does not exist; using the file beside the scenario (as the engine does)");
+            }
+            if (!File.Exists(beside)) Refuse("no BSP tag " + beside + ": the scenario's structure_bsps block has no BSP named " + _o.Bsp + (m.Bsps.Count > 0 ? " (it lists: " + string.Join(", ", m.Bsps) + ")" : ""));
+        }
+
         private void Prepare()
         {
             bool dry = _so.DryRun;
@@ -183,6 +272,18 @@ namespace H2GpuLightmapper.Pipeline
             // review fix (finding 16): Custom only on the N3 guarded fullgpu unless explicitly allowed unguarded
             if (_o.Quality == Quality.Custom && BakePlanner.GpuBakeRel(_o, _host.Manifest) == InstLayout.GpuBake && !_host.CustomUnguardedAllowed)
                 Refuse("Custom quality needs the N3 guarded fullgpu (engine_custom), which this payload does not carry -- without it a photon count past the uint32 limit wraps silently; dev: --dev-custom-unguarded");
+            // "Scenery Multi Permutation Fix": only an engine whose gpu_bake.ps1 declares -SceneryOwnPermutationOnly may be given it -- PowerShell fails a
+            // bake that is passed an unknown parameter, so this is refused up front (dry runs too), never passed on
+            if (_o.SceneryPermutationFix)
+            {
+                string sw = _host.SceneryPermutationFixWhy(_o);
+                if (sw != null) Refuse(sw);
+            }
+            // Compatibility mode (DF64): the engines this bake runs either all validate GPULM_COMPAT or the GPU must have FP64. --force-compat is
+            // refused on an engine without it (dry runs too): GPULM_COMPAT is never passed to an engine that does not validate it.
+            string compatWhy = _host.CompatEngineWhy(_o);
+            _engineHasCompat = compatWhy == null;
+            if (_o.ForceCompat && compatWhy != null) Refuse("--force-compat is not available: " + compatWhy);
             // review fix (finding 15): AO only when the payload proved the AO trace engine matches the lightmap engine
             string aoWhy;
             if (_o.Ao && !_host.AoEnabled(out aoWhy)) Refuse("ambient occlusion is not available: " + aoWhy);
@@ -209,14 +310,46 @@ namespace H2GpuLightmapper.Pipeline
             _o.ScenarioRel = rel;
             _set = TagSet.For(_root, rel, _o.Bsp);
             if (!File.Exists(_set.ScenarioFile)) Refuse("no scenario tag " + _set.ScenarioFile);
-            string bspFile = Path.Combine(_set.TagDir, _o.Bsp + ".scenario_structure_bsp");
-            if (!File.Exists(bspFile))
+            // 0.6.4 cross-folder BSP: the BSP's tag may live in ANOTHER folder than the scenario (01b_spacestation -> 01a_tutorial\01_bsp_1). Only an engine whose
+            // gpu_bake.ps1 resolves it from the scenario's structure_bsps (AppHost.CrossFolderBspWhy) may be given one; an older engine keeps the beside-the-scenario rule.
+            string crossWhy = _host.CrossFolderBspWhy(_o);
+            if (_o.BspRel != null)
             {
-                var have = MapQuery.Bsps(_root, rel);
-                Refuse("no BSP tag " + bspFile + (have.Count > 0 ? " (this scenario's folder has: " + string.Join(", ", have) + ")" : ""));
+                if (crossWhy != null) Refuse("the BSP " + _o.Bsp + " is the tag " + _o.BspRel + " (another folder than the scenario): " + crossWhy);
+                string otherFile = _o.BspTagFile(_set.TagDir);
+                if (!File.Exists(otherFile)) Refuse("no BSP tag " + otherFile);
+                string otherCanon = BakeOptions.CanonicalBsp(Path.GetDirectoryName(otherFile), _o.Bsp);
+                if (otherCanon != null && otherCanon != _o.Bsp)
+                {
+                    Say("  BSP name as on disk: " + otherCanon + " (given: " + _o.Bsp + ")");
+                    _o.BspRel = BakeOptions.BspFolder(_o.BspRel) + "\\" + otherCanon; _o.Bsp = otherCanon; _set = TagSet.For(_root, rel, _o.Bsp);
+                }
+                Say("  BSP tag: " + _o.BspRel + " -- in another folder than the scenario; the lightmap tags are named and written beside the scenario");
+                RefuseCrossFolderLayers();
             }
-            string bspCanon = BakeOptions.CanonicalBsp(_set.TagDir, _o.Bsp);
-            if (bspCanon != null && bspCanon != _o.Bsp) { Say("  BSP name as on disk: " + bspCanon + " (given: " + _o.Bsp + ")"); _o.Bsp = bspCanon; _set = TagSet.For(_root, rel, _o.Bsp); }
+            else
+            {
+                string bspFile = Path.Combine(_set.TagDir, _o.Bsp + ".scenario_structure_bsp");
+                if (!File.Exists(bspFile))
+                {
+                    if (crossWhy == null)
+                    {
+                        _bspFromScenario = true;      // not beside the scenario: its tag path comes from the scenario's structure_bsps block (the map query, below)
+                        Say("  BSP " + _o.Bsp + " is not beside the scenario: its tag is looked up in the scenario's structure_bsps block");
+                    }
+                    else
+                    {
+                        var have = MapQuery.Bsps(_root, rel);
+                        Refuse("no BSP tag " + bspFile + (have.Count > 0 ? " (this scenario's folder has: " + string.Join(", ", have) + ")" : "") + ". If the scenario's BSP lives in another folder: " + crossWhy);
+                    }
+                }
+                else
+                {
+                    string bspCanon = BakeOptions.CanonicalBsp(_set.TagDir, _o.Bsp);
+                    if (bspCanon != null && bspCanon != _o.Bsp) { Say("  BSP name as on disk: " + bspCanon + " (given: " + _o.Bsp + ")"); _o.Bsp = bspCanon; _set = TagSet.For(_root, rel, _o.Bsp); }
+                    _bspFromScenario = crossWhy == null;     // a copy beside the scenario must be the BSP the scenario references (checked after the map query)
+                }
+            }
             _work = ShellPaths.WorkOf(_root);
             string bad = PathTextProblem(_root);
             if (bad != null) Refuse(bad);
@@ -297,10 +430,11 @@ namespace H2GpuLightmapper.Pipeline
                     AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot, AllowDriveRoot = _driveRootOk,
                     GpuCheckExe = gpu ? _rt.GpuCheckExe : null,
                     GpuCheckPlainExe = gpu ? InstLayout.FindByName(inst, _rt.InstDir, InstLayout.GpuCheckPlain) : null,
-                    PwshExe = _rt.PwshExe, PwshEnv = _env, FullgpuSelectsDgpu = dgpuExports,
+                    PwshExe = _rt.PwshExe, PwshEnv = _env, FullgpuSelectsDgpu = dgpuExports, CompatEngine = _engineHasCompat,
                 });
                 gpuRes = pf2.Gpu;
-                foreach (var id in new[] { "gpu", "gpu.advice", "gpu.hybrid", "pwsh.policy" })
+                if (pf2.Precision != PrecisionMode.Unknown) _precision = pf2.Precision;
+                foreach (var id in new[] { "gpu", "gpu.precision", "gpu.advice", "gpu.hybrid", "pwsh.policy" })
                 {
                     var it = pf2.Get(id);
                     if (it != null) Say("    " + it);
@@ -316,6 +450,15 @@ namespace H2GpuLightmapper.Pipeline
                 }
             }
             CheckCancel();
+
+            // ---- Compatibility mode (DF64): which kernel set this bake runs. The engine chooses by the GPU itself; this is only what the log and the plan say.
+            if (dry && _so.AssumeNoFp64)
+            {
+                if (!_engineHasCompat) Refuse(GpuCheck.NoFp64Plain + " (dry run with --assume-no-fp64; " + compatWhy + ")");
+                _precision = PrecisionMode.Compat;
+            }
+            if (_o.ForceCompat) _precision = PrecisionMode.CompatForced;
+            Say("  " + GpuCheck.PrecisionText(_precision, _engineHasCompat));
 
             // ---- GPU limits (X1 item 2): part sizing from the adapter's dedicated VRAM; nothing is passed on a 24 GB card
             {
@@ -363,7 +506,9 @@ namespace H2GpuLightmapper.Pipeline
             CheckCancel();
 
             // ---- map query: probe points / environments (Standard, Lightprobes)
-            if (BakePlanner.NeedsMapQuery(_o))
+            // (0.6.4: also run, in any mode, to read the scenario's structure_bsps when the BSP's tag may be in another folder)
+            bool needQuery = BakePlanner.NeedsMapQuery(_o);
+            if (needQuery || (_bspFromScenario && !dry))
             {
                 if (dry)
                 {
@@ -376,6 +521,11 @@ namespace H2GpuLightmapper.Pipeline
                     Say("  map query: " + q.CommandLine.Substring(0, Math.Min(160, q.CommandLine.Length)) + " ...");
                     _map = MapQuery.Run(q.FileName, q.Args, q.Cwd, _env);
                     if (!_map.Ok) Refuse("the map query failed: " + (_map.Error ?? _map.PointsError));
+                    if (_bspFromScenario) ResolveBspFromScenario(_map);
+                    if (!needQuery) _map = null;        // Lightmap Only: the query only located the BSP; the probe / lightmap facts stay unread as before
+                }
+                if (needQuery && !dry)
+                {
                     _points = _map.Points ?? 0;
                     Say("  map: " + _points + " probe point(s); lightmap " + (_map.LtmpExists ? "present, " + (_map.Envs.HasValue ? _map.Envs + " lighting environment(s)" : "environments unknown (" + _map.EnvsError + ")") : "absent"));
                     if (_o.Mode == BakeMode.Probes)
@@ -387,7 +537,10 @@ namespace H2GpuLightmapper.Pipeline
                     }
                 }
             }
+            if (_bspFromScenario && dry && !File.Exists(Path.Combine(_set.TagDir, _o.Bsp + ".scenario_structure_bsp")))
+                Say("  (dry run: a BSP tag that is not beside the scenario is looked up in the scenario's structure_bsps by the real run)");
             bool probes = BakePlanner.NeedsProbes(_o, _points);
+            RefuseCrossFolderLayers();
             if (probes && !_host.ProbesEnabled)
                 Refuse("this BSP has " + _points + " light probe point(s) and light probes are not released yet in this build (gated on T4, the engine_v373 re-validation: "
                        + _host.ProbesWhy + "): use Lightmap Only, which resets this BSP's " + _points + " probes to zero like `tool lightmaps` (CLI: --mode lightmap); dev: --dev-probes");
@@ -591,7 +744,7 @@ namespace H2GpuLightmapper.Pipeline
                 O = _o, AppVersion = _host.AppVersion, PayloadSource = _host.Source.Describe, Manifest = _host.Manifest, Rt = _rt, Env = _env,
                 RunDir = runDir, RunDirPredicted = predicted, Worker = _n, ProbeWorker = _m, WorkerNote = _nNote, ProbeWorkerNote = _mNote,
                 ProbePoints = _points, ProbePointsAssumed = _pointsAssumed, ReuseLightmap = _reuseN, ReuseProbe = _reuseM,
-                Limits = _limits, ProbeWarning = _probeWarning,
+                Limits = _limits, ProbeWarning = _probeWarning, Precision = _precision, EngineHasCompat = _engineHasCompat,
                 LightmapReuseNote = _o.ReuseCapture ? _reuseNNote : null, ProbeReuseNote = _reuseMNote,
             });
         }
@@ -614,6 +767,11 @@ namespace H2GpuLightmapper.Pipeline
             try
             {
                 run.Line += l => { var h = Line; if (h != null) h(l); };
+                // Compatibility mode (DF64): fullgpu's own line ("Compatibility mode (no FP64): ..." / "Compatibility mode: off (native FP64 kernels; ...)"), which
+                // gpu_bake copies into every phase summary -- what the engine really ran is what the run summary reports
+                run.Line += l => { if (l != null && l.Kind != LineKind.Shell && l.Text != null && l.Text.IndexOf("Compatibility mode", StringComparison.Ordinal) >= 0) _engineCompatLine = l.Text.Trim(); };
+                // 0.6.4: the engine's one-line write-back fallbacks (direct tag writer -> tool write-back) get a visible warning and a run-summary sentence
+                run.Line += l => { if (l != null && l.Kind != LineKind.Shell && l.Text != null) NoteWriteBackFallback(run, l.Text); };
                 run.StatusChanged += OnStatus;
                 bool cancelledEarly;
                 lock (_lock) cancelledEarly = _cancel;
@@ -624,7 +782,7 @@ namespace H2GpuLightmapper.Pipeline
                 Plan = plan;
                 var hp = Planned; if (hp != null) { try { hp(plan); } catch { } }
                 foreach (var l in plan.ToText(false, true).Split('\n')) run.Shell("plan| " + l.TrimEnd('\r'));
-                run.Status.Extra["options"] = new JObj().Add("quality", _o.QualityToken).Add("photons", _o.Quality == Quality.Custom ? (object)_o.Photons : null)
+                run.Status.Extra["options"] = new JObj().Add("quality", _o.QualityToken).Add("bspRel", _o.BspRel).Add("photons", _o.Quality == Quality.Custom ? (object)_o.Photons : null)
                     .Add("rays", _o.Quality == Quality.Custom ? (object)(long)_o.Rays : null).Add("mode", _o.ModeToken).Add("ao", _o.Ao)
                     .Add("aoStrength", _o.AoStrength).Add("aoExponent", _o.AoExponent).Add("reuseCapture", _o.ReuseCapture).Add("install", !_o.StageOnly)
                     .Add("guarded", plan.CustomGuarded.HasValue ? (object)plan.CustomGuarded.Value : null);
@@ -676,8 +834,31 @@ namespace H2GpuLightmapper.Pipeline
                 StopCancelWatch();
             }
             CloseStep();
+            // 0.6.4: a write-back fallback is part of the run summary (the bake still ends DONE: the lightmap is written, by the other path)
+            try
+            {
+                var fbs = WriteBackFallbacks;
+                if (fbs.Count > 0)
+                {
+                    reason = (reason != null ? reason + "; " : "") + string.Join("; ", fbs);
+                    lock (run.Status) run.Status.Extra["writeBackFallback"] = fbs.Cast<object>().ToList();
+                }
+            }
+            catch { }
             Reason = reason;
             try { lock (run.Status) run.Status.Extra["installed"] = _installed; } catch { }
+            // run summary: the kernel set this bake ran (the plan's decision, plus the engine's own line when it printed one)
+            try
+            {
+                if (_precision == PrecisionMode.Unknown && _engineCompatLine != null)
+                    _precision = _engineCompatLine.IndexOf("(no FP64)", StringComparison.Ordinal) >= 0 ? PrecisionMode.Compat
+                               : _engineCompatLine.IndexOf(": off", StringComparison.Ordinal) >= 0 ? PrecisionMode.Full : PrecisionMode.Unknown;
+                PrecisionSummary = GpuCheck.PrecisionText(_precision, _engineHasCompat) + (_engineCompatLine != null ? "   [engine: " + _engineCompatLine + "]" : "");
+                run.Shell("precision| " + PrecisionSummary);
+                lock (run.Status) run.Status.Extra["precision"] = new JObj().Add("mode", plan == null ? null : plan.PrecisionModeToken).Add("text", GpuCheck.PrecisionText(_precision, _engineHasCompat))
+                    .Add("forced", _o.ForceCompat).Add("engineHasCompatMode", _engineHasCompat).Add("engineLine", _engineCompatLine);
+            }
+            catch { }
             try
             {
                 History.Append(_work, new HistoryEntry
@@ -899,6 +1080,8 @@ namespace H2GpuLightmapper.Pipeline
             string why = StageProblem(rp, null, Run.Status.StartedUtc);
             if (why == null) { Run.Shell("the direct writer's stage is ready: " + Path.GetDirectoryName(rp) + " -- the shell installs it (the lmw_install command of gpu_bake's [4b], with Retry)"); return true; }
             Run.Shell("*** " + why + " -- the direct tag writer made no stage: the production tool write-back fallback runs (gpu_bake -WriteBack -SkipCapture on this capture)");
+            // 0.6.4: the same fallback, as a visible warning (log + run summary), whoever noticed it
+            NoteWriteBackFallback(Run, "direct tag writer FAILED -- falling back to the tool write-back: " + why);
             RunProductionWriteBack(plan, true, null, "the production tool write-back fallback", "the production tool write-back fallback (the direct tag writer made no stage: " + why + ")", false);
             return false;
         }
@@ -916,7 +1099,8 @@ namespace H2GpuLightmapper.Pipeline
             var spec = PwshInvocation.GpuBake(WithEngine(plan.Engine), _env, args, StepIds.GpuBakeFallback);
             var fs = new PlanStep { Id = StepIds.GpuBakeFallback, UiStep = StepId.Install, Kind = PlanStepKind.Process, FileName = spec.FileName, Cwd = spec.Cwd };
             fs.Args.AddRange(spec.Args);
-            bool fresh = !skipCapture && captureFrom != null && captureFrom.CaptureWorker.HasValue;
+            BakePlanner.ApplyCompatEnv(_o, fs);      // --force-compat: the tool write-back fallback re-runs gpu_bake (a fresh capture), so it gets the variable too
+            bool fresh =!skipCapture && captureFrom != null && captureFrom.CaptureWorker.HasValue;
             if (fresh) { fs.CaptureWorker = captureFrom.CaptureWorker; fs.CaptureOut = captureFrom.CaptureOut; fs.FreshCapture = true; }
             string marker = Path.Combine(plan.Out, StartupRecovery.MarkerName), bak = Path.Combine(plan.Out, "tag_backup_before_writeback");
             plan.Marker = marker;      // for the aftermath; status.json records it once the write-back starts (finding 4)

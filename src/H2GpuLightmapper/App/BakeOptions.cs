@@ -62,12 +62,69 @@ namespace H2GpuLightmapper.App
         public const string ExactVertexLightingNote = "exact vertex lighting on (slower tag writer)";
         public const string ExactVertexLightingLabel = "2004 Exact Vertex Lighting?";
         public const string ExactVertexLightingTip = "You likely don't need this, this is just to shut Harcs brain up";
-        public const string ResponsiveLabel = "Keep PC responsive - Slower Bakes!";
+        /// <summary>Advanced settings "Scenery Multi Permutation Fix (Experimental Improvement)" / CLI --scenery-permutation-fix: every gpu_bake the plan builds
+        /// gets -SceneryOwnPermutationOnly (scenery that draws more than one shape from one tag: only the shape the game draws casts shadows, ground hidden
+        /// inside scenery is filled from its surroundings, a variant's own pieces get lit). Differs from the 2004 tool on purpose. Default off: the argv is then
+        /// byte-identical to before. ENGINE-GATED: only an engine whose gpu_bake.ps1 declares the parameter may be given it (see AppHost.SceneryPermutationFixWhy):
+        /// the window greys the checkbox, the command line and the session refuse -- an unknown parameter is never passed to PowerShell.
+        /// The capture is made WITH the option (the engine records the tool's permutation pick in phase 1), so it is part of the capture identity.</summary>
+        public bool SceneryPermutationFix;
+        public const string SceneryPermutationFixSwitch = "SceneryOwnPermutationOnly";
+        public const string SceneryPermutationFixNote = "scenery multi permutation fix on (experimental; differs from the 2004 tool on purpose)";
+        public const string SceneryPermutationFixLabel = "Scenery Multi Permutation Fix (Experimental Improvement)";
+        public const string SceneryPermutationFixNeedsEngine = "Needs engine 0.6.4 or newer.";
+        public const string SceneryPermutationFixTip = "Fallback for scenery that draws more than one shape from one tag, e.g. a rock whose shape changes when you move it, or a lifepod placed with a named variant like 'crashed'. "
+            + "Only the shape the game actually draws casts shadows, ground hidden inside scenery is filled from its surroundings, and a variant's own pieces get lit instead of rendering black. "
+            + "Differs from the 2004 tool on purpose. Most maps never need this: giving each shape its own scenery tag avoids the problem.";
+        /// <summary>CLI-ONLY testing override <c>--force-compat</c> (not in the window, not in Advanced settings): gives every gpu_bake / AO trace / light probe step
+        /// <c>GPULM_COMPAT=1</c> so a GPU WITH FP64 runs the FP32-only Compatibility-mode (DF64) kernels. ENGINE-GATED: only an engine whose gpu_bake.ps1 validates
+        /// GPULM_COMPAT (engine 0.6.4 or newer) may be given it (see AppHost.CompatEngineWhy); otherwise the bake is refused up front, dry runs too, and the
+        /// variable is never passed. Compatibility mode itself is automatic (the engine picks it for a GPU without FP64) and has no option.</summary>
+        public bool ForceCompat;
+        public const string ForceCompatNote = "Compatibility mode (DF64) FORCED for testing (--force-compat: GPULM_COMPAT=1 on every GPU step)";
+        public const string ForceCompatNeedsEngine = "Compatibility mode needs engine 0.6.4 or newer.";
+        /// <summary>0.6.4 cross-folder BSP: the tags-relative path (no extension, backslashes) of the BSP tag when it lives in ANOTHER folder than the scenario
+        /// (01b_spacestation -> scenarios\solo\01a_tutorial\01_bsp_1). Null = the BSP is beside the scenario (every pre-0.6.4 bake). <see cref="Bsp"/> stays the plain
+        /// leaf name: that is what gpu_bake -Bsp takes (engine 0.6.4 resolves the real file from the scenario's structure_bsps block; the lightmap tags are
+        /// still named and written in the SCENARIO's folder). Set by the window's BSP picker; the session also resolves it from the scenario when a command-line
+        /// bake names a BSP that is not beside the scenario. ENGINE-GATED (see AppHost.CrossFolderBspWhy).</summary>
+        public string BspRel;
+        /// <summary>gpu_bake.ps1 parameters that only an engine with the cross-folder BSP resolution (dev_S, merged into engine 0.6.4) declares: -WriterOnly and
+        /// -ToolOverlay come from the same patch as lmw_skeleton.py resolve-bsp, so an engine that has them resolves the BSP from the scenario.</summary>
+        public static readonly string[] CrossFolderBspSwitches = { "WriterOnly", "ToolOverlay" };
+        public const string CrossFolderBspNeedsEngine = "Baking a BSP from another folder needs engine 0.6.4 or newer.";
+        public const string CrossFolderBspNoAoProbes = "this BSP lives in another folder than the scenario; ambient occlusion and light probes are not supported for it yet "
+            + "(only the lightmap is): untick Ambient occlusion and use Lightmap Only (CLI: --mode lightmap)";
+        public const string ResponsiveLabel ="Keep PC responsive - Slower Bakes!";
         public const string ResponsiveTip = "Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer.";
 
         public static BakeOptions Defaults() { return new BakeOptions(); }
 
         public BakeOptions Clone() { return (BakeOptions)MemberwiseClone(); }
+
+
+        /// <summary>The folder part of a tags-relative tag path ("scenarios\solo\01a_tutorial" for "scenarios\solo\01a_tutorial\01_bsp_1").</summary>
+        public static string BspFolder(string rel)
+        {
+            if (string.IsNullOrEmpty(rel)) return "";
+            int i = rel.LastIndexOf('\\');
+            return i < 0 ? "" : rel.Substring(0, i);
+        }
+
+        /// <summary>The BSP tag file this bake lights: the file named by <see cref="BspRel"/> (another folder), else "&lt;bsp&gt;.scenario_structure_bsp" in
+        /// <paramref name="scenarioTagDir"/> (beside the scenario, every pre-0.6.4 bake).</summary>
+        public string BspTagFile(string scenarioTagDir)
+        {
+            if (BspRel != null && Root != null) return Path.Combine(Root, "tags", BspRel + ".scenario_structure_bsp");
+            return Path.Combine(scenarioTagDir, Bsp + ".scenario_structure_bsp");
+        }
+
+        /// <summary>A tags-relative path that cannot leave the tags folder (no rooted path, no ".." / "." / empty parts).</summary>
+        public static bool IsPlainTagRel(string rel)
+        {
+            if (string.IsNullOrWhiteSpace(rel) || rel.IndexOfAny(new[] { ':', '*', '?', '"', '<', '>', '|', '/' }) >= 0 || rel.Trim() != rel) return false;
+            return !rel.Split('\\').Any(p => p == ".." || p == "." || p.Length == 0);
+        }
 
         public string QualityToken { get { return Quality.ToString().ToLowerInvariant(); } }
         public string ModeToken { get { return Mode == BakeMode.Probes ? "probes" : Mode == BakeMode.Lightmap ? "lightmap" : "standard"; } }
@@ -156,6 +213,12 @@ namespace H2GpuLightmapper.App
             if (string.IsNullOrWhiteSpace(ScenarioRel)) e.Add("no scenario given");
             if (string.IsNullOrWhiteSpace(Bsp)) e.Add("no BSP given");
             else if (Bsp.IndexOfAny(new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' }) >= 0 || Bsp.Trim() != Bsp) e.Add("the BSP name '" + Bsp + "' is not a plain tag name");
+            if (BspRel != null)
+            {
+                if (!IsPlainTagRel(BspRel)) e.Add("the BSP tag path '" + BspRel + "' is not a plain tags-relative path");
+                else if (!string.IsNullOrWhiteSpace(Bsp) && !string.Equals(BspRel.Substring(BspRel.LastIndexOf('\\') + 1), Bsp, StringComparison.OrdinalIgnoreCase))
+                    e.Add("the BSP tag path '" + BspRel + "' does not end in the BSP name '" + Bsp + "'");
+            }
             if (Quality == Quality.Custom)
             {
                 if (!customAvailable) e.Add("Custom quality needs the N3 guarded fullgpu (engine_custom), which this payload does not carry -- without it a photon count past the uint32 limit wraps silently; dev: --dev-custom-unguarded");
@@ -184,6 +247,9 @@ namespace H2GpuLightmapper.App
             s += "   " + (StageOnly ? "stage only (no tags written)" : "install");
             if (Responsive) s += "   responsive on";
             if (ExactVertexLighting) s += "   exact vertex lighting on";
+            if (SceneryPermutationFix) s += "   scenery multi permutation fix on";
+            if (BspRel != null) s += "   BSP from " + BspFolder(BspRel);
+            if (ForceCompat) s += "   compatibility mode (DF64) FORCED";
             if (!Fixes) s += "   FIXES OFF (dev)";
             return s;
         }

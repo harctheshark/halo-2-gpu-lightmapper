@@ -24,6 +24,9 @@ namespace H2GpuLightmapper.Core.Tests
             yield return T("preflight: path budget refused on a deep root", Budget);
             yield return T("preflight: W2 path budget: the 0.6.2 refusal at 243 characters (run backup) fits with margin now (short run folder label + tagbak); label rules", W2PathBudgetRunBackup);
             yield return T("preflight: W2 a GPU without FP64 is refused in plain words (NVIDIA / AMD advice, CPU tool), technical detail kept", W2NoFp64Plain);
+            yield return T("preflight: DF64 a GPU without FP64 runs in Compatibility mode (DF64) when the engine has it (gpucheck 1.2.0 and older JSON); an engine without it keeps the plain refusal", Df64Compat);
+            yield return T("preflight: DF64 an FP64 GPU is 'Precision: Full FP64'; ApplyEngine flips with the engine; software adapter / device failure never become Compatibility mode; hybrid rules", Df64FullAndHybrid);
+            yield return T("engine: DF64 marker = the engine's gpu_bake.ps1 reads $env:GPULM_COMPAT in code (a comment or a string mention does not count)", Df64EngineMarker);
             yield return T("preflight: write probe on a scratch root (leaves nothing)", WriteProbe);
             yield return T("preflight: bounds DB copied only if absent; never overwritten", BoundsDb);
             yield return T("preflight: gpucheck JSON parse (ok and no-FP64) and a real gpucheck run", GpuCheckTests);
@@ -263,6 +266,160 @@ namespace H2GpuLightmapper.Core.Tests
             var o2 = ReadOnly(); o2.GpuCheckJson = sw; o2.GpuCheckExitCode = 1;
             var g2 = PreflightChecks.Run(C.MineRoot, o2).Get("gpu");
             Assert.True(g2.Message.StartsWith("This GPU cannot run the lightmapper: ", StringComparison.Ordinal) && !g2.Message.Contains("Qualcomm"), "a software adapter keeps the generic refusal: " + g2.Message);
+        }
+
+        // ---- Compatibility mode (DF64), engine 0.6.4 ----------------------------------------------------------------------------------------
+        private const string Df64Adapter = "Intel(R) Arc(TM) A380 Graphics";
+
+        /// <summary>gpucheck 1.2.0's JSON for a GPU without FP64: verdict ok, exit 0, compat_mode, the FP64 facts as notes.</summary>
+        private static string NewGpucheckNoFp64(bool hybrid = false, string name = Df64Adapter)
+        {
+            return "{\"default_adapter\": {\"name\": \"" + name + "\", \"feature_level\": \"12_1\", \"double_precision_float_shader_ops\": false, \"extended_doubles_shader_instructions\": false, \"fp64\": false, \"compat_mode\": true}, "
+                 + "\"hybrid\": " + (hybrid ? "true" : "false") + ", \"verdict\": {\"ok\": true, \"fp64\": false, \"compat_mode\": true, \"reasons\": [], \"notes\": [\"the GPU has no double-precision (FP64) shader support\", \"the GPU lacks extended double-precision shader instructions (ddiv/dfma/drcp)\"], \"advice\": []}}";
+        }
+
+        /// <summary>gpucheck 1.1.0 (the 0.6.3 payload): the same GPU is a failing verdict, exit 1, FP64 reasons only.</summary>
+        private static string OldGpucheckNoFp64(bool hybrid = false, string name = Df64Adapter)
+        {
+            return "{\"default_adapter\": {\"name\": \"" + name + "\", \"feature_level\": \"12_1\", \"double_precision_float_shader_ops\": false, \"extended_doubles_shader_instructions\": false}, "
+                 + "\"hybrid\": " + (hybrid ? "true" : "false") + ", \"verdict\": {\"ok\": false, \"reasons\": [\"the GPU has no double-precision (FP64) shader support\", \"the GPU lacks extended double-precision shader instructions (ddiv/dfma/drcp)\"], \"advice\": []}}";
+        }
+
+        private static string Fp64Gpucheck(bool hybrid = false, string name = "NVIDIA GeForce RTX 4090", bool newFormat = true)
+        {
+            return "{\"default_adapter\": {\"name\": \"" + name + "\", \"feature_level\": \"12_1\", \"double_precision_float_shader_ops\": true, \"extended_doubles_shader_instructions\": true" + (newFormat ? ", \"fp64\": true, \"compat_mode\": false" : "") + "}, "
+                 + "\"hybrid\": " + (hybrid ? "true" : "false") + ", \"verdict\": {\"ok\": true, \"reasons\": [], \"advice\": []}}";
+        }
+
+        private static PreflightReport Df64Run(string json, int exit, bool compatEngine)
+        {
+            var o = ReadOnly(); o.GpuCheckJson = json; o.GpuCheckExitCode = exit; o.CompatEngine = compatEngine;
+            return PreflightChecks.Run(C.MineRoot, o);
+        }
+
+        private static void Df64Compat()
+        {
+            // the exact wording the window / log / plan / summary show
+            Assert.Eq("Precision: Full FP64", GpuCheck.PrecisionFull, "full precision line");
+            Assert.Eq("Precision: Compatibility mode (DF64) - your GPU has no FP64, using FP32 double-single maths instead. Experimental; same results in testing, may be slower.", GpuCheck.PrecisionCompat, "compat line");
+            Assert.Eq("GPULM_COMPAT", GpuCheck.CompatEnvVar, "the variable the engine validates");
+            foreach (var pair in new[] { new[] { "gpucheck 1.2.0 (verdict ok, exit 0)", NewGpucheckNoFp64(), "0" }, new[] { "gpucheck 1.1.0 (verdict not ok, exit 1)", OldGpucheckNoFp64(), "1" } })
+            {
+                string what = pair[0];
+                // the engine HAS Compatibility mode: accepted, Info-level precision item, no failure
+                var r = Df64Run(pair[1], int.Parse(pair[2]), true);
+                var g = r.Get("gpu");
+                Assert.Eq(CheckLevel.Ok, g.Level, what + ": the GPU is accepted");
+                Assert.True(r.Ok && r.Failures.Count() == 0, what + ": preflight ok: " + string.Join(" | ", r.Failures));
+                Assert.Eq(PrecisionMode.Compat, r.Precision, what + ": precision");
+                Assert.Eq(GpuCheck.PrecisionCompat, r.Get("gpu.precision").Message, what + ": the precision item says Compatibility mode");
+                Assert.Eq(CheckLevel.Info, r.Get("gpu.precision").Level, what + ": information, not a warning");
+                Assert.True(r.Gpu.Ok && r.Gpu.CompatAccepted, what + ": result accepted");
+                Assert.Contains(r.Gpu.Line, "FP64 NO", what + ": the line keeps the FP64 flag");
+                Assert.Contains(r.Gpu.Line, "(Compatibility mode)", what + ": ... and says what happens");
+                Assert.True(!r.Gpu.Line.Contains("can't run"), what + ": no refusal text");
+                Assert.Contains(r.ToJson(), "Compatibility mode (DF64)", what + ": doctor JSON carries the precision");
+                // the engine does NOT have it (0.6.3): the plain refusal, unchanged, whichever gpucheck said it
+                var n = Df64Run(pair[1], int.Parse(pair[2]), false);
+                var gn = n.Get("gpu");
+                Assert.Eq(CheckLevel.Fail, gn.Level, what + ": refused on an engine without Compatibility mode");
+                Assert.True(gn.Message.StartsWith(GpuCheck.NoFp64Plain, StringComparison.Ordinal), what + ": the plain 0.6.3 sentence leads: " + gn.Message);
+                Assert.Contains(gn.Message, Df64Adapter, what + ": technical detail names the adapter");
+                Assert.Contains(gn.Message, "(FP64) shader support", what + ": ... and the reason");
+                Assert.True(!n.Ok && n.Precision == PrecisionMode.Unknown && n.Get("gpu.precision") == null, what + ": not ok, no precision");
+                Assert.True(!n.Gpu.Ok && !n.Gpu.CompatAccepted, what + ": result refused");
+                Assert.Contains(n.Gpu.Line, GpuCheck.NoFp64Plain, what + ": the GPU line says it too");
+            }
+            // gpucheck 1.2.0's parse: notes and compat_mode are read, the verdict is ok
+            var p = GpuCheck.Parse(NewGpucheckNoFp64(), 0);
+            Assert.True(p.Ok && p.Reasons.Count == 0 && p.Notes.Count == 2 && p.CompatModeReported == true && !p.Doubles && !p.ExtendedDoubles, "1.2.0 parse");
+            Assert.True(GpuCheck.NoFp64(p), "NoFp64 from the fields");
+            // only ONE of the two caps missing is still 'no FP64' (fullgpu needs both for the native kernels)
+            var half = Fp64Gpucheck().Replace("\"extended_doubles_shader_instructions\": true", "\"extended_doubles_shader_instructions\": false");
+            Assert.Eq(PrecisionMode.Compat, Df64Run(half, 0, true).Precision, "doubles without the extended instructions: Compatibility mode");
+            Assert.Eq(CheckLevel.Fail, Df64Run(half, 0, false).Get("gpu").Level, "... and refused on an old engine");
+        }
+
+        private static void Df64FullAndHybrid()
+        {
+            foreach (bool newFormat in new[] { true, false })
+                foreach (bool compat in new[] { true, false })
+                {
+                    var r = Df64Run(Fp64Gpucheck(false, "NVIDIA GeForce RTX 4090", newFormat), 0, compat);
+                    string what = "FP64 GPU (" + (newFormat ? "1.2.0" : "1.1.0") + " json), engine compat " + compat;
+                    Assert.Eq(CheckLevel.Ok, r.Get("gpu").Level, what + ": ok");
+                    Assert.Eq(PrecisionMode.Full, r.Precision, what + ": Full");
+                    Assert.Eq("Precision: Full FP64", r.Get("gpu.precision").Message, what + ": line");
+                    Assert.Contains(r.Gpu.Line, "FP64 yes", what + ": FP64 yes");
+                    Assert.True(!r.Gpu.CompatAccepted, what + ": never Compatibility mode");
+                }
+            // ApplyEngine flips with the engine on the same result (the window re-evaluates when the quality changes the engine)
+            var g = GpuCheck.Parse(NewGpucheckNoFp64(), 0);
+            Assert.Eq(PrecisionMode.Compat, GpuCheck.ApplyEngine(g, true), "engine with the mode");
+            Assert.Eq(PrecisionMode.Compat, GpuCheck.ApplyEngine(g, true), "again (idempotent)");
+            Assert.True(g.Ok && g.Notes.Count == 2, "notes not duplicated");
+            Assert.Eq(PrecisionMode.Unknown, GpuCheck.ApplyEngine(g, false), "engine without");
+            Assert.True(!g.Ok, "refused now");
+            Assert.Eq(PrecisionMode.Compat, GpuCheck.ApplyEngine(g, true), "and back");
+            Assert.Eq(PrecisionMode.Unknown, GpuCheck.ApplyEngine(null, true), "null");
+            Assert.Eq(PrecisionMode.Unknown, GpuCheck.ApplyEngine(GpuCheck.Parse("not json", 2), true), "unreadable output");
+            // a software adapter / a missing hardware device is never 'Compatibility mode' (they are not about FP64)
+            string sw = "{\"default_adapter\": {\"name\": \"Microsoft Basic Render Driver\", \"feature_level\": \"11_0\", \"double_precision_float_shader_ops\": false, \"extended_doubles_shader_instructions\": false, \"compat_mode\": true}, "
+                      + "\"hybrid\": false, \"verdict\": {\"ok\": false, \"reasons\": [\"the default adapter is the Microsoft Basic Render Driver (no GPU driver installed?)\"], \"notes\": [\"the GPU has no double-precision (FP64) shader support\"], \"advice\": []}}";
+            var rs = Df64Run(sw, 1, true);
+            Assert.Eq(CheckLevel.Fail, rs.Get("gpu").Level, "software adapter refused even with a Compatibility-mode engine");
+            Assert.True(rs.Get("gpu").Message.StartsWith("This GPU cannot run the lightmapper: ", StringComparison.Ordinal), "generic text: " + rs.Get("gpu").Message);
+            string low = "{\"default_adapter\": {\"name\": \"Old GPU\", \"feature_level\": \"10_1\"}, \"hybrid\": false, \"verdict\": {\"ok\": false, \"reasons\": [\"feature level 10_1 is below 11_0\"], \"advice\": []}}";
+            Assert.Eq(CheckLevel.Fail, Df64Run(low, 1, true).Get("gpu").Level, "feature level below 11_0 refused");
+            // hybrid laptop. discrete FP64 GPU (exports) + iGPU without FP64 (what an export-less fullgpu gets): Compatibility mode would silently run on the iGPU,
+            // so the Graphics settings refusal stays, whichever gpucheck wrote the iGPU's verdict
+            foreach (var igpu in new[] { NewGpucheckNoFp64(true, "Intel(R) Iris(R) Xe Graphics"), OldGpucheckNoFp64(true, "Intel(R) Iris(R) Xe Graphics") })
+            {
+                var o = ReadOnly();
+                o.GpuCheckJson = Fp64Gpucheck(true); o.GpuCheckPlainJson = igpu; o.GpuCheckPlainExitCode = igpu.Contains("\"ok\": false") ? 1 : 0; o.CompatEngine = true;
+                var rh = PreflightChecks.Run(C.MineRoot, o);
+                Assert.Eq(CheckLevel.Fail, rh.Get("gpu.hybrid").Level, "dGPU with FP64 + iGPU without: still the Graphics settings refusal");
+                Assert.Contains(rh.Get("gpu.hybrid").Message, "High performance", "the route is explained");
+                Assert.Contains(rh.Get("gpu.hybrid").Message, "Compatibility mode", "and why (slow Compatibility mode on the weaker GPU)");
+                Assert.True(!rh.Ok, "not ok");
+            }
+            // both GPUs without FP64 and an engine with the mode: nothing to choose, information only
+            var both = ReadOnly();
+            both.GpuCheckJson = NewGpucheckNoFp64(true, "Intel(R) Arc(TM) A370M Graphics"); both.GpuCheckPlainJson = NewGpucheckNoFp64(true, "Intel(R) UHD Graphics"); both.CompatEngine = true;
+            var rb = PreflightChecks.Run(C.MineRoot, both);
+            Assert.Eq(CheckLevel.Info, rb.Get("gpu.hybrid").Level, "both without FP64, engine with the mode: " + rb.Get("gpu.hybrid").Message);
+            Assert.True(rb.Ok && rb.Precision == PrecisionMode.Compat, "ok, Compatibility mode");
+            // and on an engine without the mode the first GPU already refuses
+            both.CompatEngine = false;
+            Assert.Eq(CheckLevel.Fail, PreflightChecks.Run(C.MineRoot, both).Get("gpu").Level, "old engine: refused");
+            // the precision text for an unknown GPU
+            Assert.Contains(GpuCheck.PrecisionText(PrecisionMode.Unknown, true), "automatic", "unknown GPU, engine with the mode");
+            Assert.Contains(GpuCheck.PrecisionText(PrecisionMode.Unknown, false), "needs a GPU with FP64", "unknown GPU, old engine");
+            Assert.Contains(GpuCheck.PrecisionText(PrecisionMode.CompatForced, true), "forced for testing", "forced");
+        }
+
+        private static void Df64EngineMarker()
+        {
+            Func<string, bool> reads = s => Core.Payload.EngineSwitches.ReadsEnvVar(s, "GPULM_COMPAT");
+            // the real 0.6.4 shape (gpu_bake.ps1 of dev_DF): Test-Path Env:X ... $env:X
+            Assert.True(reads("param([string]$Scenario)\nif (Test-Path Env:GPULM_COMPAT) {\n  if ($env:GPULM_COMPAT -ne '' -and $env:GPULM_COMPAT -ne '0') { throw \"GPULM_COMPAT='$($env:GPULM_COMPAT)' -- expected 0, 1 or unset\" } }"), "validation in code");
+            Assert.True(reads("if ($env:gpulm_compat -eq '1') { 1 }"), "case-insensitive, code");
+            Assert.True(reads("$x = Test-Path Env:GPULM_COMPAT"), "Env: provider path");
+            Assert.True(!reads("param([switch]$Responsive)\nif ($env:GPULM_RESPONSIVE) { 1 }"), "an engine with other GPULM_ variables only (0.6.3)");
+            Assert.True(!reads("# GPULM_COMPAT=1 arrives in 0.6.4: $env:GPULM_COMPAT\nWrite-Host hi"), "named only in a comment");
+            Assert.True(!reads("<# $env:GPULM_COMPAT #>\nWrite-Host hi"), "named only in a block comment");
+            Assert.True(!reads("Write-Host 'set $env:GPULM_COMPAT to 1'"), "named only inside a single-quoted string");
+            Assert.True(!reads("Write-Host \"set `$env:GPULM_COMPAT\""), "named only inside a double-quoted string");
+            Assert.True(!reads("$env:GPULM_COMPAT_LIB = 1"), "a longer name is not the name");
+            Assert.True(!reads("$myenv:GPULM_COMPAT = 1"), "not another provider / variable ending in env");
+            Assert.True(!reads(""), "empty script"); Assert.True(!reads(null), "null script");
+            // the production engine of this PC (read only): promoted to 0.6.4 on 2026-10-21 it HAS the marker; the 0.6.3 script (kept as the promotion's backup) has none
+            string prod = Path.Combine(C.MineRoot, @"GPU Lightmap Work\engine_v373\gpu_bake.ps1");
+            if (File.Exists(prod)) Assert.True(reads(File.ReadAllText(prod)), "production engine_v373 (0.6.4) validates GPULM_COMPAT");
+            string old063 = Path.Combine(C.MineRoot, @"GPU Lightmap Work\engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
+            if (File.Exists(old063)) Assert.True(!reads(File.ReadAllText(old063)), "engine_v373 as of 0.6.3 (the pre-promotion backup) has no Compatibility mode");
+            string dev = Path.Combine(C.MineRoot, @"GPU Lightmap Work\_research\df64\dev_DF\gpu_bake.ps1");
+            if (File.Exists(dev)) Assert.True(reads(File.ReadAllText(dev)), "dev_DF (engine 0.6.4 candidate) validates GPULM_COMPAT");
         }
 
         private static void GpuCheckTests()

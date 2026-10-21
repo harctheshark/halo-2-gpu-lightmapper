@@ -1,0 +1,457 @@
+# title: P9 promotion 2026-10-21 14:56 (0.6.4): scenery multi-permutation fix, -WriterOnly / -ToolOverlay + cross-folder BSP, GPULM_COMPAT, responsive v2, lattice-resume knobs (engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 993dc129f6dee257556caf145fad9f3f
+# result-md5: 673ab3c898172dcfbae2fdd467ae36ce
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -111,6 +111,65 @@
+              cast's twin is photoncast_frustum_plk -- fullgpu REFUSES (exit 9) any swap that would drop the scenery override or the
+              frustum emission. Assert-V368Inputs throws on HYBRID, on -PluckerFix without "PLK64: ON -- v372", on a scenery
+              -PluckerFix log without the combined-kernel line, and on a pre-v372 fullgpu (no BUFCAP line).
++
++  ***** v373P (2026-10-20, dev_PS, OPT-IN, default OFF) -SceneryOwnPermutationOnly = GPULM_SCN_SELF_PERM=1 (lattice pre-pass + main pass).
++  A scenery receiver (owner O, permutation d of region r) already ignores O's other permutations of r as OCCLUDERS on every ray it casts (the
++  CPU's per-section override, mark 0x4A88DF; SOVR / scn_skip -- this mode changes nothing there). What it changes is the sun's PHOTON-RADIUS
++  CANDIDATE CULL (0x4A7068): the sun photons are cast against the default occluder state, i.e. against the UNION of O's permutations, so they
++  land on the outermost shell and a row beneath a sibling shell farther than the manager radius (0.5) from it is never a sun candidate. With the
++  switch such a row also probes the photons around the point where its sun ray leaves the sibling union (candidate = photon within r of P OR of S;
++  monotone, scenery rows only, rows without a sibling on the sun ray unchanged). It DIFFERS FROM THE CPU on purpose. Analytic / surface light
++  culls are not extended (the sun is the only photon-reach light on the test maps); the single-sun legacy path (-SunCullMultiOff) and -NoSunCull
++  ignore it. OFF = this script and fullgpu behave exactly as before.
++  ***** v373V (2026-10-20, dev_PS, part of the SAME opt-in -- no extra switch) EMBEDDED SCENERY VERTEX FIX. With -SceneryOwnPermutationOnly fullgpu also
++  detects, per scenery row, whether the row's sample point lies INSIDE the structure solid (a placement sunk into the floor: 64 rays from the point,
++  first hit of >= 75% of the rays that hit is a BACK face of an opaque structure triangle, >= 8 hits, nearest hit a back face -- geometric, no map
++  number, no closed mesh needed) and replaces such a row's colour + direction (otherwise nearly black, hence dark smears across the visible
++  triangles that straddle the floor) by the distance- and normal-weighted mean of its 4 nearest non-embedded rows of the same owner / section.
++  Scenery rows only; non-embedded rows, BSP texels and per-vertex BSP rows are untouched; scenery_out.bin keeps its format (the tag writer's gates
++  are unchanged). Side files in the run dir: scenery_out_pre_embed.bin (rows before the fill), scenery_embed.bin (per-row codes). GPULM_SCN_EMBED_FIX=0
++  switches only this part off (env, A/B). Skips itself (log line, rows as composed) when tri_vpos.bin is absent, the structure has no solid triangle or
++  more than half of the rows come out embedded (untrustworthy winding). DIFFERS FROM THE CPU on purpose.
++
++  ***** v373C (2026-10-20, dev_CO, REPLACES the v373P/v373V behaviour under the SAME opt-in switch -SceneryOwnPermutationOnly; exe label "Scenery Multi
++  Permutation Fix (Experimental Improvement)"): CHOSEN-PERMUTATION SCENERY OCCLUDER. tool_fast bakes EVERY permutation section of a scenery object and
++  uses the UNION of all of them as the occluder for everything else, but the game draws ONE permutation per placement (the deterministic pick made at
++  object creation) -- so the shapes that are not drawn leave black splotches on the ground around the visible rock. With the switch:
++    * phase 1 (capture) installs a READ-ONLY hook at process_scenery_object 0x498962 (GPULM_CHOSEN_PERM=1, capture only) that records, per scenery
++      placement and region, the permutation the TOOL actually chose (the live object's chosen-permutation array, NOT an LCG replay) plus that
++      permutation's render-model sections -> $OUT\scenery_chosen_perm.bin (+ a text log scenery_chosen_perm.txt). Without the switch no hook is installed.
++    * fullgpu (GPULM_SCN_CHOSEN_PERM=1, lattice pre-pass AND main pass) removes every NON-chosen permutation section of a placement from the occluder
++      set of EVERY query: BSP texels, per-vertex rows, other scenery, the sun / sky / analytic / surface walks, the gather rays, the photon cast and the
++      r.e. photon-visibility blockers. A non-chosen section as a RECEIVER (all permutations are still baked, the tag format is unchanged) sees the
++      chosen-only world plus ITSELF (its own override-only instance) and still ignores its same-region siblings, exactly as the CPU's per-section override.
++      Placements with a variant, an unreadable array or a region without a chosen grid keep every permutation (logged).
++    * the v373V embedded-vertex fill is OFF in this mode (GPULM_SCN_EMBED_FIX=0 set here; the rock below the floor stays dark like the CPU), and the
++      v373P sun-candidate extension past sibling shells is not applied (no sibling shell is left in the photon world for a chosen section).
++  A capture made WITHOUT the switch has no scenery_chosen_perm.bin: fullgpu then REFUSES (exit 9) -- re-capture with the switch. OFF = this script, the
++  DLL and fullgpu behave exactly as before (no hook, no env, no file).
++  ***** v373H (2026-10-20, dev_CO, part of the SAME opt-in -- no extra switch) HIDDEN GROUND TEXEL FILL. A boulder sunk into the floor swallows the BSP
++  lightmap texels beneath it; their sample points lie INSIDE the drawn rock, so they come out black, are never seen, but bleed ~1 texel past the rock
++  silhouette through the bilinear filter ("black notches at the rock base"). fullgpu (host, in the compose, on the FINAL texel values) tests every BSP texel:
++  5 rays (+Z and four 12-degree tilts) from the texel's sample point (+0.001 along its normal); a ray votes iff its FIRST hit (structure + the ACTIVE,
++  i.e. chosen, scenery triangles) is a BACK face of a scenery triangle; >= 3 votes = HIDDEN (a rock floating above the ground gives a front-face first hit
++  and is not hidden). Hidden texels take the plain mean of their valid 8-neighbours in the chart grid, ring by ring (rgb, the direct/indirect split in
++  atlas_split.bin, the incident direction D and |D| in atlas_dir.bin all consistently). BSP texels only: scenery rows are untouched (the buried part of
++  the rock stays dark like the CPU), so does everything else. Side file in the run dir: hidden_texels.bin ('HDT1': ord, tix, first-hit owner, votes, ring,
++  0, pos xyz per hidden texel). GPULM_SCN_HIDDEN_FILL=0 (fullgpu env, A/B) turns just this off. DIFFERS FROM THE CPU on purpose. Single-pass maps only
++  (a chart is never split across parts, so the 8-neighbourhood is always in the same process).
++  ***** v373V2 (2026-10-20, dev_CO, part of the SAME opt-in -- no extra switch) NAMED-VARIANT OBJECTS BAKE WHAT THEY DRAW. process_scenery_object 0x498962 builds an
++  owner's section descriptors from variant 0's named regions (first permutation + damage states) and every permutation of the UNNAMED regions only, so a
++  placement with a named variant (h1\vehicles\lifepod "crashed": draws sections 3,4,2) got descriptors for the DEFAULT permutation's sections (0,1,2) -- the
++  drawn sections 3,4 had no occluder, no shading points and no lightmap records (-1 in the tag's section offsets; black in Sapien). With the switch the
++  DLL (GPULM_CHOSEN_PERM_ADD=1, set for EVERY tool run of the bake: the capture, the tag-writer skeleton, the phase-4 tool write-back) hooks 0x499072 (after both
++  descriptor loops) and, for each region, adds the sections of the CHOSEN permutation the same way the tool's own loop does (find by section -> else
++  scenery_occluder_insert + {region, 1<<lod, permbits 1, section}); already-enumerated sections are untouched, so objects that draw their default / first
++  permutation (the normal pod, every boulder) get the SAME descriptors as without it. Everything downstream is built by the tool from the descriptor vector.
++  The capture flags the placement's scenery_chosen_perm.bin record (flag 32), and fullgpu then trusts a VARIANT record (previously: all permutations stayed
++  occluders), so the non-chosen default sections (lifepod crashed: sec 0 and 1) leave the occluder set but stay baked as receivers. Log: "[GPULM chosenadd]"
++  lines per placement in the capture's gpulm.log and the skeleton run's gpulm.log. OFF = no byte is patched. The skeleton cache key carries "chosen_perm_add".
++  v373V2 crashfix (2026-10-20): the hook skips (and logs "section N NOT added") a chosen section the tool's own NUG-grid build could not use -- every drawable part foliage /
++  part-flag 0x10 (surfaces flagged 0x400) -- which otherwise crashed tool_fast at 0x4A88D1 (owner+0x5C grid vector shorter than the descriptor vector; cann\shaders\examples sec5).
+ #>
+ param(
+     [string]$Scenario = "scenarios\multi\cyclotron\cyclotron",
+@@ -137,6 +196,11 @@
+     [string]$RestoreTags = "",
+     [switch]$SkipCapture,
+     [switch]$CaptureOnly,
++    # dev_S (2026-10-20): re-run ONLY the tag writer (skeleton + lm_tagwriter + validation) on an existing -SkipCapture run dir whose atlas_out.bin is
++    # already baked: phases 2 and 3's GPU work are skipped (phase 2 would Guard-clean the atlas). No GPU use. Needs -SkipCapture.
++    [switch]$WriterOnly,
++    # dev_S: run the phase-4 TOOL write-back (the fallback path) inside the skeleton OVERLAY (renamed scenario, own tags tree), never the live tags
++    [switch]$ToolOverlay,
+     # Severance level for the CAPTURE (phase 1) only. Phase 4 always uses 2 -- it needs the rasterize.
+     #   2 = photon cast + r.e. gather + mc_final_gather severed; the CPU rasterize still runs.
+     #   3 = also skips the rasterize's scanline+shading loop (v305). Structure is identical; the
+@@ -218,6 +282,7 @@
+     [switch]$SunCullForceSkip,   # GPULM_SUN_CULL_FORCE_SKIP=1: the deferred sun pass runs UNCULLED (the F10 gate)
+     [switch]$NoNqFast,           # v372K2: phase 4 with the tool's own NeuQuant (GPULM_NQ_FAST off) -- pre-v372K2, ~4x slower P8 palettes
+     [switch]$NoCastCache,        # v372M: the main pass casts again instead of loading the pre-pass's cast_cache.bin
++    [switch]$SceneryOwnPermutationOnly,   # v373C (2026-10-20, OPT-IN, default OFF; exe label "Scenery Multi Permutation Fix (Experimental Improvement)"): chosen-permutation scenery occluder -- see the v373C note in the header (needs a capture made WITH the switch: scenery_chosen_perm.bin)
+     [switch]$ExactVertexLighting,   # v373E (2026-10-20, opt-in, exe "2004 Exact Vertex Lighting?"): the direct writer re-runs the CPU's 7-probe per-vertex gate (lmw_gate.py) so vertex-lit records drop the samples tool_fast's own write-back drops
+     [switch]$NoVtxAllGate,       # v372K3: phase 1 WITHOUT GPULM_VTXCAP_ALLGATE (the capture's per-vertex gate draws the RNG -> the write-back may ask positions it never saw)
+     [switch]$NoVtxCapSkip,       # v372K: phase 1 WITHOUT GPULM_VTXCAP_SKIP (the original compute_light_value runs after the record,
+@@ -318,7 +383,13 @@
+     # cull masks) and every growth step is capped at 1.25x, so no GPU submission blocks the desktop for long. Results are bit-identical; the bake is
+     # SLOWER. Without it nothing changes: the RTX-4090 fast path keeps its submission sizes. An inherited GPULM_RESPONSIVE=1 (the light-probe
+     # python tool starts this script with the caller's environment) is treated exactly like -Responsive.
+-    [switch]$Responsive
++    # RESPONSIVE v2 (2026-10-20, dev_R): -Responsive now means v2 -- ~10 ms submissions, every submission waited for before the next is recorded (no queue-ahead),
++    # an idle gap after each one so the GPU is busy at most -ResponsiveDuty of the time (default 0.60), lowest GPU thread priority, BELOW_NORMAL CPU priority.
++    # -ResponsiveDuty 0.5 (a fraction 0.05..1, or a percent above 1; 0 = the default 0.60) -> GPULM_RESPONSIVE_DUTY.  -ResponsiveV1 = the v373D behaviour (40 ms
++    # targets, back to back) for A/B.  GPULM_RESPONSIVE_TARGET_MS (default 10) and GPULM_RESPONSIVE_GPU_PRIO (default -7) are read from the environment.
++    [switch]$Responsive,
++    [double]$ResponsiveDuty = 0,
++    [switch]$ResponsiveV1
+ )
+ $ErrorActionPreference = "Stop"
+ 
+@@ -340,14 +411,17 @@
+ function Clear-Gpulm { param([string[]]$Names)
+     foreach ($n in $Names) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue } }
+ # v371: a leftover shell value of the scenery switches must never reach a tool run they were not set for
+-Clear-Gpulm 'GPULM_VTXSCN','GPULM_VTX_STRICT','GPULM_ENUM_SCENERY','GPULM_SCNOBS_DIR'
++Clear-Gpulm 'GPULM_VTXSCN','GPULM_VTX_STRICT','GPULM_ENUM_SCENERY','GPULM_SCNOBS_DIR','GPULM_SCN_SELF_PERM','GPULM_SCN_EMBED_FIX','GPULM_CHOSEN_PERM','GPULM_CHOSEN_PERM_DIAG','GPULM_CHOSEN_PERM_ADD','GPULM_SCN_CHOSEN_PERM','GPULM_SCN_SUN_EXT','GPULM_SCN_HIDDEN_FILL'   # v373V2 (+ GPULM_CHOSEN_PERM_ADD); v373H; v373P/v373C: a leftover shell value must never reach a run it was not asked for
+ # >>> v373D RESPONSIVE MODE (-Responsive, or GPULM_RESPONSIVE=1 inherited): set ONCE here, so every fullgpu run below inherits it. NO Clear-Gpulm call
+ # below names GPULM_RESPONSIVE, and the one that clears every GPULM_* for the skeleton run (phase 2b) snapshots and RESTORES it. Any other inherited
+ # value is removed (Remove-Item, never SetEnvironmentVariable($null)).
+ if ($Responsive -or $env:GPULM_RESPONSIVE -eq '1') {
+     $Responsive = [switch]$true; $env:GPULM_RESPONSIVE = '1'
+-    Write-Host '*** RESPONSIVE MODE: shorter GPU submissions keep the desktop smooth; the bake is slower' -ForegroundColor Yellow
++    if ($ResponsiveV1) { $env:GPULM_RESPONSIVE_V1 = '1' }
++    if ($ResponsiveDuty -gt 0) { $env:GPULM_RESPONSIVE_DUTY = ([string]$ResponsiveDuty) }
++    Write-Host '*** RESPONSIVE MODE: short GPU submissions, one at a time, with idle gaps between them, lowest GPU priority -- the desktop stays usable; the bake is slower' -ForegroundColor Yellow
+ } elseif (Test-Path Env:GPULM_RESPONSIVE) { Clear-Gpulm 'GPULM_RESPONSIVE' }
++if (-not ($Responsive -or $env:GPULM_RESPONSIVE -eq '1')) { Clear-Gpulm 'GPULM_RESPONSIVE_V1','GPULM_RESPONSIVE_DUTY','GPULM_RESPONSIVE_TARGET_MS','GPULM_RESPONSIVE_GPU_PRIO' }
+ # <<< v373D
+ 
+ # >>> H2LM P1 (standalone exe, 2026-10-14): H2LM_ROOT / H2LM_WORK / H2LM_CODE override the three roots. UNSET -- every production
+@@ -398,6 +472,11 @@
+ $tagDirLive  = "$RP\tags\$scenRel"
+ $ltmpName    = "{0}_{1}_lightmap" -f $scenLeaf, $Bsp
+ $bspLive     = "$tagDirLive\$Bsp.scenario_structure_bsp"
++# dev_S (2026-10-20, 01b_spacestation -> 01a_tutorial\01_bsp_1): the BSP the scenario's structure_bsps entry NAMED $Bsp refers to, which may live in
++# ANOTHER folder than the scenario (the beside-the-scenario path above stays the fallback, so every same-folder map is unchanged)
++if (Test-Path "$tagDirLive\$scenLeaf.scenario") {
++    $bspRes = @(& py "$TW\lmw_skeleton.py" resolve-bsp --scenario-dir $tagDirLive --scenario-leaf $scenLeaf --bsp-name $Bsp 2>$null)
++    if ($LASTEXITCODE -eq 0 -and $bspRes.Count -eq 1 -and (Test-Path $bspRes[0])) { $bspLive = $bspRes[0] } }
+ $scnLive     = "$tagDirLive\$scenLeaf.scenario"
+ $SKW         = "$W\_gpulm_skel\w{0:D2}" -f $Worker    # the skeleton overlay: NEVER under a farm_w* dir (cleanup_farm.ps1)
+ # <<< v366 tagwriter vars
+@@ -444,6 +523,11 @@
+              "enum_scenery: %u lit owners", "scenery_occ.bin: %u owners")
+ $miss371 = @($need371 | Where-Object { -not (Select-String -Path $DLL -SimpleMatch -Pattern $_ -Quiet) })
+ if ($miss371.Count) { throw ("STALE $DLL -- it lacks the v371 scenery code ({0}). Build the v371 DLL (v014-inject-estimator\build.bat)" -f ($miss371 -join "; ")) }
++if ($SceneryOwnPermutationOnly) {     # v373V2: both estimator DLLs (the capture's and the tag-writer skeleton's) must carry the descriptor-adding hook
++    foreach ($dd in $DLL, $SKDLL) { if (-not (Select-String -Path $dd -SimpleMatch -Pattern "[GPULM chosenadd] hook installed" -Quiet)) {
++        throw "STALE $dd -- it lacks the v373V2 chosen-permutation descriptor hook ([GPULM chosenadd]). Build it (v014-inject-estimator\build.bat / v043-tagwriter\dll\build.bat)" }
++        if (-not (Select-String -Path $dd -SimpleMatch -Pattern "[GPULM v373M] init complete pid=" -Quiet)) {
++            throw "STALE $dd -- it lacks the v373M ready marker the held-launch injection waits for (the skeleton DLL gets it in v373V2). Build it" } } }
+ if (-not $CaptureOnly) {
+     if (-not (Test-Path $FULLGPU)) { throw "MISSING $FULLGPU" }
+     if (-not (Select-String -Path $FULLGPU -SimpleMatch -Pattern "SCENERY: kernel set *_scn" -Quiet)) {
+@@ -643,7 +727,7 @@
+ # ***** v366 TAG WRITER helpers (-WriteBackMode direct|both). Functions that RETURN a value log with Write-Host only.
+ function Get-LiveTagHashes {
+     $h = @{}
+-    Get-ChildItem $tagDirLive -File | ForEach-Object { $h[$_.Name] = (Get-FileHash $_.FullName -Algorithm MD5).Hash }
++    Get-ChildItem $tagDirLive -File | Where-Object { $_.Name -notlike '*(auto-backup*' } | ForEach-Object { $h[$_.Name] = (Get-FileHash $_.FullName -Algorithm MD5).Hash }   # v064: Sapien auto-backups are not live tags
+     if (Test-Path "$tagDirLive\resources") {
+         Get-ChildItem "$tagDirLive\resources" -File | ForEach-Object { $h["resources\" + $_.Name] = (Get-FileHash $_.FullName -Algorithm MD5).Hash } }
+     return $h }
+@@ -673,6 +757,27 @@
+             if ((Get-Item $dst).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "skeleton overlay: $dst must be a REAL directory" }
+             Get-ChildItem $sd.FullName -File -Filter "$($scenLeaf).scenario_*_resource" | Copy-Item -Destination $dst -Force }
+         elseif (-not (Test-Path $dst)) { New-Item -ItemType Junction -Path $dst -Target $sd.FullName | Out-Null } }
++    # dev_S (2026-10-20): the folder of a BSP that lives OUTSIDE the scenario's folder (01b_spacestation -> 01a_tutorial\01_bsp_1). The off-path
++    # junction above would give the tool a WRITABLE route into LIVE tags through it (a lightmap save into the BSP's folder), so that folder
++    # becomes a REAL overlay folder: file COPIES (the BSP included), its subfolders junctioned for read-only use.
++    $bspDirLive = Split-Path $bspLive
++    if ([IO.Path]::GetFullPath($bspDirLive).TrimEnd('\') -ne [IO.Path]::GetFullPath($tagDirLive).TrimEnd('\')) {
++        $relB = [IO.Path]::GetRelativePath("$RP\tags", $bspDirLive)
++        if ($relB.StartsWith('..') -or [IO.Path]::IsPathRooted($relB)) { throw "skeleton overlay: the BSP folder $bspDirLive is not under $RP\tags" }
++        $liveB = "$RP\tags"; $ovB = $ov
++        foreach ($c in @($relB -split '\\' | Where-Object { $_ })) {
++            $liveB = Join-Path $liveB $c; $nodeOv = Join-Path $ovB $c
++            if ((Test-Path $nodeOv) -and ((Get-Item $nodeOv).Attributes -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete($nodeOv, $false) }   # the LINK only
++            New-Item -ItemType Directory -Force -Path $nodeOv | Out-Null
++            if ((Get-Item $nodeOv).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "skeleton overlay: $nodeOv must be a REAL directory" }
++            foreach ($sd in @(Get-ChildItem $liveB -Directory)) {
++                $j = Join-Path $nodeOv $sd.Name
++                if (-not (Test-Path $j)) { New-Item -ItemType Junction -Path $j -Target $sd.FullName | Out-Null } }
++            if ($liveB -eq $bspDirLive) {
++                Get-ChildItem $liveB -File | Where-Object { $_.Name -notlike '*auto-backup*' -and $_.Name -notlike '*radiance_bitmaps*' } |
++                    Copy-Item -Destination $nodeOv -Force
++                Write-Host "      skeleton overlay: the BSP's folder $relB is a real overlay folder (file copies), not a junction to live" }
++            $ovB = $nodeOv } }
+     $skName = "$($scenLeaf)_sk"
+     $skDir = Join-Path (Split-Path $ovCur) $skName
+     New-Item -ItemType Directory -Force -Path $skDir | Out-Null
+@@ -700,6 +805,15 @@
+         Remove-Item Env:V370_KEYF, Env:V370_OSOY -ErrorAction SilentlyContinue
+         if ($kx -ne 0) { throw "v370: could not add the Osoyoos switches to the skeleton key $keyF" }
+         Write-Host "      v370 skeleton key carries osoyoos_fixes = $osoyDesc" }
++    if ($SceneryOwnPermutationOnly) {
++        # v373V2: a skeleton made with the chosen-permutation sections ADDED (GPULM_CHOSEN_PERM_ADD=1) must never be reused by a bake without them (and vice versa):
++        # the key carries the marker only when ON, so an OFF bake's key -- and the cache it hits -- is unchanged
++        $env:V373_KEYF = $keyF
++        & py -c "import json,os; p=os.environ['V373_KEYF']; k=json.load(open(p)); k['chosen_perm_add']='v373V2-0x499072'; json.dump(k,open(p,'w'),indent=1,sort_keys=True)"
++        $kx2 = $LASTEXITCODE
++        Remove-Item Env:V373_KEYF -ErrorAction SilentlyContinue
++        if ($kx2 -ne 0) { throw "v373V2: could not add chosen_perm_add to the skeleton key $keyF" }
++        Write-Host "      v373V2 skeleton key carries chosen_perm_add" }
+     & py "$TW\lmw_skeleton.py" cached --run-dir $OUT --key $keyF | ForEach-Object { Write-Host "      $_" }
+     if ($LASTEXITCODE -eq 0) { return [pscustomobject]@{ Cached = $true; Key = $keyF } }
+     if (Test-Path (Join-Path (Split-Path $tagDirLive) "$($scenLeaf)_sk")) {
+@@ -721,6 +835,7 @@
+         Clear-Gpulm @($snap.Keys)
+         $env:GPULM_SEVER = "3"; $env:GPULM_ENUM_INST = "1"; $env:GPULM_CHARTPROBE_LATE = "20"
+         $env:GPULM_SKELETON = "1"; $env:GPULM_SKELFILL = "0.5"; $env:GPULM_BASEDIR = "$run\"
++        if ($SceneryOwnPermutationOnly) { $env:GPULM_CHOSEN_PERM_ADD = "1" }     # v373V2: the skeleton builds the lightmap tag's structure -- it must enumerate the same chosen-permutation sections as the capture
+         # RELATIVE to $ROOT (2026-10-07): an absolute overlay -tags_dir overflows a fixed path buffer in the stock tool on
+         # campaign tag paths (0xC0000409 /GS while loading tags -- 07b high_10 CPU reference)
+         $tagsRel = [IO.Path]::GetRelativePath($ROOT, $o.Tags)
+@@ -730,7 +845,10 @@
+             # v370: same command, H2ToolHooks.dll loaded before the first instruction. NOTE its DllMain (attach_to_console) freopens the
+             # process's UCRT stdout/stderr onto CONOUT$ (SetStdHandle): the tool's own output then goes to its console window, so
+             # tool_stdout.txt / tool_stderr.txt stay EMPTY on this run (no script reads them; gpulm.log + skel_manifest.bin are unaffected)
+-            $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt"
++            # v373V2: with -SceneryOwnPermutationOnly the skeleton DLL is injected while the tool is still HELD (v373M), so process_scenery_object's descriptor hook is in
++            # before the first placement (a 3 s late injection missed placement 0 on vuthatest). Without the switch: the unchanged launch + late injection below.
++            if ($SceneryOwnPermutationOnly) { $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt" -earlyDll $SKDLL -readyLog "$run\gpulm.log" }
++            else { $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt" }
+         } else {
+         $p = Start-Process -FilePath $TOOL -ArgumentList $a -WorkingDirectory $ROOT -PassThru `
+                 -RedirectStandardOutput "$run\tool_stdout.txt" -RedirectStandardError "$run\tool_stderr.txt" @h2lmHide     # H2LM P3
+@@ -740,12 +858,14 @@
+         Clear-Gpulm @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GPULM_*' } | ForEach-Object { $_.Name })
+         foreach ($k in $snap.Keys) { if ("$($snap[$k])" -ne "") { Set-Item -Path "Env:$k" -Value $snap[$k] } } }
+     $injected = $false     # NOT $inj: variable names are case-insensitive and $INJ is the injector path
++    if ($osoyOn -and $SceneryOwnPermutationOnly -and $script:earlyDone) { $injected = $true }     # v373V2: injected while the tool was held (Start-OsoyTool)
++    else {
+     Start-Sleep -Seconds 3
+     for ($i = 0; $i -lt 80; $i++) {
+         $io = & $INJ $p.Id $SKDLL 2>&1
+         if ("$io" -match "injected" -or $LASTEXITCODE -eq 0) { $injected = $true; break }
+         if ($p.HasExited) { break }
+-        Start-Sleep -Milliseconds 250 }
++        Start-Sleep -Milliseconds 250 } }
+     if (-not $injected) { if (-not $p.HasExited) { $p.Kill() }
+         throw "skeleton: injection FAILED -- the tool was killed (un-injected it would CPU-bake the renamed overlay scenario)" }
+     Write-Host ("      skeleton tool run started: pid {0}, injected after {1:n1}s, overlay {2}" -f $p.Id, ((Get-Date) - $t0).TotalSeconds, $o.SkDir)
+@@ -762,7 +882,9 @@
+     # under live tags\ written since the launch (phase 3 writes none). A breach stops the bake -- never a silent fallback.
+     $now = Get-LiveTagHashes
+     $chg = @($sk.Live.Keys | Where-Object { $now[$_] -ne $sk.Live[$_] }) + @($now.Keys | Where-Object { -not $sk.Live.ContainsKey($_) })
+-    $hits = @(Get-ChildItem "$RP\tags" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $sk.T0 })
++    # v064: Sapien's own temp scenario and its (auto-backup ...) saves are written while Sapien is open -- not the skeleton's writes
++    $hits = @(Get-ChildItem "$RP\tags" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $sk.T0 -and
++              $_.FullName -notlike "$RP\tags\temp_scenario\*" -and $_.Name -notlike '*(auto-backup*' })
+     if ($chg.Count -or $hits.Count) {
+         $script:skelBreach = $true
+         throw ("*** THE SKELETON RUN WROTE LIVE TAGS -- changed: {0} | written since its launch: {1}. Restore them before anything else." -f `
+@@ -770,7 +892,7 @@
+     $ec = $p.ExitCode
+     Assert-NoHookCollision "$($sk.Run)\gpulm.log" "skeleton"     # v370 (a no-op with the switches off)
+     $ca = @("$TW\lmw_skeleton.py", "collect", "--run-dir", $OUT, "--key", $sk.Key, "--skel-run", $sk.Run, "--skel-leaf", $sk.Overlay.SkDir,
+-            "--prefix", $sk.Overlay.Prefix, "--since", "$($sk.Since)", "--scenario-dir", $tagDirLive, "--bsp-name", $Bsp)
++            "--prefix", $sk.Overlay.Prefix, "--since", "$($sk.Since)", "--scenario-dir", $tagDirLive, "--scenario-leaf", $scenLeaf, "--bsp-name", $Bsp)
+     if ($null -ne $ec) { $ca += @("--tool-exit", "$ec") }
+     & py @ca | ForEach-Object { Write-Host "      $_" }
+     if ($LASTEXITCODE -ne 0) { throw "the skeleton did not verify (lmw_skeleton.py collect exit $LASTEXITCODE; tool exit $ec; logs in $($sk.Run))" }
+@@ -855,6 +977,12 @@
+     # and the occluder enumeration. GPULM_VTXSERVE / GPULM_VTX_STRICT must NOT be set here: a leftover VTXSERVE flips BOTH per-vertex
+     # receivers (v317 and v371) into SERVE mode, so no vertex_q.bin / scenery_q.bin would be written for this capture.
+     $env:GPULM_VTXSCN = "1"; $env:GPULM_ENUM_SCENERY = "1"
++    # v373C: -SceneryOwnPermutationOnly records the permutation the TOOL chose for every scenery placement (read-only hook at process_scenery_object
++    # 0x498962 -> scenery_chosen_perm.bin). Capture only; cleared again below. Without the switch no hook is installed.
++    # v373V2 (dev_CO part 2): GPULM_CHOSEN_PERM_ADD=1 additionally makes the DLL ADD the sections of each placement's CHOSEN permutation to the tool's own
++    # scenery descriptors at process_scenery_object 0x499072 (so a named-variant object bakes what it draws). It must be set for EVERY tool run of this bake
++    # (this capture, the tag-writer skeleton, the phase-4 tool write-back) so all of them build the same structure.
++    if ($SceneryOwnPermutationOnly) { $env:GPULM_CHOSEN_PERM = "1"; $env:GPULM_CHOSEN_PERM_ADD = "1"; Remove-Item "$OUT\scenery_chosen_perm.bin","$OUT\scenery_chosen_perm.txt" -ErrorAction SilentlyContinue }
+     Clear-Gpulm 'GPULM_VTXSERVE','GPULM_VTX_STRICT','GPULM_SCNOBS_DIR'
+     # <<< v371 phase-1 env
+     # GPULM_EXPECT_TRIS is deliberately NOT set. It was a gate that made the capture WAIT until the
+@@ -1147,6 +1275,8 @@
+     Write-Host ("CAPTURE ONLY - stopped after phase 1.  {0:n1}s   sever={1}" -f $total.Elapsed.TotalSeconds,$Sever) -ForegroundColor Green
+     return }
+ 
++if ($WriterOnly -and -not $SkipCapture) { throw "-WriterOnly needs -SkipCapture" }
++if (-not $WriterOnly) {   # dev_S -WriterOnly
+ # ---- 2. DERIVE -------------------------------------------------------------------------------
+ Phase 2 "DERIVE - sky cube, surface lights, sky emitters, r.e. owners"
+ $sw = [Diagnostics.Stopwatch]::StartNew()
+@@ -1323,6 +1453,7 @@
+ Guard check $OUT derive
+ Write-Host ("      {0:n1}s" -f $sw.Elapsed.TotalSeconds)
+ 
++}   # dev_S -WriterOnly (end of phase 2)
+ # ---- 3. GPU BAKE -----------------------------------------------------------------------------
+ Phase 3 "GPU BAKE - photon cast, radiance-estimate lattice, direct + surface, compose"
+ # ***** v369 (guards12) the v368 inputs must be complete BEFORE the GPU runs: fullgpu would otherwise stand the layered walks down
+@@ -1349,6 +1480,7 @@
+     try { $script:skel = Start-Skeleton }
+     catch { if ("$_" -like 'v370*') { throw }     # v370: a requested Osoyoos fix that did not install is never a soft fallback
+             Note "tag writer: the skeleton run did not start ($_) -- phase 4a will fall back" } }
++if (-not $WriterOnly) {   # dev_S -WriterOnly (GPU work)
+ $sw = [Diagnostics.Stopwatch]::StartNew()
+ Push-Location $OUT
+ $env:GPULM_FULLGPU="1"; $env:GPULM_DIRECT="1"; $env:GPULM_SURFACE="1"; $env:GPULM_GPU_CAST="1"
+@@ -1394,6 +1526,12 @@
+ # v372 PLK64: fullgpu picks the per-ray Plucker moment from THIS capture's osoyoos_fixes.json (plucker=true -> the *_plk kernel
+ # set, the FP64 FAST form of 0x4B2F27), never from a leftover shell GPULM_PLK64 (that override exists for A/B and is a HYBRID)
+ Clear-Gpulm 'GPULM_PLK64'
++# df64 COMPAT (dev_DF): GPULM_COMPAT=1 forces fullgpu's FP32-only double-single kernel set (to test it on an FP64 GPU), =0 forces the native FP64 kernels,
++# unset = automatic (fullgpu asks the D3D11 device: no DoublePrecisionFloatShaderOps / ExtendedDoubles -> 'Compatibility mode (no FP64)'). Passed through to fullgpu as-is.
++if (Test-Path Env:GPULM_COMPAT) {
++    if ($env:GPULM_COMPAT -ne '' -and $env:GPULM_COMPAT -ne '0' -and $env:GPULM_COMPAT -ne '1') { throw "GPULM_COMPAT='$($env:GPULM_COMPAT)' -- expected 0, 1 or unset" }
++    if ($env:GPULM_COMPAT -eq '1') { Note "GPULM_COMPAT=1: the FP32-only double-single (df64) kernel set is FORCED (a GPU with FP64 would otherwise run the native kernels)" }
++    elseif ($env:GPULM_COMPAT -eq '0') { Note "GPULM_COMPAT=0: the native FP64 kernels are FORCED (fullgpu refuses on a GPU without FP64)" } }
+ if ($PluckerFix) { Write-Host "      v372 PLK64: ON (the GPU forms the per-ray Plucker moment in FP64 exactly as the -PluckerFix CPU does at 0x4B2F27)" -ForegroundColor Green }
+ # v372 (frustum lane) GPULM_ANA_FRUSTUM=0 is the A/B escape that turns EVERY v372 analytic fix off (omni cast of frustum lights,
+ # no half-life, apex origin, no G5/G6/G7) -- never from a leftover shell. Run fullgpu directly for that A/B.
+@@ -1478,6 +1616,9 @@
+         $off = Select-String -Path $log -SimpleMatch -Pattern ("*** {0} requested but OFF" -f $wkName) | Select-Object -First 1
+         if ($off) { throw "PHASE 3: [$tag] the v368 $wkName layered walk stood down: $($off.Line.Trim()) -- the walk inputs are incomplete (see pipeline_guard.py check walk)" } }
+     # v372 PLK64: the GPU's per-ray moment must be the form THIS capture's CPU used (fullgpu reads osoyoos_fixes.json itself)
++    # df64 COMPAT: say so in the summary of every phase when fullgpu runs the FP32-only kernel set
++    $cmpL = Select-String -Path $log -SimpleMatch -Pattern "Compatibility mode (no FP64)" | Select-Object -First 1
++    if ($cmpL) { Note "[$tag] $($cmpL.Line.Trim())" }
+     $plkHyb = Select-String -Path $log -SimpleMatch -Pattern "*** HYBRID" | Select-Object -First 1
+     if ($plkHyb) { throw "PHASE 3: [$tag] $($plkHyb.Line.Trim()) -- GPULM_PLK64 overrode the capture's Plucker fix state" }
+     if ($PluckerFix -and -not (Select-String -Path $log -SimpleMatch -Pattern "PLK64: ON -- v372" -Quiet)) {
+@@ -1627,7 +1768,9 @@
+             'GPULM_SUN_CULL_NOVTX','GPULM_SUN_CULL_KEY','GPULM_SUN_CULL_R',
+             'GPULM_SUN_CULL_FORCE_SKIP','GPULM_SUN_CULL_DUMP',   # v372I P2
+             # v368L lattice A/B escapes (=0 restores v367's run-dependent photon order / grid-order final-bin quota)
+-            'GPULM_PHOTON_CANON','GPULM_RE_KXE'
++            'GPULM_PHOTON_CANON','GPULM_RE_KXE',
++            # v374L resumable-lattice TEST knobs (fixed budget / first budget / tile / kernel override / profiler); GPULM_LATTICE_RESUME=0 is the user kill switch and is NOT cleared
++            'GPULM_LATTICE_RESUME_BUDGET','GPULM_LATTICE_RESUME_B0','GPULM_RE_RS_TILE','GPULM_RE_RS_CSO','GPULM_RE_PROF'
+ # ***** v358 KILL THE TWO-BAKE LAG. The gather LOADS re_samp_gpu.bin at startup but the r.e. block WRITES it at the end
+ # of the same program, so a single bake's atlas used the PREVIOUS run's lattice -- and a new map's first bake had none
+ # (the capture's gather_samp.bin is ALL ZERO under severance: no bounce light at all). The pre-pass runs only what the
+@@ -1636,6 +1779,22 @@
+ # its own r.e. (GPULM_RE=0). gather.cpp now FAILS (exit 7) instead of falling back to the zero cache.
+ Guard clean $OUT bake            # v359 atlas/vertex/vertdir/photon/status/log products of the last run
+ Guard mark  $OUT bake
++# >>> v373P -SceneryOwnPermutationOnly (OPT-IN, default OFF = byte/keyed-identical to the production bake). Set for the lattice pre-pass AND the main
++# fullgpu pass (the sun candidate mask that uses it runs in the main pass; both inherit it so the two passes can never disagree). Cleared again in the
++# finally of the main pass below and at the end of the script. Not one Clear-Gpulm call between here and there names it.
++if ($SceneryOwnPermutationOnly) {
++    # v373C: GPULM_SCN_SELF_PERM=1 stays the master opt-in (gates every v373 code path in fullgpu); GPULM_SCN_CHOSEN_PERM=1 selects the chosen-permutation
++    # occluder (replaces the v373P sun-candidate extension); GPULM_SCN_EMBED_FIX=0 keeps the v373V embedded-vertex fill OFF (the rock below the floor stays
++    # dark like the CPU). A/B: GPULM_SCN_CHOSEN_PERM=0 / GPULM_SCN_EMBED_FIX=1 / GPULM_SCN_SUN_EXT=1 in a fullgpu run restore the v373P/V behaviour.
++    if (-not (Test-Path "$OUT\scenery_chosen_perm.bin")) {
++        throw "v373C -SceneryOwnPermutationOnly: $OUT has no scenery_chosen_perm.bin -- the capture was made without the switch (the tool's per-placement permutation pick is recorded in phase 1 only). Re-capture with -SceneryOwnPermutationOnly (drop -SkipCapture)" }
++    # v373V2: the capture must have run WITH the descriptor-adding hook (otherwise the lightmap structure of this bake and its skeleton would disagree)
++    if (-not (Select-String -Path "$OUT\gpulm.log" -SimpleMatch -Pattern "[GPULM chosenadd] hook installed" -Quiet -ErrorAction SilentlyContinue)) {
++        throw "v373V2 -SceneryOwnPermutationOnly: the capture log $OUT\gpulm.log has no '[GPULM chosenadd] hook installed' line -- the capture was made without the descriptor-adding hook (an older -SceneryOwnPermutationOnly capture, or a tool build the hook signature did not match). Re-capture with the switch (drop -SkipCapture)" }
++    $env:GPULM_SCN_SELF_PERM = "1"; $env:GPULM_SCN_CHOSEN_PERM = "1"; $env:GPULM_SCN_EMBED_FIX = "0"
++    Note "-SceneryOwnPermutationOnly (v373C, OPT-IN, 'Scenery Multi Permutation Fix (Experimental Improvement)'): each scenery placement's NON-CHOSEN permutation sections (the shapes the game never draws; the tool's own pick, recorded at capture) are removed from the occluder set of every query -- BSP texels and vertices, other scenery, photons -- so the ground no longer carries splotches from rock that is not there. A non-chosen section as a receiver sees the chosen-only world plus itself. The embedded-vertex fill is off (rock below the floor stays dark like the CPU). This bake DIFFERS FROM THE CPU on purpose."
++}
++# <<< v373P
+ # ***** v372 SEG THE PART PLAN. fullgpu parses the soup, bounds every chart's call rows (the R1 coverage bound) and cuts the chart list
+ # into the fewest balanced contiguous ranges whose call rows fit BOTH the GPU per-resource cap (T9 36 B/call) and the host RAM budget.
+ # One part = the single-pass program on a chart range, so a map that fits stays on the unchanged single-pass path (nParts = 1).
+@@ -1676,6 +1835,9 @@
+         Remove-Item "$OUT\cast_cache.bin","$OUT\cast_cache.bin.tmp" -ErrorAction SilentlyContinue
+         if (-not $NoCastCache) { $env:GPULM_CAST_CACHE_OUT = "$OUT\cast_cache.bin" }   # v372M
+         if (-not $NoReWin) { $env:GPULM_RE_WIN = "1" }     # v368: the r.e. kernel runs HERE
++        # dev_L (lattice task): H2LM_DUMP_ENV=1 writes the exact environment + argv of the lattice pre-pass to $OUT\lattice_env.txt so a lattice-only
++        # harness (run_lat.sh) can replay it directly against fullgpu.exe without the ~60 s of guards / main pass.
++        if ($env:H2LM_DUMP_ENV) { $envLines = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GPULM_*' -or $_.Name -like 'H2*' } | ForEach-Object { "$($_.Name)=$($_.Value)" }); $envLines += "ARGS=$($args2 -join ' ')"; Set-Content -Path "$OUT\lattice_env.txt" -Value $envLines }
+         # -CaseSensitive: "OVERFLOWED" only (the benign "(0 overflowed)" census line must not echo)
+         & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake_lattice.log" |
+             Select-String -CaseSensitive -Pattern "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
+@@ -1737,7 +1899,7 @@
+ if ((-not $NoCastCache) -and (-not $UseLattice) -and (Test-Path "$OUT\cast_cache.bin")) { $env:GPULM_CAST_CACHE_IN = "$OUT\cast_cache.bin" }
+ elseif (-not $NoCastCache -and -not $UseLattice) { Write-Host "      *** v372M: the pre-pass wrote no cast_cache.bin -- the main pass casts again" -ForegroundColor Yellow }
+ if ($RescueSalt -gt 0) { $env:GPULM_WALK_RDONE = "$RescueSalt"; Write-Host "      -RescueSalt $($RescueSalt) (default since 2026-10-08, validated on high_10 / mainmenu / Needle): the gate-walk rescue's RNG salt is the constant $($RescueSalt+1) (single and part bakes alike), not the whole-run walk depth + 1 -- NOT the default's draw for the rescued texels" }
+-$mainPat = "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|GATHER: \*\*\*|SUNX: \*\*\*|SUNX: status|SKYX: \*\*\*|SKYX: all|OVERFLOWED|COMPOSE: wrote atlas_out|SEAM:|SKY: sky_gate|SKY: \*\*\*|VERTEX: \*\*\*|SUNCULL: APPLIED|SUNCULL: \*\*\*|SUNCULL: SUN|SUNCULL: BOX|SUNCULL: v372|SUNCULL: sum|SURFCULL: v372H|CULLR:|SURFCULL:|SURFACE pass|GATHER2:|SURFQ:|GATEWALK:|NEAR0:|SUNWALK|SCENERY:|COMPOSE: wrote scenery_out|PLK64: (ON|off|scenery)|BUFCAP: (v372 cap|FATAL|texelgen used|v372 consolidated|\d+ calls after)|GPU CAST v372|v372 analytic census|v372 G6 ON|ANACULL: (v372|\*\*\*)"
++$mainPat = "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|GATHER: \*\*\*|SUNX: \*\*\*|SUNX: status|SKYX: \*\*\*|SKYX: all|OVERFLOWED|COMPOSE: wrote atlas_out|SEAM:|SKY: sky_gate|SKY: \*\*\*|VERTEX: \*\*\*|SUNCULL: APPLIED|SUNCULL: \*\*\*|SUNCULL: SUN|SUNCULL: BOX|SUNCULL: v372|SUNCULL: sum|SUNCULL: v373P|SURFCULL: v372H|CULLR:|SURFCULL:|SURFACE pass|GATHER2:|SURFQ:|GATEWALK:|NEAR0:|SUNWALK|SCENERY:|COMPOSE: wrote scenery_out|PLK64: (ON|off|scenery)|BUFCAP: (v372 cap|FATAL|texelgen used|v372 consolidated|\d+ calls after)|GPU CAST v372|v372 analytic census|v372 G6 ON|ANACULL: (v372|\*\*\*)"
+ try {
+   if ($nParts -le 1) {
+     & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake.log" |
+@@ -1786,7 +1948,7 @@
+         if ($mx -ne 0) { break }
+     }
+   }
+-} finally { $env:GPULM_RE = "1"; Clear-Gpulm 'GPULM_CAST_CACHE_IN','GPULM_PART_RANGE','GPULM_WALK_RDONE','GPULM_WALK_DEPTH_ONLY'; Remove-Item "$OUT\cast_cache.bin" -ErrorAction SilentlyContinue; Clear-Gpulm 'GPULM_SUN_PHOTON_CULL','GPULM_SUN_CULL_REQUIRE','GPULM_SUN_CULL_MULTI','GPULM_SUN_CULL_STAT','GPULM_CULL_MGR_RADIUS','GPULM_SUN_CULL_BOX','GPULM_SUN_BOX_PASS','GPULM_SUN_CULL_FORCE_SKIP','GPULM_SUN_CULL_DUMP','GPULM_SURF_CULL','GPULM_GATHER_STREAMS','GPULM_GATHER_S1_DUMP','GPULM_SURF_QPAR','GPULM_GATE_WALK','GPULM_GATE_WALK_ROUNDS','GPULM_NEAR0_NEG','GPULM_SUN_WALK','GPULM_ANA_WALK','GPULM_SURF_WALK','GPULM_BUF_CAP_MB','GPULM_ANA_CULL' }     # v372 FIX M1: + the two -BufCapMB / -AnaCull variables
++} finally { $env:GPULM_RE = "1"; Clear-Gpulm 'GPULM_CAST_CACHE_IN','GPULM_PART_RANGE','GPULM_WALK_RDONE','GPULM_WALK_DEPTH_ONLY'; Remove-Item "$OUT\cast_cache.bin" -ErrorAction SilentlyContinue; Clear-Gpulm 'GPULM_SUN_PHOTON_CULL','GPULM_SUN_CULL_REQUIRE','GPULM_SUN_CULL_MULTI','GPULM_SUN_CULL_STAT','GPULM_CULL_MGR_RADIUS','GPULM_SUN_CULL_BOX','GPULM_SUN_BOX_PASS','GPULM_SUN_CULL_FORCE_SKIP','GPULM_SUN_CULL_DUMP','GPULM_SURF_CULL','GPULM_GATHER_STREAMS','GPULM_GATHER_S1_DUMP','GPULM_SURF_QPAR','GPULM_GATE_WALK','GPULM_GATE_WALK_ROUNDS','GPULM_NEAR0_NEG','GPULM_SUN_WALK','GPULM_ANA_WALK','GPULM_SURF_WALK','GPULM_BUF_CAP_MB','GPULM_ANA_CULL','GPULM_SCN_SELF_PERM','GPULM_SCN_EMBED_FIX','GPULM_SCN_HIDDEN_FILL' }     # v373H; v372 FIX M1; v373P: + the two -BufCapMB / -AnaCull variables
+ Pop-Location
+ if ($nParts -gt 1) {
+     # v372 SEG: gpu_bake.log = the part logs in order (the checks below look for a line anywhere in it)
+@@ -1877,6 +2039,7 @@
+ }
+ Write-Host ("      {0:n1}s" -f $sw.Elapsed.TotalSeconds)
+ 
++}   # dev_S -WriterOnly (end of phase 3)
+ # ---- 4. WRITE-BACK ---------------------------------------------------------------------------
+ # v366: -WriteBackMode decides who writes the tag set (see the header). tool = the block below, unchanged. direct = 4a (+ 4b
+ # with -WriteBack); the block below runs only as the automatic fallback. both = 4a stage + the block below + 4c A/B.
+@@ -1985,14 +2148,15 @@
+     if ($TexDirServe) { $env:GPULM_TEXDIRSERVE = "1" }
+     else { Clear-Gpulm 'GPULM_TEXDIRSERVE' }
+     # Clear it first: Select-String below cannot tell a stale WRITE-BACK line from this run's.
+-    Remove-Item "$W\gpulm.log" -ErrorAction SilentlyContinue
++    # (dev_S: the log's directory is decided below by -ToolOverlay; the Remove-Item of the stale log follows it there)
+     # GPULM_ENUM_INST MUST be cleared here. Phase 1 sets it for sever=3, and it also gates the
+     # record_link transform-dedupe -- leaving it set would change link recording in the write-back
+     # run, which is supposed to be the plain historical sever=2 path.
+     Clear-Gpulm 'GPULM_DUMP_EXIT','GPULM_CHARTPROBE','GPULM_CHARTPROBE_MERGE','GPULM_VTXCAP','GPULM_VTXCAP_SKIP','GPULM_VTXCAP_ALLGATE',
+                 'GPULM_CHARTPROBE_PRESAVE','GPULM_SEAM_CAP','GPULM_SEAM_SOUP',
+                 'GPULM_TEXDIRSERVE','GPULM_DIRFILL','GPULM_BVPROBE',
+-                'GPULM_ENUM_SCENERY','GPULM_SCNOBS_DIR'     # v371: the occluder enumeration is a phase-1 job only
++                'GPULM_ENUM_SCENERY','GPULM_SCNOBS_DIR','GPULM_CHOSEN_PERM'     # v371: the occluder enumeration is a phase-1 job only; v373C: so is the chosen-permutation recorder
++    if ($SceneryOwnPermutationOnly) { $env:GPULM_CHOSEN_PERM_ADD = "1" } else { Clear-Gpulm 'GPULM_CHOSEN_PERM_ADD' }   # v373V2: NOT phase-1 only -- the tool write-back builds the same structure (added chosen-permutation sections) as the capture
+     # v345: GPULM_TEXEL_ID is deliberately NOT cleared here -- DIRACC needs g_curTexel published.
+     # sever=3 skips the loop that RAY-DISCOVERS instance placements, so the enumerator has to
+     # supply them -- same requirement as phase 1, and record_link's transform-dedupe (gated on
+@@ -2031,6 +2195,19 @@
+     # ***** v361 TAG SAFETY. The tool rewrites the lightmap tags IN PLACE; a shutdown or crash mid-save can leave them
+     # truncated. Keep the previous tags next to this run and a marker that is removed only after the write-back is proven.
+     $tagDir = Split-Path "$RP\tags\$Scenario"; $tagPfx = "{0}_{1}_lightmap" -f (Split-Path $Scenario -Leaf), $Bsp
++    # dev_S -ToolOverlay: the tool write-back writes into the skeleton overlay's renamed scenario, so $tagDir/$tagPfx point there
++    $wbBase = $W; $aFullOverride = $null
++    if ($ToolOverlay) {
++        $ovo = Build-SkelOverlay
++        $tagDir = $ovo.SkDir; $tagPfx = $ovo.Prefix
++        $tagsRelT = [IO.Path]::GetRelativePath($ROOT, $ovo.Tags)
++        if ($tagsRelT.StartsWith('..') -or [IO.Path]::IsPathRooted($tagsRelT)) { throw "-ToolOverlay: overlay $($ovo.Tags) is not under $ROOT" }
++        $aFullOverride = "lightmaps $($ovo.ScenArg) $Bsp low -tags_dir `"$tagsRelT`" -data_dir data -game_root_dir ."
++        $wbBase = "$SKW\wbrun"; New-Item -ItemType Directory -Force -Path $wbBase | Out-Null
++        $env:GPULM_BASEDIR = "$wbBase\"
++        Note "dev_S -ToolOverlay: the tool write-back runs in the skeleton overlay $($ovo.SkDir), NOT in the live tags; logs in $wbBase"
++    } elseif ($WriterOnly) { throw "dev_S: a -WriterOnly tool write-back must use -ToolOverlay (it would write the LIVE tags)" }
++    Remove-Item "$wbBase\gpulm.log" -ErrorAction SilentlyContinue     # Select-String below cannot tell a stale WRITE-BACK line from this run's
+     $tagFiles = @(Get-ChildItem "$tagDir\$tagPfx*" -File -ErrorAction SilentlyContinue)
+     $tagBak = "$OUT\tag_backup_before_writeback"
+     if ($tagFiles.Count) {
+@@ -2041,7 +2218,8 @@
+     } else { Write-Host "      no existing lightmap tag to back up ($tagDir\$tagPfx*) -- first bake of this BSP" }
+     Set-Content "$OUT\writeback_in_progress.txt" ("started {0}; previous tags: {1} ({2} files from {3}\{4}*). Copy them back if the new tag is broken." -f (Get-Date), $tagBak, $tagFiles.Count, $tagDir, $tagPfx)
+     $aFull = "lightmaps $Scenario $Bsp low -tags_dir tags -data_dir data -game_root_dir ."
+-    if ($osoyLaunch) { $p = Start-OsoyTool $aFull "writeback" $OUT -earlyDll $DLL -readyLog "$W\gpulm.log" }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch); v373M: and our DLL
++    if ($aFullOverride) { $aFull = $aFullOverride }
++    if ($osoyLaunch) { $p = Start-OsoyTool $aFull "writeback" $OUT -earlyDll $DLL -readyLog "$wbBase\gpulm.log" }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch); v373M: and our DLL
+     else {
+     $p = Start-Process -FilePath $TOOL -ArgumentList $aFull -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+     $null = $p.Handle     # v371 (m2): keeps ExitCode readable after the exit -- the 0x5CE1 refusal is read from it
+@@ -2065,7 +2243,7 @@
+     if (-not $injected) { if (-not $p.HasExited) { $p.Kill() }; throw "PHASE 4: injection FAILED -- the tool would have baked on the CPU and saved a CPU-lit tag. Aborted." }
+     $p.WaitForExit(3000000) | Out-Null
+     # Never report success without proof. A missing WRITE-BACK line means the tag holds CPU lighting.
+-    $wbLog = "$W\gpulm.log"
++    $wbLog = "$wbBase\gpulm.log"
+     # v371 C1 FIRST (DESIGN_FINAL 5.9, m2): a per-vertex serve refusal (0x5CE1 / "PER-VERTEX SERVE REFUSED") stopped the tool before the
+     # save -- report it as itself, with the live tags md5-verified against $tagBak, before any other phase-4 check can misname it.
+     Assert-PerVertexServe $p $wbLog $tagDir $tagPfx $tagBak $tagFiles.Count "$OUT\writeback_in_progress.txt"
+@@ -2099,7 +2277,7 @@
+     else { Write-Host "      A/B passed: pixels identical, tag differences confined to the declared classes" -ForegroundColor Green } }
+ 
+ Clear-Osoyoos     # v370
+-Clear-Gpulm 'GPULM_VTXSCN','GPULM_VTX_STRICT','GPULM_ENUM_SCENERY','GPULM_SCNOBS_DIR','GPULM_NQ_FAST','GPULM_NQ_VERIFY'     # v371 (never left behind in the shell); v372K2
++Clear-Gpulm 'GPULM_VTXSCN','GPULM_VTX_STRICT','GPULM_ENUM_SCENERY','GPULM_SCNOBS_DIR','GPULM_NQ_FAST','GPULM_NQ_VERIFY','GPULM_SCN_SELF_PERM','GPULM_SCN_EMBED_FIX','GPULM_CHOSEN_PERM','GPULM_CHOSEN_PERM_ADD','GPULM_SCN_CHOSEN_PERM','GPULM_SCN_HIDDEN_FILL'     # v373H; v371; v373P/v373C (never left behind in the shell); v372K2
+ if ($osoyOn) { Write-Host "      v370 Osoyoos fixes ON ($osoyDesc) in every tool run of this bake -- the validated target since 2026-10-08 (the Osoyoos-fixed CPU: high_10 96.97 / mainmenu 96.93 / Needle 96.94 un-floored)" }
+ Write-Host ""
+ if ($script:Warn.Count) {

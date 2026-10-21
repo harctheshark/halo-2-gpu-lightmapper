@@ -124,7 +124,22 @@ namespace H2GpuLightmapper.DllSlots
             new[] { new SlotSpec("kBaseDir", 446432, 61, ".rdata"), new SlotSpec("g_dirBuf", 748552, 300, ".data") },
             SlotLayoutSource.Known);
 
-        public static IReadOnlyList<SlotLayout> All { get; } = new[] { Production, ProductionV062, Skeleton };
+        /// <summary>
+        /// W3 2026-10-21 (0.6.4): engine_v373\v014-inject-estimator\gpulm_estimator.dll after the 0.6.4 promotion (d6147fce: scenery chosen-permutation
+        /// hooks, scn_chosen_add.h; also the AO engine's copy). Offsets = what <see cref="DllSlotPatcher.DiscoverLayout"/> finds (test "promoted 0.6.4 layouts").
+        /// </summary>
+        public static readonly SlotLayout ProductionV064 = new SlotLayout(
+            "gpulm_estimator (production, 0.6.4)", "d6147fce6e3979a37178d2e14d092227", 794624,
+            new[] { new SlotSpec("kBaseDir", 460256, 61, ".rdata"), new SlotSpec("g_dirBuf", 767496, 300, ".data") },
+            SlotLayoutSource.Known);
+
+        /// <summary>W3 2026-10-21 (0.6.4): engine_v373\v043-tagwriter\dll\gpulm_estimator.dll (the skeleton-mode build) after the 0.6.4 promotion (5c6aeea9; also the AO engine's copy).</summary>
+        public static readonly SlotLayout SkeletonV064 = new SlotLayout(
+            "gpulm_estimator (skeleton, 0.6.4)", "5c6aeea9d1ffbaaaa6351d7ba5e77360", 697856,
+            new[] { new SlotSpec("kBaseDir", 428436, 61, ".rdata"), new SlotSpec("g_dirBuf", 674304, 300, ".data") },
+            SlotLayoutSource.Known);
+
+        public static IReadOnlyList<SlotLayout> All { get; } = new[] { Production, ProductionV062, ProductionV064, Skeleton, SkeletonV064 };
 
         public static SlotLayout ByPristineMd5(string md5)
         {

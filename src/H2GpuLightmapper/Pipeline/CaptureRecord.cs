@@ -34,6 +34,10 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>Custom only (review fix, finding 16): true = the N3 guarded engine_custom fullgpu, false = the unguarded
         /// production fullgpu (dev). Recorded so T3 evidence made without the guard cannot pass for guarded.</summary>
         public bool? Guarded;
+        /// <summary>"Scenery Multi Permutation Fix": the lightmap capture was made WITH -SceneryOwnPermutationOnly (the engine records the tool's per-placement
+        /// permutation pick in phase 1, so a capture is reusable only by a bake with the same setting). Never set for the probe worker's own capture
+        /// (it is made by gpu_lightprobes, which does not get the switch). A record without the key counts as false.</summary>
+        public bool SceneryPermutationFix;
         /// <summary>name -> md5 (null when unknown): estimatorDll, fullgpu, gpuBake, toolFast, boundsDb.</summary>
         public SortedDictionary<string, string> Binaries = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
@@ -46,6 +50,7 @@ namespace H2GpuLightmapper.Pipeline
                 Mc = o.Quality == App.Quality.Custom ? (int?)o.Rays : null,
                 AppVersion = m == null ? null : m.AppVersion,
                 Guarded = o.Quality == App.Quality.Custom ? (bool?)(gpuBakeRel == InstLayout.GpuBakeCustom) : null,
+                SceneryPermutationFix = o.SceneryPermutationFix && !skyHi,
             };
             var inst = m == null ? null : m.InstComponent;
             Func<string, string> md5Of = rel => inst == null ? null : inst.Find(rel) == null ? null : inst.Find(rel).Md5.ToLowerInvariant();
@@ -140,7 +145,8 @@ namespace H2GpuLightmapper.Pipeline
                 .Add("scenario", scenarioRel).Add("bsp", bsp).Add("worker", (long)worker)
                 .Add("quality", id.Quality).Add("photons", id.Photons).Add("mcSamples", id.Mc).Add("skyHi", id.SkyHi)
                 .Add("fixes", new JObj().Add("plucker", id.Plucker).Add("scenery", id.Scenery))
-                .Add("appVersion", id.AppVersion).Add("guarded", id.Guarded.HasValue ? (object)id.Guarded.Value : null).Add("binaries", bin)
+                .Add("appVersion", id.AppVersion).Add("guarded", id.Guarded.HasValue ? (object)id.Guarded.Value : null)
+                .Add("sceneryPermutationFix", id.SceneryPermutationFix).Add("binaries", bin)
                 .Add("captureId", new JObj().Add("soup_crc32", crc).Add("md5", cidMd5))
                 .Add("tags", tags == null ? null : new JObj().Add("file", TagsFileName).Add("files", (long)tags.Count).Add("md5", tags.Md5));
             SafeFs.WriteAllTextAtomic(PathIn(outDir), Json.Write(j, true));
@@ -226,6 +232,10 @@ namespace H2GpuLightmapper.Pipeline
             var fx = j.Obj("fixes");
             if (fx == null || fx.Bool("plucker") != want.Plucker || fx.Bool("scenery") != want.Scenery)
                 return Refuse(v, "the capture was made with different Osoyoos fixes");
+            if ((j.Bool("sceneryPermutationFix") == true) != want.SceneryPermutationFix)
+                return Refuse(v, want.SceneryPermutationFix
+                    ? "the capture was made without \"" + BakeOptions.SceneryPermutationFixLabel + "\", which needs its own capture (the engine records the tool's shape pick while capturing)"
+                    : "the capture was made with \"" + BakeOptions.SceneryPermutationFixLabel + "\"; this bake has it off");
             var bin = j.Obj("binaries") ?? new JObj();
             var diff = new List<string>();
             foreach (var kv in want.Binaries)

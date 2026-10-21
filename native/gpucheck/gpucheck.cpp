@@ -6,7 +6,10 @@
 //   * the DEFAULT adapter exactly as fullgpu.exe gets it -- D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, ...)
 //     (gather.cpp:1053) -- with its feature level, DoublePrecisionFloatShaderOps and ExtendedDoublesShaderInstructions;
 //   * the TDR registry values (HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers), read only;
-//   * a verdict: ok = default adapter is hardware, FL >= 11_0, doubles, extended doubles.
+//   * a verdict: ok = default adapter is hardware and FL >= 11_0. FP64 is REPORTED, not required (1.2.0): a GPU without
+//     DoublePrecisionFloatShaderOps / ExtendedDoublesShaderInstructions is ok and gets "compat_mode": true, because an engine with
+//     Compatibility mode (DF64, FP32-only kernels; fullgpu picks them by the same two caps) runs on it. Whether the engine the app
+//     will run has that mode is the APP's decision (it reads the payload's gpu_bake.ps1); an engine without it still refuses.
 //
 // Like the N3 guarded fullgpu.exe, this exe exports NvOptimusEnablement / AmdPowerXpressRequestHighPerformance, so on a
 // hybrid (Optimus / PowerXpress) laptop its "default adapter" is the one the guarded fullgpu will get. The production
@@ -15,7 +18,7 @@
 // export-less process such as the production fullgpu.exe gets.
 //
 // Nothing is ever written: no registry write, no file write unless --out FILE is given (then the JSON goes there too).
-// Exit codes: 0 verdict ok, 1 verdict not ok (the app must refuse), 2 internal error (DXGI unavailable, bad args).
+// Exit codes: 0 verdict ok (incl. a GPU without FP64: compat_mode), 1 verdict not ok (the app must refuse), 2 internal error (DXGI unavailable, bad args).
 //
 // Usage: gpucheck.exe [--out FILE] [--no-per-adapter] [--pretty]
 #define NOMINMAX
@@ -46,7 +49,7 @@ static const bool kOptimusExports = true;
 static const bool kOptimusExports = false;
 #endif
 
-static const char* kVersion = "1.1.0";
+static const char* kVersion = "1.2.0";
 
 // ---------------------------------------------------------------- tiny JSON writer
 struct Json {
@@ -219,6 +222,9 @@ static void write_caps(Json& j, const Caps& c) {
         j.mstr("feature_level_hex", hex((unsigned)c.fl, 4));
         j.mbool("double_precision_float_shader_ops", c.doubles);
         j.mbool("extended_doubles_shader_instructions", c.ext_doubles);
+        // 1.2.0: the engine's own rule (fullgpu compat_host.h): native FP64 kernels iff BOTH caps; otherwise the FP32-only DF64 kernels
+        j.mbool("fp64", c.doubles && c.ext_doubles);
+        j.mbool("compat_mode", !(c.doubles && c.ext_doubles));
     }
 }
 
@@ -429,7 +435,7 @@ int main(int argc, char** argv) {
     j.close('}');
 
     // ---- verdict (design section 8: FL 11_0 + FP64 + extended doubles on the default adapter)
-    std::vector<std::string> reasons, advice;
+    std::vector<std::string> reasons, advice, notes;
     bool defaultIsSoftware = false;
     if (!dc.created) reasons.push_back("no hardware Direct3D 11 device could be created on the default adapter (" +
                                        hex((unsigned long)dc.hr, 8) + ")");
@@ -439,8 +445,10 @@ int main(int argc, char** argv) {
             reasons.push_back("the default adapter is the Microsoft Basic Render Driver (no GPU driver installed?)");
         }
         if (dc.fl < D3D_FEATURE_LEVEL_11_0) reasons.push_back(std::string("feature level ") + fl_name(dc.fl) + " is below 11_0");
-        if (!dc.doubles) reasons.push_back("the GPU has no double-precision (FP64) shader support");
-        if (!dc.ext_doubles) reasons.push_back("the GPU lacks extended double-precision shader instructions (ddiv/dfma/drcp)");
+        // 1.2.0: no FP64 / no extended doubles is no longer a failing reason (it was in 1.1.0): it is reported as fp64 / compat_mode and a
+        // note, and the app decides by the engine it will run (Compatibility mode (DF64) where the engine has it, a plain refusal where not)
+        if (!dc.doubles) notes.push_back("the GPU has no double-precision (FP64) shader support");
+        if (!dc.ext_doubles) notes.push_back("the GPU lacks extended double-precision shader instructions (ddiv/dfma/drcp)");
     }
     const unsigned eff = tdrDelay.present ? tdrDelay.v : 2u;
     // production bakes are validated at the Windows default (TdrDelay absent = 2 s, the dev PC); only a LOWER value is advice
@@ -451,8 +459,13 @@ int main(int argc, char** argv) {
         advice.push_back("more than one hardware GPU: the bake runs on the default adapter shown above");
     j.mobj("verdict");
     j.mbool("ok", reasons.empty());
+    j.mbool("fp64", dc.created && dc.doubles && dc.ext_doubles);
+    j.mbool("compat_mode", dc.created && !(dc.doubles && dc.ext_doubles));
     j.marr("reasons");
     for (auto& r : reasons) j.astr(r.c_str());
+    j.close(']');
+    j.marr("notes");
+    for (auto& r : notes) j.astr(r.c_str());
     j.close(']');
     j.marr("advice");
     for (auto& r : advice) j.astr(r.c_str());

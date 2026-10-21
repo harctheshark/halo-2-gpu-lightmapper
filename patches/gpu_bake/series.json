@@ -15,26 +15,28 @@
     "F24_tagwriter_tool_engine_v373.patch",
     "P1b_driveroot_engine_v373.patch",
     "P7_promote062_engine_v373.patch",
-    "P8_promote063_engine_v373.patch"
+    "P8_promote063_engine_v373.patch",
+    "P9_promote064_engine_v373.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "f13328c7c37460d9f88444e65cd0e341",
+    "md5": "7a033e064ef1c222b41e8fbdfcdaa884",
     "prior_md5s": [
      "b35dc488b917940e6c8d58463ad5c642",
      "fe88bd8bd1a0a990222de51ce30a566a",
-     "15771590e4358733d7666616236c18f7"
+     "15771590e4358733d7666616236c18f7",
+     "f13328c7c37460d9f88444e65cd0e341"
     ],
     "base_file": "../base/engine_v373/gpu_bake.ps1",
-    "note": "U1 2026-10-15: engine_v373\\gpu_bake.ps1 = this chain with OSOY_LAUNCH_MD5 = E2DBA7AF... (the payload's osoy_launch.exe). W1 2026-10-20: the chain is now P1+P3+P2+F24+P1b (drive-root; X1) + P7 (the 2026-10-20 promotion's M2 early injection / B5 hook v5 pins + SceneryFixDependencies.db md5 / fix #9 probe-mode guard) = production 15771590. P1b is NOT an identity in the chain: it is the step that turns fe88bd8b into b35dc488 (dev_M1) before P7; dropping it would make the chain unable to reproduce production. prior_md5s: b35dc488 = dev_M1 (the 0.6.2 candidate engine), fe88bd8b = production before the promotion; pre-promotion backup engine_v373\\_backup_20261020_004652_pre_062 W2 2026-10-20 (0.6.3): production moved again (05:38 promotion: -Responsive, -ExactVertexLighting, v373D log patterns, lmw_gate.py in the writer file list): P8 = production f13328c7; 15771590 is the previous promotion (pre-promotion backup engine_v373\\_backup_20261020_053840_pre_063)."
+    "note": "U1 2026-10-15: engine_v373\\gpu_bake.ps1 = this chain with OSOY_LAUNCH_MD5 = E2DBA7AF... (the payload's osoy_launch.exe). W1 2026-10-20: the chain is now P1+P3+P2+F24+P1b (drive-root; X1) + P7 (the 2026-10-20 promotion's M2 early injection / B5 hook v5 pins + SceneryFixDependencies.db md5 / fix #9 probe-mode guard) = production 15771590. P1b is NOT an identity in the chain: it is the step that turns fe88bd8b into b35dc488 (dev_M1) before P7; dropping it would make the chain unable to reproduce production. prior_md5s: b35dc488 = dev_M1 (the 0.6.2 candidate engine), fe88bd8b = production before the promotion; pre-promotion backup engine_v373\\_backup_20261020_004652_pre_062 W2 2026-10-20 (0.6.3): production moved again (05:38 promotion: -Responsive, -ExactVertexLighting, v373D log patterns, lmw_gate.py in the writer file list): P8 = production f13328c7; 15771590 is the previous promotion (pre-promotion backup engine_v373\\_backup_20261020_053840_pre_063). W3 2026-10-21 (0.6.4): production moved a fourth time (14:56 promotion: scenery multi-permutation fix, -WriterOnly / -ToolOverlay + cross-folder BSP, GPULM_COMPAT validation, responsive v2): P9 = production 7a033e06; f13328c7 is the previous promotion (pre-promotion backup engine_v373\\_backup_20261021_145623_pre_064)."
    }
   },
   {
    "path": "_research/ao/dev_AO/gpu_bake.ps1",
-   "src": "_research/ao/dev_AO5/gpu_bake.ps1",
-   "src_note": "V1 2026-10-14: the payload keeps INST _research/ao/dev_AO as the AO engine dir name. W1 2026-10-20: the AO engine is now _research/ao/dev_AO4 = the promoted engine_v373 + exactly dev_AO2's AO additions (tests/w1_rebuild_062/make_dev_ao4.py: three-way merge, no P2 custom text); dev_AO2 (bac932e8) is the pre-promotion AO engine and stays as the pinned history. W2 2026-10-20 (0.6.3): the AO engine is now _research/ao/dev_AO5 = the 05:38-promoted engine_v373 + exactly dev_AO4's AO additions (tests/w2_rebuild_063/make_dev_ao5.py); dev_AO4 is the 0.6.2 AO engine.",
+   "src": "_research/ao/dev_AO6/gpu_bake.ps1",
+   "src_note": "V1 2026-10-14: the payload keeps INST _research/ao/dev_AO as the AO engine dir name. W1 2026-10-20: the AO engine is now _research/ao/dev_AO4 = the promoted engine_v373 + exactly dev_AO2's AO additions (tests/w1_rebuild_062/make_dev_ao4.py: three-way merge, no P2 custom text); dev_AO2 (bac932e8) is the pre-promotion AO engine and stays as the pinned history. W2 2026-10-20 (0.6.3): the AO engine is now _research/ao/dev_AO5 = the 05:38-promoted engine_v373 + exactly dev_AO4's AO additions (tests/w2_rebuild_063/make_dev_ao5.py); dev_AO4 is the 0.6.2 AO engine. W3 2026-10-21 (0.6.4): the AO engine is now _research/ao/dev_AO6 = the 0.6.4-promoted engine_v373 + exactly dev_AO5's AO additions (tests/w3_rebuild_064/make_dev_ao6.py, then build_ao6.py: CSBLOB for the AO kernel + its two df64 compat twins); dev_AO5 is the 0.6.3 AO engine.",
    "base_md5": "405570d10d890b5b0ca9505904777a05",
    "patches": [
     "P1_paths_dev_AO.patch",
@@ -42,20 +44,22 @@
     "F24_tagwriter_tool_dev_AO.patch",
     "P1b_driveroot_dev_AO.patch",
     "P7_promote062_dev_AO.patch",
-    "P8_promote063_dev_AO.patch"
+    "P8_promote063_dev_AO.patch",
+    "P9_promote064_dev_AO.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "1a0318acbcd538a52b90960258e6561a",
+    "md5": "cd4883222df27f1c4c7a1924c5787af1",
     "prior_md5s": [
      "1d58922e4810e9488367f682a01bb9ae",
      "bac932e8cb795191049381cebefdf22d",
-     "440ce318562d832147db78954b193059"
+     "440ce318562d832147db78954b193059",
+     "1a0318acbcd538a52b90960258e6561a"
     ],
     "base_file": "../base/_research/ao/dev_AO2/gpu_bake.ps1",
-    "note": "U1 2026-10-15: _research\u0007o\\dev_AO2\\gpu_bake.ps1 = P1+P3+F24 on the pinned base. W1 2026-10-20: + P1b + P7 = _research\u0007o\\dev_AO4\\gpu_bake.ps1 (440ce318). prior: 1d58922e = dev_AO2 + P1b (the 0.6.2 candidate), bac932e8 = dev_AO2 as promoted before W2 2026-10-20 (0.6.3): + P8 = _research/ao/dev_AO5/gpu_bake.ps1 (1a0318ac); 440ce318 = dev_AO4 (the 0.6.2 AO engine)."
+    "note": "U1 2026-10-15: _research\u0007o\\dev_AO2\\gpu_bake.ps1 = P1+P3+F24 on the pinned base. W1 2026-10-20: + P1b + P7 = _research\u0007o\\dev_AO4\\gpu_bake.ps1 (440ce318). prior: 1d58922e = dev_AO2 + P1b (the 0.6.2 candidate), bac932e8 = dev_AO2 as promoted before W2 2026-10-20 (0.6.3): + P8 = _research/ao/dev_AO5/gpu_bake.ps1 (1a0318ac); 440ce318 = dev_AO4 (the 0.6.2 AO engine). W3 2026-10-21 (0.6.4): + P9 = _research/ao/dev_AO6/gpu_bake.ps1 (cd488322); 1a0318ac = dev_AO5 (the 0.6.3 AO engine)."
    }
   }
  ]

@@ -12,8 +12,8 @@ namespace H2GpuLightmapper.Core.Tests
     /// <summary>Shared test context: paths, md5-checked fixture copies of production files, the test payload.</summary>
     internal sealed class Ctx : IDisposable
     {
-        public const string ProdDllMd5 = "b2370477f36db8c74e6749d5389f2a57";      // W1 2026-10-20: the promoted engine_v373 DLL (was aaf10a0f)
-        public const string SkelDllMd5 = "f0fb73ac9cd42f8f716f26b64584759b";
+        public const string ProdDllMd5 = "d6147fce6e3979a37178d2e14d092227";      // W3 2026-10-21: the 0.6.4-promoted engine_v373 DLL (W1: b2370477, was aaf10a0f)
+        public const string SkelDllMd5 = "5c6aeea9d1ffbaaaa6351d7ba5e77360";      // W3 2026-10-21: the 0.6.4-promoted skeleton-mode DLL (was f0fb73ac)
         public const string LmwInstallMd5 = "4608af880327453b6e07844d6e7e95b9";
 
         public string Project, SandboxParent, ShortParent, PwshDir, PyDir, MineRoot, FixturesDir;

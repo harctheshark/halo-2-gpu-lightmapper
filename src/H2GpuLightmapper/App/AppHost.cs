@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using H2GpuLightmapper.Core.Discovery;
 using H2GpuLightmapper.Core.Payload;
+using H2GpuLightmapper.Core.Preflight;
 using H2GpuLightmapper.Pipeline;
 
 namespace H2GpuLightmapper.App
@@ -161,6 +162,73 @@ namespace H2GpuLightmapper.App
             if (Manifest == null) { why = PayloadError ?? "no payload"; return false; }
             return Manifest.AoEnabled(out why);
         }
+
+        /// <summary>Does the gpu_bake.ps1 this bake would run (engine_v373, or engine_custom for Custom when the payload has it) declare
+        /// <c>[switch]$name</c>? Read from the payload's own copy of the script (the file whose md5 the shell verifies before every bake);
+        /// nothing is extracted. False when there is no payload.</summary>
+        public bool EngineDeclares(BakeOptions o, string name)
+        {
+            if (Manifest == null) return false;
+            return EngineSwitches.ComponentDeclares(Source, Manifest.InstComponent, BakePlanner.GpuBakeRel(o, Manifest), name);
+        }
+
+        /// <summary>"Scenery Multi Permutation Fix (Experimental Improvement)" needs an engine whose gpu_bake.ps1 declares
+        /// <c>-SceneryOwnPermutationOnly</c> (engine 0.6.4 or newer). Null = this payload's engine for these options takes it;
+        /// else the plain reason. Quality matters (Custom runs engine_custom); the other options do not.</summary>
+        public string SceneryPermutationFixWhy(BakeOptions o)
+        {
+            if (Manifest == null) return PayloadError ?? "no payload";
+            if (EngineDeclares(o, BakeOptions.SceneryPermutationFixSwitch)) return null;
+            return BakeOptions.SceneryPermutationFixLabel + " is not available: the engine this bake would run (" + BakePlanner.GpuBakeRel(o, Manifest)
+                   + ") has no -" + BakeOptions.SceneryPermutationFixSwitch + " parameter. " + BakeOptions.SceneryPermutationFixNeedsEngine;
+        }
+
+        /// <summary>The gpu_bake.ps1 files the bake <paramref name="o"/> would run: the lightmap engine (engine_v373, or engine_custom for Custom when the
+        /// payload has it) and, with ambient occlusion, the AO engine copy (dev_AO). The light probe driver runs the lightmap engine's script.</summary>
+        public System.Collections.Generic.List<string> EngineScripts(BakeOptions o)
+        {
+            var l = new System.Collections.Generic.List<string>();
+            if (Manifest == null) return l;
+            l.Add(BakePlanner.GpuBakeRel(o, Manifest));
+            if (o.Ao && Manifest.InstComponent.Has(InstLayout.AoGpuBake)) l.Add(InstLayout.AoGpuBake);
+            return l;
+        }
+
+        /// <summary>Compatibility mode (DF64) needs an engine whose gpu_bake.ps1 validates <c>GPULM_COMPAT</c> (engine 0.6.4 or newer; the marker is the
+        /// variable read in the script's code, see EngineSwitches.ReadsEnvVar). Null = every engine this bake would run has it: a GPU without FP64 is
+        /// accepted and runs the FP32-only kernels automatically, and <c>--force-compat</c> may be used. Else the plain reason: a GPU without FP64 is
+        /// then refused (the 0.6.3 sentence) and GPULM_COMPAT is never passed to that engine.</summary>
+        public string CompatEngineWhy(BakeOptions o)
+        {
+            if (Manifest == null) return PayloadError ?? "no payload";
+            foreach (var rel in EngineScripts(o))
+                if (!EngineSwitches.ComponentReadsEnv(Source, Manifest.InstComponent, rel, GpuCheck.CompatEnvVar))
+                    return "the engine this bake would run (" + rel + ") has no Compatibility mode (its gpu_bake.ps1 does not validate " + GpuCheck.CompatEnvVar + "). " + BakeOptions.ForceCompatNeedsEngine;
+            return null;
+        }
+
+        /// <summary>Cross-folder BSP (engine 0.6.4): a BSP whose tag lives in ANOTHER folder than the scenario (01b_spacestation -> 01a_tutorial\01_bsp_1) is
+        /// baked only by an engine whose gpu_bake.ps1 resolves it from the scenario's structure_bsps block. Marker: the gpu_bake.ps1 the bake would run
+        /// declares <c>-WriterOnly</c> and <c>-ToolOverlay</c> (<see cref="BakeOptions.CrossFolderBspSwitches"/>; same patch as lmw_skeleton.py resolve-bsp).
+        /// Null = supported. Else the plain reason: such BSPs are then not offered in the picker, and a bake naming one is refused (an older engine would look
+        /// for the file beside the scenario, fail its skeleton / tag writer, and fall back to the tool write-back on LIVE tags).</summary>
+        public string CrossFolderBspWhy(BakeOptions o)
+        {
+            if (Manifest == null) return PayloadError ?? "no payload";
+            string rel = BakePlanner.GpuBakeRel(o, Manifest);
+            foreach (var sw in BakeOptions.CrossFolderBspSwitches)
+                if (!EngineDeclaresIn(rel, sw))
+                    return "the engine this bake would run (" + rel + ") cannot bake a BSP from another folder (its gpu_bake.ps1 has no -" + sw + " parameter). " + BakeOptions.CrossFolderBspNeedsEngine;
+            return null;
+        }
+
+        private bool EngineDeclaresIn(string rel, string name)
+        {
+            return Manifest != null && EngineSwitches.ComponentDeclares(Source, Manifest.InstComponent, rel, name);
+        }
+
+        /// <summary>Does every engine this bake would run have Compatibility mode (DF64)?</summary>
+        public bool EngineHasCompat(BakeOptions o) { return CompatEngineWhy(o) == null; }
 
         private bool SettingFlag(string name)
         {

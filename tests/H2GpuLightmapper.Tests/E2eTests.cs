@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using H2GpuLightmapper.Core.Preflight;
 using H2GpuLightmapper.Core.Run;
 using H2GpuLightmapper.Core.Util;
 using static H2GpuLightmapper.Tests.Program;
@@ -20,6 +21,8 @@ namespace H2GpuLightmapper.Tests
     {
         public static IEnumerable<KeyValuePair<string, Action>> All()
         {
+            yield return T("e2e 0.6.4: cross-folder BSP: a scenario whose BSP lives in another folder bakes with an engine that resolves it (plain -Bsp name, lmw_validate gets the referenced tag, the lightmap lands beside the scenario), AO / probes refused, an older engine refused before gpu_bake starts, a copy beside the scenario is ignored", CrossFolderBsp);
+            yield return T("e2e 0.6.4: the engine's silent write-back fallback becomes a visible warning in the log and the run summary (pre-flight switch to tool, writer failed + shell fallback), once per run; a clean bake says nothing", FallbackWarning);
             yield return T("e2e: Lightmap Only install = backup + stage-only gpu_bake + the shell's install (real lmw_install, [4b]'s command) + verify + capture record + history", LightmapInstall);
             yield return T("e2e: capture reuse: record -> -SkipCapture; changed tags need --yes; other quality refused", Reuse);
             yield return T("e2e: Lightmap Only + AO: trace / apply / stage, the shell's install; Undo last install restores", AoInstall);
@@ -30,6 +33,8 @@ namespace H2GpuLightmapper.Tests
             yield return T("e2e: cancel during the fallback's [4b] install is deferred: the install completes, is VERIFIED, DONE with the cancel noted", CancelDeferred);
             yield return T("e2e: a failing bake -> exit 3 with gpu_bake's reason; the completed capture is still recorded", FailBake);
             yield return T("e2e: W2 --responsive + --exact-vertex-lighting both reach gpu_bake (bound, in the log), the stage is written, the run folder has the short name; unticked binds neither", W2BothOptions);
+            yield return T("e2e: --scenery-permutation-fix reaches gpu_bake (-SceneryOwnPermutationOnly bound, in the log header); an engine without the parameter refuses the bake before gpu_bake is ever started; captures are reusable only with the same setting", SceneryPermBake);
+            yield return T("e2e: DF64 Compatibility mode: nothing is passed by default; --force-compat puts GPULM_COMPAT=1 in gpu_bake's (and the AO trace's) environment only; the log header, the engine's own line and the run summary state the precision; an engine without the mode refuses --force-compat before gpu_bake starts", Df64Bake);
             yield return T("e2e: X2 --responsive reaches gpu_bake (-Responsive bound; log says 'responsive on'); a device-loss line on a failed bake -> the plain TDR explanation", X2ResponsiveAndTdr);
             yield return T("e2e: Restore previous lightmap; an unfinished install refuses bakes until --recover undoes it", RestoreRecover);
             yield return T("e2e: another bake holds the GPU lock -> WAITING, then gives up (exit 3); the foreign lock untouched", LockWait);
@@ -766,6 +771,251 @@ namespace H2GpuLightmapper.Tests
             Assert.True(calls[2].Arr("argv").Cast<string>().Contains("--exact-vertex-lighting"), "gpu_ao stage got --exact-vertex-lighting: " + string.Join(" ", calls[2].Arr("argv")));
             Assert.True(!calls[0].Arr("argv").Cast<string>().Contains("--exact-vertex-lighting") && !calls[1].Arr("argv").Cast<string>().Contains("--exact-vertex-lighting"), "trace / apply do not");
             Assert.True(r3.Calls("gpu_bake").Single().Arr("argv").Cast<string>().Contains("-ExactVertexLighting"), "and the lightmap gpu_bake still gets -ExactVertexLighting");
+        }
+
+        // Scenery Multi Permutation Fix e2e: the fake gpu_bake records its bound parameters. The old-engine payload's fake has no such parameter, so passing it
+        // would make PowerShell fail the bake -- the shell must refuse before starting gpu_bake at all.
+        private static void SceneryPermBake()
+        {
+            var r = C.NewRoot();
+            var off = C.Bake(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install");
+            Ok(off, "unticked bake");
+            var bOff = r.Calls("gpu_bake").Single();
+            Assert.True(!bOff.Arr("argv").Cast<string>().Contains("-SceneryOwnPermutationOnly"), "unticked: gpu_bake got no switch");
+            Assert.True(!bOff.Arr("bound").Cast<string>().Any(x => x.StartsWith("SceneryOwnPermutationOnly=")), "unticked: nothing bound");
+            Assert.True(!off.Out.Contains("permutation fix"), "unticked: the log does not mention it");
+            // ticked: reaches gpu_bake, bound, listed in the log header (the Summary line) and the plan notes
+            var r2 = C.NewRoot();
+            var on = C.Bake(r2, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--scenery-permutation-fix");
+            Ok(on, "ticked bake");
+            var bOn = r2.Calls("gpu_bake").Single();
+            Assert.True(bOn.Arr("argv").Cast<string>().Contains("-SceneryOwnPermutationOnly"), "gpu_bake got the switch: " + string.Join(" ", bOn.Arr("argv")));
+            Assert.True(bOn.Arr("bound").Cast<string>().Contains("SceneryOwnPermutationOnly=True"), "bound");
+            Assert.Contains(on.Out, "scenery multi permutation fix on", "the bake log header says so");
+            // the capture it made is recorded as made WITH the option: an unticked reuse is refused, a ticked one is accepted
+            Assert.Eq(true, Json.ReadObjFile(Path.Combine(r2.Farm(200), "standalone_capture.json")).Bool("sceneryPermutationFix"), "record: sceneryPermutationFix true");
+            var bad = C.Bake(r2, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--reuse-capture");
+            Assert.Eq(2, bad.Exit, "reuse without the option refused: " + bad);
+            Assert.Contains(bad.Out, "was made with \"Scenery Multi Permutation Fix (Experimental Improvement)\"", "and says why");
+            Ok(C.Bake(r2, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--reuse-capture", "--scenery-permutation-fix"), "reuse with the same setting");
+            var last = r2.Calls("gpu_bake").Last().Arr("argv").Cast<string>().ToList();
+            Assert.True(last.Contains("-SkipCapture") && last.Contains("-SceneryOwnPermutationOnly"), "the reuse bake: -SkipCapture and the switch: " + string.Join(" ", last));
+            // and the other way round: an unticked capture cannot be reused by a ticked bake (the engine needs the pick recorded while capturing)
+            var bad2 = C.Bake(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--reuse-capture", "--scenery-permutation-fix");
+            Assert.Eq(2, bad2.Exit, "reuse of an unticked capture refused: " + bad2);
+            Assert.Contains(bad2.Out, "made without \"Scenery Multi Permutation Fix (Experimental Improvement)\"", "and says why");
+            // an engine without the parameter: refused up front, gpu_bake never started, nothing written
+            var r3 = C.NewRoot();
+            string oldPayload = C.BuildPayload(C.Sb.Dir("payload_e2e_nosp"), sceneryEngine: false);
+            var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = oldPayload;
+            l.AddRange(new[] { "--h2ek", r3.Root, "--dev-skip-preflight", "--dev-skip-gpucheck", "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install", "--scenery-permutation-fix" });
+            var refused = C.Run(l);
+            Assert.Eq(2, refused.Exit, "refused (exit 2): " + refused);
+            Assert.Contains(refused.Out, "RESULT REFUSED", "plain result word");
+            Assert.Contains(refused.Out, "Needs engine 0.6.4 or newer.", "plain reason");
+            Assert.Eq(0, r3.Calls("gpu_bake").Count, "gpu_bake was never started");
+            Assert.True(!Directory.Exists(r3.Farm(200)), "no farm folder made");
+            // the same payload, option off: bakes as always
+            var l2 = C.Base("bake"); l2[l2.IndexOf("--payload-dir") + 1] = oldPayload;
+            l2.AddRange(new[] { "--h2ek", r3.Root, "--dev-skip-preflight", "--dev-skip-gpucheck", "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install" });
+            Ok(C.Run(l2), "old engine, option off");
+            Assert.True(!r3.Calls("gpu_bake").Single().Arr("argv").Cast<string>().Contains("-SceneryOwnPermutationOnly"), "no switch passed to the old engine");
+        }
+
+        // Compatibility mode (DF64) e2e. The fake gpu_bake of a "0.6.4" test payload validates GPULM_COMPAT and prints fullgpu's own "Compatibility mode" line (off, or
+        // "(no FP64)" when GPULM_COMPAT=1 or the control file says gpu_bake=nofp64); an older payload's fake never mentions the variable.
+        // ------------------------------------------------------------------ 0.6.4: cross-folder BSP
+
+        private const string Cyc2 = @"scenarios\multi\cyc2\cyc2";
+
+        /// <summary>A sandbox root plus a second scenario, scenarios\multi\cyc2\cyc2, that is a copy of the real cyclotron scenario: its structure_bsps entry names
+        /// scenarios\multi\cyclotron\cyclotron, a BSP in ANOTHER folder (like 01b_spacestation -> 01a_tutorial\01_bsp_1). No BSP file beside cyc2 unless asked.</summary>
+        private static TestRoot XRoot(bool copyBeside)
+        {
+            var r = C.NewRoot(false);
+            string d = Path.Combine(r.Tags, @"scenarios\multi\cyc2");
+            Directory.CreateDirectory(d);
+            File.Copy(Path.Combine(r.CycDir, "cyclotron.scenario"), Path.Combine(d, "cyc2.scenario"));
+            if (copyBeside) File.WriteAllText(Path.Combine(d, "cyclotron.scenario_structure_bsp"), "a COPY of the bsp beside cyc2");
+            return r;
+        }
+
+        private static List<string> TailArgs(JObj call)
+        {
+            var a = call.Arr("argv").Cast<string>().ToList();
+            return a.Skip(a.FindIndex(x => x.EndsWith("gpu_bake.ps1", StringComparison.OrdinalIgnoreCase)) + 1).ToList();
+        }
+
+        /// <summary>The BSP tag path the run resolved (status.json extra.options.bspRel): null = the BSP beside the scenario.</summary>
+        private static string BspRelOf(CliResult res)
+        {
+            return RunStatus.Load(RunDirOf(res)).Extra.Obj("options").Str("bspRel");
+        }
+
+        private static void CrossFolderBsp()
+        {
+            string newP = C.BuildPayload(C.Sb.Dir("payload_e2e_xbsp"), crossBspEngine: true), oldP = C.PayloadDir;
+            string refTag = Path.Combine(@"scenarios\multi\cyclotron", "cyclotron");
+            // 1. an engine that resolves the BSP from the scenario: gpu_bake gets the plain name, the shell finds the real tag for the install gate
+            var r1 = XRoot(false);
+            var a = Ok(DfBake(newP, r1, "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap"), "cross-folder BSP, Lightmap Only");
+            string log = File.ReadAllText(Path.Combine(RunDirOf(a), "bake.log"));
+            Assert.Contains(log, "BSP tag (from the scenario's structure_bsps): " + refTag + " -- in another folder than the scenario", "the shell found the BSP's tag path");
+            Assert.Seq(new[] { "-Scenario", Cyc2, "-Bsp", "cyclotron" }, TailArgs(r1.Calls("gpu_bake").First()).Take(4).ToList(), "gpu_bake gets the scenario and the PLAIN BSP name (the engine resolves the file)");
+            Assert.Eq(refTag, BspRelOf(a), "the run recorded the BSP tag where it really is (status.json options.bspRel)");
+            string made = Path.Combine(r1.Tags, @"scenarios\multi\cyc2\cyc2_cyclotron_lightmap.scenario_structure_lightmap");
+            Assert.True(File.Exists(made), "the lightmap is named and written beside the SCENARIO");
+            Assert.True(!File.Exists(Path.Combine(r1.CycDir, "cyc2_cyclotron_lightmap.scenario_structure_lightmap")), "nothing was written into the BSP's folder");
+            Assert.Eq("fake bsp cyclotron", File.ReadAllText(Path.Combine(r1.Tags, refTag + ".scenario_structure_bsp")), "the BSP tag itself is untouched");
+            Assert.Contains(a.Out, "BSP from scenarios\\multi\\cyclotron", "the options line names the BSP's folder");
+
+            // 2. a BSP in the scenario's own folder under the same engine: nothing changes (no other-folder line, the BSP beside is validated)
+            var r2 = C.NewRoot();
+            var b = Ok(DfBake(newP, r2, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "same-folder BSP, new engine");
+            Assert.NotContains(File.ReadAllText(Path.Combine(RunDirOf(b), "bake.log")), "BSP tag (from the scenario's structure_bsps)", "no other-folder line");
+            Assert.Eq(null, BspRelOf(b), "the BSP beside the scenario: no other-folder path");
+
+            // 3. a COPY beside the scenario that the scenario does not reference is ignored: the engine bakes the referenced tag, so does the install gate
+            var r3 = XRoot(true);
+            var c = Ok(DfBake(newP, r3, "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap"), "a copy beside the scenario");
+            Assert.Contains(File.ReadAllText(Path.Combine(RunDirOf(c), "bake.log")), "is ALSO beside the scenario", "the copy is called out");
+            Assert.Eq(refTag, BspRelOf(c), "still the referenced tag, not the copy");
+
+            // 4. AO / light probes are not supported for such a BSP yet: refused before gpu_bake starts
+            var r4 = XRoot(false);
+            var d = DfBake(newP, r4, "--scenario", Cyc2, "--bsp", "cyclotron", "--ao");
+            Assert.Eq(2, d.Exit, "refused: " + d);
+            Assert.Contains(d.Out, "lives in another folder than the scenario; ambient occlusion and light probes are not supported for it yet", "plain reason");
+            Assert.Eq(0, r4.Calls("gpu_bake").Count, "gpu_bake never started");
+            Assert.True(!Directory.Exists(r4.Farm(200)), "no farm folder made");
+
+            // 5. an engine without the resolution: refused up front with the plain sentence; nothing started, nothing written
+            var r5 = XRoot(false);
+            var e = DfBake(oldP, r5, "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap");
+            Assert.Eq(2, e.Exit, "refused: " + e);
+            Assert.Contains(e.Out, "RESULT REFUSED", "plain result word");
+            Assert.Contains(e.Out, "Baking a BSP from another folder needs engine 0.6.4 or newer.", "and the requirement");
+            Assert.Eq(0, r5.Calls("gpu_bake").Count, "gpu_bake never started");
+            Assert.True(!File.Exists(Path.Combine(r5.Tags, @"scenarios\multi\cyc2\cyc2_cyclotron_lightmap.scenario_structure_lightmap")), "nothing written");
+
+            // 6. dry runs: the new engine plans it (the BSP is looked up by the real run); the old engine refuses it
+            var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = newP;
+            l.AddRange(new[] { "--h2ek", r5.Root, "--dry-run", "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap" });
+            var dry = C.Run(l);
+            Assert.Eq(0, dry.Exit, "dry run, new engine: " + dry);
+            Assert.Contains(dry.Out, "is looked up in the scenario's structure_bsps", "the dry run says so");
+            var l2 = C.Base("bake");
+            l2.AddRange(new[] { "--h2ek", r5.Root, "--dry-run", "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap" });
+            var dryOld = C.Run(l2);
+            Assert.Eq(2, dryOld.Exit, "dry run, old engine: refused: " + dryOld);
+            Assert.Contains(dryOld.Out, "needs engine 0.6.4 or newer", "plain");
+        }
+
+        // ------------------------------------------------------------------ 0.6.4: the silent write-back fallback
+
+        private static int Occurrences(string hay, string needle)
+        {
+            int n = 0, i = 0;
+            while ((i = hay.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { n++; i += needle.Length; }
+            return n;
+        }
+
+        private static void FallbackWarning()
+        {
+            const string Warn = "WARNING: the lightmap write-back fell back from the DIRECT tag writer to the older TOOL write-back";
+            const string Summary = "WARNING: the write-back fell back from the DIRECT tag writer to the TOOL write-back";
+            // 1. gpu_bake's own pre-flight: "-WriteBackMode direct cannot run: ... -- using -WriteBackMode tool" (one yellow Note line in the engine's output)
+            var r1 = C.NewRoot();
+            r1.Control("gpu_bake=nodirect\n");
+            var a = Ok(C.Bake(r1, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "pre-flight fallback");
+            string log1 = File.ReadAllText(Path.Combine(RunDirOf(a), "bake.log"));
+            Assert.Eq(1, Occurrences(log1, "*** " + Warn), "one visible warning in bake.log");
+            Assert.Contains(log1, "Reason: fake: lm_tagwriter.py is missing", "with the engine's reason");
+            Assert.Contains(a.Out, Warn, "the live output shows it");
+            Assert.Contains(a.Out, Summary + " (fake: lm_tagwriter.py is missing)", "and the run summary (the RESULT line) names it");
+            var sa = RunStatus.Load(RunDirOf(a));
+            Assert.Eq(RunState.Done, sa.State, "the bake itself is still DONE");
+            Assert.True(sa.Notes.Any(n => n.StartsWith(Warn, StringComparison.Ordinal)), "status.json notes keep it");
+            Assert.Eq(1, sa.Extra.Arr("writeBackFallback").Count, "status.json extra.writeBackFallback");
+            Assert.True(sa.Reason != null && sa.Reason.Contains(Summary), "status.json reason carries the summary: " + sa.Reason);
+            // 2. the direct writer made no stage -> the shell runs the production tool write-back; the engine ALSO prints its own fallback line: one warning, not two
+            var r2 = C.NewRoot();
+            r2.Control("gpu_bake=nostage\n");
+            var b = Ok(C.Bake(r2, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "writer failed, tool write-back");
+            string log2 = File.ReadAllText(Path.Combine(RunDirOf(b), "bake.log"));
+            Assert.Eq(1, Occurrences(log2, "*** " + Warn), "shell + engine report the same fallback once");
+            Assert.Contains(b.Out, Summary, "the run summary names it");
+            Assert.Contains(b.Out, "installed by the production tool write-back fallback", "and the old sentence stays");
+            Assert.Eq(1, RunStatus.Load(RunDirOf(b)).Extra.Arr("writeBackFallback").Count, "recorded once");
+            // 3. a clean bake says nothing
+            var r3 = C.NewRoot();
+            var c = Ok(C.Bake(r3, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "clean");
+            Assert.NotContains(c.Out, "WARNING: the lightmap write-back", "no warning");
+            Assert.NotContains(c.Out, "fell back", "no summary sentence");
+            var sc = RunStatus.Load(RunDirOf(c));
+            Assert.True(!sc.Extra.Has("writeBackFallback") && !sc.Notes.Any(n => n.Contains("write-back fell back")), "status.json is clean");
+        }
+
+        private static CliResult DfBake(string payload, TestRoot r, params string[] extra)
+        {
+            var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = payload;
+            l.AddRange(new[] { "--h2ek", r.Root, "--dev-skip-preflight", "--dev-skip-gpucheck", "--lock-wait-min", "1", "--lock-poll-s", "0.5" }); l.AddRange(extra);
+            return C.Run(l);
+        }
+
+        private static void Df64Bake()
+        {
+            const string Var = "GPULM_COMPAT";
+            string newP = C.BuildPayload(C.Sb.Dir("payload_e2e_df64"), compatEngine: true), oldP = C.PayloadDir;
+            var args = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install" };
+            Func<string, TestRoot, string[], CliResult> go = (p, r, extra) => DfBake(p, r, args.Concat(extra).ToArray());
+            // 1. a GPU with FP64 (the engine says 'off'): nothing passed, the header says 'automatic' (the GPU check is skipped here), the summary 'Full FP64'
+            var r1 = C.NewRoot();
+            var a = Ok(go(newP, r1, new string[0]), "automatic, FP64 GPU");
+            Assert.Eq(0, r1.Calls("gpu_bake").Single().Arr("gpulm").Count, "nothing in gpu_bake's GPULM_*: the variable is never passed by default");
+            Assert.Contains(a.Out, "precision " + GpuCheck.PrecisionAutomatic, "the plan in the log header: precision line");
+            Assert.Contains(a.Out, "Precision: automatic", "the pre-run line");
+            Assert.True(a.Lines.Any(x => x.StartsWith("Precision: Full FP64   [engine: Compatibility mode: off", StringComparison.Ordinal)), "the run summary (last lines): " + string.Join(" | ", a.Lines.Skip(Math.Max(0, a.Lines.Count - 4))));
+            var sa = RunStatus.Load(RunDirOf(a)).Extra.Obj("precision");
+            Assert.Eq("Precision: Full FP64", sa.Str("text"), "status.json precision.text");
+            Assert.Eq(true, sa.Bool("engineHasCompatMode"), "status.json: the engine has the mode");
+            Assert.Contains(File.ReadAllText(Path.Combine(RunDirOf(a), "bake.log")), "precision| Precision: Full FP64", "bake.log carries the summary too");
+            // 2. a GPU without FP64 (the engine chose the DF64 kernels itself): still nothing passed; the summary says Compatibility mode, from the engine's own line
+            var r2 = C.NewRoot(); r2.Control("gpu_bake=nofp64");
+            var b = Ok(go(newP, r2, new string[0]), "automatic, GPU without FP64");
+            Assert.Eq(0, r2.Calls("gpu_bake").Single().Arr("gpulm").Count, "still nothing passed");
+            Assert.True(b.Lines.Any(x => x.StartsWith(GpuCheck.PrecisionCompat + "   [engine: Compatibility mode (no FP64): fake", StringComparison.Ordinal)), "summary: " + string.Join(" | ", b.Lines.Skip(Math.Max(0, b.Lines.Count - 4))));
+            Assert.Eq("Precision: Compatibility mode (DF64) - your GPU has no FP64, using FP32 double-single maths instead. Experimental; same results in testing, may be slower.",
+                      RunStatus.Load(RunDirOf(b)).Extra.Obj("precision").Str("text"), "status.json: the exact sentence");
+            // 3. --force-compat: GPULM_COMPAT=1 reaches gpu_bake (bound by the fake's validation), the options line + plan + summary say FORCED
+            var r3 = C.NewRoot();
+            var c = Ok(go(newP, r3, new[] { "--force-compat" }), "forced");
+            Assert.Seq(new[] { Var + "=1" }, r3.Calls("gpu_bake").Single().Arr("gpulm").Cast<string>().ToList(), "gpu_bake's environment: exactly " + Var + "=1");
+            Assert.Contains(c.Out, "compatibility mode (DF64) FORCED", "the options line / log header");
+            Assert.Contains(c.Out, "    env+  GPULM_COMPAT=1", "the plan lists the step's env");
+            Assert.Contains(c.Out, "*** GPULM_COMPAT=1: the FP32-only double-single (df64) kernel set is FORCED", "the engine accepted it (its own validation note)");
+            Assert.True(c.Lines.Any(x => x.StartsWith(GpuCheck.PrecisionCompatForced + "   [engine: Compatibility mode (no FP64): fake", StringComparison.Ordinal)), "summary: forced, with the engine's line");
+            Assert.Eq(true, RunStatus.Load(RunDirOf(c)).Extra.Obj("precision").Bool("forced"), "status.json: forced");
+            // with AO the trace (which runs gpu_bake -AOOnly itself) gets it; apply / stage do not
+            var r4 = C.NewRoot();
+            Ok(go(newP, r4, new[] { "--force-compat", "--ao" }), "forced + AO");
+            var ao = r4.Calls("gpu_ao");
+            Assert.Seq(new[] { "trace", "apply", "stage" }, ao.Select(x => x.Arr("argv").Cast<string>().ElementAt(1)).ToList(), "verbs");
+            Assert.True(ao[0].Arr("gpulm").Cast<string>().Contains(Var) && !ao[1].Arr("gpulm").Cast<string>().Contains(Var) && !ao[2].Arr("gpulm").Cast<string>().Contains(Var), "only the AO trace carries " + Var);
+            Assert.Seq(new[] { Var + "=1" }, r4.Calls("gpu_bake").Single().Arr("gpulm").Cast<string>().ToList(), "and the lightmap gpu_bake");
+            // 4. an engine without the mode: --force-compat is refused before anything starts; the unforced bake passes nothing and states what it needs
+            var r5 = C.NewRoot();
+            var bad = go(oldP, r5, new[] { "--force-compat" });
+            Assert.Eq(2, bad.Exit, "refused: " + bad);
+            Assert.Contains(bad.Out, "RESULT REFUSED", "plain result word");
+            Assert.Contains(bad.Out, "--force-compat is not available", "plain reason");
+            Assert.Contains(bad.Out, "Compatibility mode needs engine 0.6.4 or newer.", "and the requirement");
+            Assert.Eq(0, r5.Calls("gpu_bake").Count, "gpu_bake was never started");
+            Assert.True(!Directory.Exists(r5.Farm(200)), "no farm folder made");
+            var fine = Ok(go(oldP, r5, new string[0]), "old engine, unforced");
+            Assert.Eq(0, r5.Calls("gpu_bake").Single().Arr("gpulm").Count, "nothing passed to the old engine");
+            Assert.True(!fine.Out.Contains(Var) && !fine.Out.Contains("[engine:"), "and its log never mentions " + Var);
+            Assert.True(fine.Lines.Any(x => x == GpuCheck.PrecisionNeedsFp64), "its summary says it needs a GPU with FP64: " + string.Join(" | ", fine.Lines.Skip(Math.Max(0, fine.Lines.Count - 4))));
         }
 
         // X2 e2e: --responsive reaches the real gpu_bake invocation (the fake records its bound parameters); an engine device-loss line on a failed bake

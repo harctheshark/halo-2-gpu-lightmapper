@@ -28,6 +28,8 @@ namespace H2GpuLightmapper.Core.Tests
             yield return T("scenery fix: REAL scanner, scenario scan on a scratch H2EK: added once, nothing the second time", RealScenario);
             yield return T("scenery fix: REAL scanner, full scan on a scratch H2EK: the scenario's model is a no-op afterwards", RealFull);
             yield return T("scenery fix: Summarize lists scanned / added / conflicts / file", SummarizeText);
+            yield return T("scenery fix 0.6.4: REAL scanner skips sky models (sky tag -> model -> render_model, and a 'skies' folder); the result lists the added names and the skipped skies", RealSkySkipped);
+            yield return T("scenery fix 0.6.4: Summarize lists every added model name (past 60), the skipped skies, and the one-line status shows the first names", SummarizeNames);
         }
 
         private static string Py { get { return Path.Combine(C.PyDir, "py.exe"); } }
@@ -203,6 +205,69 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.True(scen.Ran, "scenario scan after the full scan: " + scen.Error);
             Assert.Eq(0, scen.Added.Count, "already in the database: nothing added");
             Assert.True(full.Db != null && scen.Db == full.Db, "both scans name the same database file");
+        }
+
+        /// <summary>0.6.4: a sky never needs the scenery fix. Two ways a render_model is a sky model: a .sky tag reaches it (here a synthetic sky tag whose bytes hold the
+        /// lifepod's tag path -- the scanner finds tag references as null-terminated path strings, like it does for a scenario), or it lives in a folder named 'skies'
+        /// (the stock layout; the real cyclotron sky chain is copied when the mine root has it).</summary>
+        private static void RealSkySkipped()
+        {
+            string root = MakeRoot("skyroot", true);
+            string skyTag = Path.Combine(root, "tags", @"effects\fakesky\fakesky.sky");
+            Directory.CreateDirectory(Path.GetDirectoryName(skyTag));
+            File.WriteAllBytes(skyTag, System.Text.Encoding.ASCII.GetBytes("junk\0" + @"h1\vehicles\lifepod\lifepod" + "\0tail\0"));
+            string src = Path.Combine(C.MineRoot, "tags");
+            bool haveReal = true;
+            foreach (var e in new[] { "sky", "model", "render_model" })
+            {
+                string from = Path.Combine(src, @"scenarios\skies\multi\cyclotron\cyclotron." + e), to = Path.Combine(root, "tags", @"scenarios\skies\multi\cyclotron\cyclotron." + e);
+                if (!File.Exists(from)) { haveReal = false; break; }
+                Directory.CreateDirectory(Path.GetDirectoryName(to));
+                File.Copy(from, to);
+            }
+            var full = RunReal(root, null);
+            Assert.True(full.Ran, "full scan ran: " + full.Error + " | " + string.Join(" | ", full.Output));
+            Assert.True(full.SkyExcluded.Any(m => m.StartsWith(@"h1\vehicles\lifepod\lifepod", StringComparison.OrdinalIgnoreCase)), "the sky tag's render_model is skipped: " + string.Join(", ", full.SkyExcluded));
+            Assert.True(!full.Added.Any(m => m.IndexOf("lifepod", StringComparison.OrdinalIgnoreCase) >= 0), "a sky model is not added to the database: " + string.Join(", ", full.Added));
+            string db = File.Exists(full.Db) ? File.ReadAllText(full.Db) : "";
+            Assert.True(db.IndexOf("lifepod", StringComparison.OrdinalIgnoreCase) < 0, "and has no line in the database file");
+            if (haveReal)
+            {
+                Assert.True(full.SkyExcluded.Any(m => m.IndexOf(@"scenarios\skies\multi\cyclotron\cyclotron", StringComparison.OrdinalIgnoreCase) >= 0), "the stock cyclotron sky model is skipped");
+                Assert.True(!full.Added.Any(m => m.IndexOf(@"skies\", StringComparison.OrdinalIgnoreCase) >= 0), "no sky model among the added");
+            }
+            string text = string.Join("\n", SceneryFixDeps.Summarize(full));
+            Assert.Contains(text, "Skipped " + full.SkyExcluded.Count + " sky model(s)", "the dialog says how many skies were skipped");
+            Assert.Contains(text, @"h1\vehicles\lifepod\lifepod", "and names them");
+            // the same root WITHOUT the sky tag: the lifepod is an ordinary model again (added), so the skip really comes from the sky reference
+            string root2 = MakeRoot("skyroot2", true);
+            var plain = RunReal(root2, null);
+            Assert.True(plain.Ran && plain.Added.Any(m => m.IndexOf("lifepod", StringComparison.OrdinalIgnoreCase) >= 0) && plain.SkyExcluded.Count == 0, "without a sky reference the lifepod is added and nothing is skipped");
+        }
+
+        private static void SummarizeNames()
+        {
+            var r = new SceneryScanResult { Ran = true, Models = 500, Db = @"X\SceneryFixDependencies.db", Seconds = 1.0, JsonPath = @"X\scan.json" };
+            for (int i = 0; i < 120; i++) r.Added.Add(@"objects\thing" + i.ToString("D3") + @"\thing" + i.ToString("D3") + ".render_model");
+            r.SkyExcluded.AddRange(new[] { @"scenarios\skies\a\a.render_model", @"scenarios\skies\b\b.render_model" });
+            string t = string.Join("\n", SceneryFixDeps.Summarize(r));
+            Assert.Contains(t, "Added 120 model(s) the database did not know", "count");
+            Assert.Contains(t, @"    objects\thing000\thing000.render_model", "the first name");
+            Assert.Contains(t, @"    objects\thing119\thing119.render_model", "the 120th name is listed too (no cap at 60)");
+            Assert.NotContains(t, "... and", "nothing is cut off at this size");
+            Assert.Contains(t, "Skipped 2 sky model(s)", "skipped skies");
+            Assert.Contains(t, @"    scenarios\skies\b\b.render_model", "named");
+            Assert.Eq(" (thing000, thing001, thing002, ...)", SceneryFixDeps.AddedSample(r), "the status line's first names");
+            Assert.Eq("", SceneryFixDeps.AddedSample(new SceneryScanResult()), "nothing added: no sample");
+            // a long list is capped with a pointer to the report
+            var big = new SceneryScanResult { Ran = true, JsonPath = @"X\scan.json" };
+            for (int i = 0; i < 1005; i++) big.Added.Add("m" + i);
+            string bt = string.Join("\n", SceneryFixDeps.Summarize(big));
+            Assert.Contains(bt, "... and 5 more (all of them are in X\\scan.json)", "the cap points at the report");
+            // the report parser reads sky_excluded
+            var p = new SceneryScanResult();
+            Assert.True(SceneryFixDeps.ParseReport("{\"models\":3,\"sky_excluded\":[\"s\\\\a.render_model\",\"S\\\\A.RENDER_MODEL\",\"t\\\\b.render_model\"]}", p) == null, "parsed");
+            Assert.Seq(new[] { @"s\a.render_model", @"t\b.render_model" }, p.SkyExcluded, "sky_excluded (case-insensitive dedup)");
         }
 
         private static void SummarizeText()

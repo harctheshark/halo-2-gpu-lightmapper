@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.4 (2026-10-21): pre-release
+
+Exe SHA-256 `34f0e1a144efc157784cc86290696bb0b3b701d4a9304bbe6a606e74923d0a1b`.
+
+- **Compatibility mode (DF64) for GPUs without FP64.**
+  - Intel integrated / Arc and Qualcomm Adreno GPUs have no double-precision (FP64) support, and 0.6.3 refused them. The engine now
+    has a second kernel set that uses only FP32 ("double-single" maths) and picks it **automatically** on such a GPU. There is
+    nothing to switch on; NVIDIA and AMD cards keep full FP64.
+  - The window has a new **Graphics card** group (under Quality) that shows the GPU and the precision: `Precision: Full FP64`, or
+    `Precision: Compatibility mode (DF64) ...`. The same line is in the log, `--dry-run` and the run summary.
+  - **Experimental.** On an RTX 4090 with the mode forced on, real maps came out identical to full precision (vuthatest,
+    earthcity_1, an AO trace of cyclotron). It has not run on a real Intel or Qualcomm GPU or on Windows on ARM.
+  - `--force-compat` (command line, for testing) runs those kernels on a GPU that has FP64.
+- **Scenery Multi Permutation Fix (Experimental Improvement)** (Advanced settings, off by default, `--scenery-permutation-fix`).
+  - For scenery that draws more than one shape from one tag (a rock whose shape changes when you move it, a lifepod placed with
+    a named variant like "crashed"). Only the shape the game actually draws casts shadows, ground hidden inside scenery is
+    filled from its surroundings, and a variant's own pieces get lit instead of rendering black.
+  - It differs from the 2004 tool on purpose. Most maps never need it: giving each shape its own scenery tag avoids the problem.
+  - Off is byte-identical to 0.6.3. AO and light probes do not take it (the plan says so).
+- **GPU timeout (TDR) risk reduced again: the photon-lattice step is resumable.**
+  - The one GPU step that had a unit it could not split (about 1.7-2 s per submission on vuthatest even on an RTX 4090, against
+    Windows' 2 s limit) now stops after a work budget sized from the measured time and resumes. Bit-identical results.
+  - It is also much faster: on the RTX 4090 vuthatest's lattice went from 16.8 s to about 4 s and cyclotron's from 32.6 s to
+    about 6-7 s.
+- **Keep PC responsive is v2.** About 10 ms GPU pieces, each waited for, with an idle gap after each so the GPU is busy about 60%
+  of the time, plus lowest GPU and below-normal CPU priority (0.6.3: 40 ms pieces back to back). The lightmap is identical; bakes
+  take longer (about 1.5-1.8x on the tested maps).
+- **A BSP from another folder can be baked.** `01b_spacestation` uses `01_bsp_1` from `scenarios\solo\01a_tutorial`; the BSP list
+  now shows every BSP the scenario references, labelled with its folder. The lightmap is written beside the scenario. Lightmap
+  only for now (AO and light probes are refused for such a BSP).
+- **A fallback to the tool write-back is no longer silent:** the log and the run summary show a yellow warning with the reason.
+- **Scan and Build Scenery Fix Dependencies** lists the added models by name and skips sky models.
+- **Sapien's scratch files** (`temp_scenario`, auto-backups) are no longer listed as maps or read as the bake touching your tags.
+- The 0.6.3 AO stage failure with "2004 Exact Vertex Lighting?" on is fixed (checked end to end on vuthatest).
+
 ## 0.6.3 (2026-10-20): pre-release
 
 Exe SHA-256 `81264a3c166c3aea392bf57d65db2643993bbc8c18df4c8c4d2687fce3fddcd5`.

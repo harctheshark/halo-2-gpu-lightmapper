@@ -47,8 +47,8 @@ namespace H2GpuLightmapper.Tests
     {
         public const string LmwInstallMd5 = "4608af880327453b6e07844d6e7e95b9";
         public const string TagIoMd5 = "e8aeb703b786b8c995297834abdc73f6";
-        public const string ProdDllMd5 = "b2370477f36db8c74e6749d5389f2a57";      // W1 2026-10-20: the promoted engine_v373 DLL (was aaf10a0f)
-        public const string SkelDllMd5 = "f0fb73ac9cd42f8f716f26b64584759b";
+        public const string ProdDllMd5 = "d6147fce6e3979a37178d2e14d092227";      // W3 2026-10-21: the 0.6.4-promoted engine_v373 DLL (W1: b2370477, was aaf10a0f)
+        public const string SkelDllMd5 = "5c6aeea9d1ffbaaaa6351d7ba5e77360";      // W3 2026-10-21: the 0.6.4-promoted skeleton-mode DLL (was f0fb73ac)
 
         public string Project, Exe, PwshDir, PyDir, MineRoot, FixturesDir, SandboxParent, ShortParent;
         public bool Keep;
@@ -116,8 +116,41 @@ namespace H2GpuLightmapper.Tests
 
         /// <param name="customEngine">E1 (0.6.1): the INST carries engine_custom/gpu_bake.ps1 (the N3 guarded Custom engine), so Custom is offered
         /// with no dev switch.</param>
-        public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null)
+        /// <param name="sceneryEngine">engine 0.6.4: engine_v373/gpu_bake.ps1 declares [switch]$SceneryOwnPermutationOnly (false = an older engine: the parameter line is dropped).</param>
+        /// <param name="customSceneryEngine">the same for engine_custom/gpu_bake.ps1 (only with customEngine).</param>
+        /// <param name="compatEngine">engine 0.6.4 Compatibility mode (DF64): engine_v373/gpu_bake.ps1 validates GPULM_COMPAT (false = an older engine, the 0.6.3 shape: every FAKE_COMPAT_ENGINE
+        /// line is dropped, so the script never mentions the variable). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
+        /// <param name="customCompatEngine">the same for engine_custom/gpu_bake.ps1 (only with customEngine); default = compatEngine.</param>
+        /// <param name="aoCompatEngine">the same for the AO engine copy _research/ao/dev_AO/gpu_bake.ps1; default = compatEngine.</param>
+        /// <param name="crossBspEngine">engine 0.6.4 cross-folder BSP (dev_S): the engine_v373 / engine_custom gpu_bake.ps1 declare [switch]$WriterOnly and [switch]$ToolOverlay (false = an older
+        /// engine: the two parameter lines are dropped). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
+        public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null,
+                                   bool sceneryEngine = true, bool customSceneryEngine = true, bool compatEngine = false, bool? customCompatEngine = null, bool? aoCompatEngine = null,
+                                   bool crossBspEngine = false)
         {
+            bool custCompat = customCompatEngine ?? compatEngine, aoCompat = aoCompatEngine ?? compatEngine;
+            // another file set needs another extraction dir name (same length: the DLL slot / path budget must not change)
+            string instDirName = customEngine ? (sceneryEngine && customSceneryEngine ? GuardedInstDir : "0.5.0-s25ccc" + (sceneryEngine ? "x" : "y")) : (sceneryEngine ? "0.5.0-s25cccc" : "0.5.0-s25cccn");
+            if (compatEngine || custCompat || aoCompat)
+            {
+                // Compatibility-mode variants: another file set, another dir name of the same length (13): the last 2-3 characters carry the variant
+                char kind = customEngine ? (sceneryEngine && customSceneryEngine ? 'c' : 'd') : (sceneryEngine ? 'n' : 'm');
+                instDirName = "0.5.0-s25" + kind + (compatEngine ? 'k' : 'q') + (custCompat ? 'k' : 'q') + (aoCompat ? 'k' : 'q');     // 13 characters, like the others
+            }
+            if (crossBspEngine)
+            {
+                // cross-folder BSP variants: another file set, another dir name of the same length (13): "0.5.0-s25z" + engine kind + scenery + compat
+                instDirName = "0.5.0-s25z" + (customEngine ? 'c' : 'e') + (sceneryEngine && customSceneryEngine ? 's' : 'o') + (compatEngine ? 'k' : 'q');
+            }
+            Func<bool, bool, byte[]> fakeBake = (withScenery, withCompat) =>
+            {
+                string t = File.ReadAllText(Fixture("fake_gpu_bake.ps1"));
+                var lines = t.Replace("\r\n", "\n").Split('\n').AsEnumerable();
+                if (!withScenery) lines = lines.Where(l => l.IndexOf("SceneryOwnPermutationOnly", StringComparison.Ordinal) < 0);
+                if (!withCompat) lines = lines.Where(l => l.IndexOf("FAKE_COMPAT_ENGINE", StringComparison.Ordinal) < 0);
+                if (!crossBspEngine) lines = lines.Where(l => l.IndexOf("FAKE_CROSSBSP_ENGINE", StringComparison.Ordinal) < 0);
+                return new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines));
+            };
             var rnd = new Random(25);
             Func<int, byte[]> blob = n => { var b = new byte[n]; rnd.NextBytes(b); return b; };
             Func<string, byte[]> txt = s => new UTF8Encoding(false).GetBytes(s);
@@ -131,16 +164,16 @@ namespace H2GpuLightmapper.Tests
                 {
                     new F { Path = "py.exe", Data = blob(2000) }, new F { Path = "python310._pth", Data = txt("python310.zip\n.\nsite-packages\nimport site\n") },
                 }),
-                Tuple.Create("engine-test", customEngine ? GuardedInstDir : "0.5.0-s25cccc", "inst", new List<F>
+                Tuple.Create("engine-test", instDirName, "inst", new List<F>
                 {
-                    new F { Path = "engine_v373/gpu_bake.ps1", Data = File.ReadAllBytes(Fixture("fake_gpu_bake.ps1")) },
+                    new F { Path = "engine_v373/gpu_bake.ps1", Data = fakeBake(sceneryEngine, compatEngine) },
                     new F { Path = "engine_v373/v043-tagwriter/lmw_install.py", Data = File.ReadAllBytes(FxLmwInstall) },
                     new F { Path = "engine_v373/v043-tagwriter/lmw_validate.py", Data = File.ReadAllBytes(Fixture("fake_lmw_validate.py")) },
                     new F { Path = "engine_v373/v014-inject-estimator/gpulm_estimator.dll", Data = File.ReadAllBytes(FxProdDll), Role = "dllslot" },
                     new F { Path = "engine_v373/v043-tagwriter/dll/gpulm_estimator.dll", Data = File.ReadAllBytes(FxSkelDll), Role = "dllslot" },
                     new F { Path = "engine_v373/v041-fullgpu/fullgpu.exe", Data = blob(4000) },
                     new F { Path = "_research/ao/gpu_ao.py", Data = File.ReadAllBytes(Fixture("fake_gpu_ao.py")) },
-                    new F { Path = "_research/ao/dev_AO/gpu_bake.ps1", Data = txt("throw 'the test dev_AO gpu_bake is never run directly'\n") },
+                    new F { Path = "_research/ao/dev_AO/gpu_bake.ps1", Data = txt((aoCompat ? "if (Test-Path Env:GPULM_COMPAT) { }   # the AO engine copy of an engine with Compatibility mode (DF64)\n" : "") + "throw 'the test dev_AO gpu_bake is never run directly'\n") },
                     new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")) },
                     new F { Path = "standalone/sh_stage.py", Data = File.ReadAllBytes(Fixture("fake_sh_stage.py")) },
                     new F { Path = "standalone/scan_scenery_bounds.py", Data = File.ReadAllBytes(Fixture("fake_scan_scenery_bounds.py")) },
@@ -148,7 +181,7 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "v043-tagwriter/lmw_defs.json", Data = File.ReadAllBytes(FxTagDefs) },
                 }),
             };
-            if (customEngine) comps[2].Item4.Add(new F { Path = "engine_custom/gpu_bake.ps1", Data = File.ReadAllBytes(Fixture("fake_gpu_bake.ps1")) });
+            if (customEngine) comps[2].Item4.Add(new F { Path = "engine_custom/gpu_bake.ps1", Data = fakeBake(customSceneryEngine, custCompat) });
             Directory.CreateDirectory(dir);
             var carr = new List<object>();
             foreach (var c in comps)

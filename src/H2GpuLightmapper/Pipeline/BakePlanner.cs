@@ -33,6 +33,7 @@ using System.IO;
 using System.Linq;
 using H2GpuLightmapper.App;
 using H2GpuLightmapper.Core.Payload;
+using H2GpuLightmapper.Core.Preflight;
 using H2GpuLightmapper.Core.Run;
 using H2GpuLightmapper.Core.Safety;
 using H2Lm.Proc;
@@ -54,6 +55,10 @@ namespace H2GpuLightmapper.Pipeline
         public bool ProbePointsAssumed;
         /// <summary>X1: the adapter limits decided by the session (null = nothing passed: the production argv).</summary>
         public GpuLimits Limits;
+        /// <summary>Compatibility mode (DF64): the kernel set the session decided (Unknown = the GPU is not known: dry run / GPU check skipped) and whether
+        /// every engine the bake runs has the mode.</summary>
+        public PrecisionMode Precision;
+        public bool EngineHasCompat;
         /// <summary>X1: the probe-count preflight found the BSP close to the GPU probe pass's limit.</summary>
         public string ProbeWarning;
         public bool ReuseLightmap, ReuseProbe;
@@ -103,6 +108,10 @@ namespace H2GpuLightmapper.Pipeline
             // W2 (0.6.3): "2004 Exact Vertex Lighting?": the engine's opt-in switch (lm_tagwriter --exact-vertex-lighting). Every gpu_bake the plan
             // builds writes the direct-writer stage, so every one gets it; unticked = no byte of the argv changes.
             if (o.ExactVertexLighting) a.Add("-ExactVertexLighting");
+            // "Scenery Multi Permutation Fix (Experimental Improvement)": the engine's opt-in switch. Only ever reached for an engine that declares it
+            // (BakeSession.Prepare refuses otherwise; AppHost.SceneryPermutationFixWhy); the capture and the write-back both need it, so every
+            // gpu_bake of the bake (incl. the tool write-back fallback argv) gets it. Unticked = no byte of the argv changes.
+            if (o.SceneryPermutationFix) a.Add("-" + BakeOptions.SceneryPermutationFixSwitch);
             return a;
         }
 
@@ -143,6 +152,13 @@ namespace H2GpuLightmapper.Pipeline
             if (o.Quality == Quality.Custom && engineRel == InstLayout.GpuBake)
                 p.Warnings.Add("UNGUARDED Custom (dev --dev-custom-unguarded): this payload has no engine_custom with the N3 palloc guard, so Custom runs engine_v373's fullgpu -- a uint32 photon-count wrap would NOT be caught; evidence from this run is marked guarded=false");
             p.Limits = pi.Limits;
+            p.Precision = pi.Precision; p.EngineHasCompat = pi.EngineHasCompat;
+            if (pi.Precision == PrecisionMode.Compat)
+                p.Notes.Add("compatibility mode (DF64): this GPU has no FP64, so fullgpu runs its FP32-only double-single kernels (chosen by the engine itself; nothing is passed). Experimental: the lightmap matched full precision in testing; the bake may be slower");
+            else if (pi.Precision == PrecisionMode.CompatForced)
+                p.Notes.Add(BakeOptions.ForceCompatNote + "; the lightmap matched full precision in testing; the bake may be slower");
+            if (pi.Precision == PrecisionMode.Unknown && pi.EngineHasCompat)
+                p.Notes.Add("precision is decided by the GPU when the bake starts: gpucheck reports it and fullgpu picks the kernels; a GPU without FP64 runs in Compatibility mode (DF64)");
             if (pi.Limits != null)
                 foreach (var ln in pi.Limits.Notes)
                 {
@@ -156,6 +172,17 @@ namespace H2GpuLightmapper.Pipeline
             if (o.ExactVertexLighting)
                 p.Notes.Add(BakeOptions.ExactVertexLightingNote + " (\"" + BakeOptions.ExactVertexLightingLabel + "\"): every gpu_bake gets -ExactVertexLighting; the tag writer re-runs the CPU's per-vertex visibility gate (about 2 minutes longer on cyclotron); it changes only the vertex-lit records, the lightmap bitmaps are unaffected"
                             + (o.Ao ? "; the AO layer's final stage is written by 'gpu_ao stage', which gets --exact-vertex-lighting too" : ""));
+            if (o.SceneryPermutationFix)
+            {
+                p.Notes.Add(BakeOptions.SceneryPermutationFixNote + " (\"" + BakeOptions.SceneryPermutationFixLabel + "\"): every gpu_bake gets -" + BakeOptions.SceneryPermutationFixSwitch
+                            + "; the capture records the shape the tool picked for each scenery placement, so a capture is only reusable by a bake with the same setting");
+                if (o.Mode == BakeMode.Probes)
+                    p.Warnings.Add(BakeOptions.SceneryPermutationFixLabel + " has no effect in Lightprobes mode: no lightmap is baked, so no gpu_bake gets the switch");
+                else if (o.Ao || NeedsProbes(o, pi.ProbePoints))
+                    p.Warnings.Add(BakeOptions.SceneryPermutationFixLabel + " is not passed to the " + (o.Ao ? "AO trace" : "") + (o.Ao && NeedsProbes(o, pi.ProbePoints) ? " or the " : "")
+                                   + (NeedsProbes(o, pi.ProbePoints) ? "light probe bake" : "") + " (driver scripts that run their own engine copy and cannot take the switch): "
+                                   + "that part still sees every shape of a multi permutation scenery tag, and the combination is untested");
+            }
             string runDir = pi.RunDir;
             string work = rt.Work;
             string py = rt.PyExe;
@@ -317,7 +344,25 @@ namespace H2GpuLightmapper.Pipeline
                 v.Params.Add("marker", p.Marker).Add("tagDir", set.TagDir);
             }
             else p.Notes.Add("stage only: nothing is written to the tags; the final stage is " + p.FinalStage);
+            // Compatibility mode (DF64): --force-compat gives every step that runs the GPU engine GPULM_COMPAT=1 (BakeSession refused it up front on an
+            // engine that does not validate the variable, so it is only ever reached for an engine that does). Without it nothing is added: the engine
+            // picks the kernel set by the GPU itself.
+            if (o.ForceCompat)
+            {
+                foreach (var s in p.Steps) ApplyCompatEnv(o, s);
+                var fb = p.Find(StepIds.StageOrToolFallback);
+                if (fb != null) fb.Params.Add("fallbackEnv", GpuCheck.CompatEnvVar + "=1");
+            }
             return p;
+        }
+
+        /// <summary>--force-compat: GPULM_COMPAT=1 on a step that runs the GPU engine (gpu_bake, its tool write-back fallback, the AO trace and the light
+        /// probe driver, which run gpu_bake / fullgpu themselves). Other steps (tag writer, installs, sh_stage) never get it.</summary>
+        public static void ApplyCompatEnv(BakeOptions o, PlanStep s)
+        {
+            if (!o.ForceCompat || s == null || s.Kind != PlanStepKind.Process) return;
+            if (s.Id == StepIds.GpuBake || s.Id == StepIds.GpuBakeFallback || s.Id == StepIds.AoTrace || s.Id == StepIds.ProbeBake)
+                s.EnvExtra[GpuCheck.CompatEnvVar] = "1";
         }
 
         /// <summary>Review fix (finding 21): py INST\engine_v373\v043-tagwriter\lmw_validate.py --check-set DIR --bsp &lt;live bsp&gt;
@@ -329,7 +374,7 @@ namespace H2GpuLightmapper.Pipeline
                 Id = StepIds.ValidateFinal, UiStep = StepId.Probes, Kind = PlanStepKind.Process, Title = "lmw_validate --check-set on " + what + " (the install gate)",
                 FileName = rt.PyExe, Cwd = rt.Work, TimeoutMs = ShStageTimeoutMs,
             });
-            v.Args.AddRange(new[] { InstLayout.Full(rt.InstDir, InstLayout.LmwValidate), "--check-set", dir, "--bsp", Path.Combine(set.TagDir, o.Bsp + ".scenario_structure_bsp"), "--json", json });
+            v.Args.AddRange(new[] { InstLayout.Full(rt.InstDir, InstLayout.LmwValidate), "--check-set", dir, "--bsp", o.BspTagFile(set.TagDir), "--json", json });
             v.Params.Add("onFail", "nothing is installed; the stage is kept");
         }
 

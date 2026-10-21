@@ -156,6 +156,21 @@ namespace H2GpuLightmapper.Core.Run
             var h = Line; if (h != null) { try { h(p); } catch { } }
         }
 
+        /// <summary>A warning the shell raises itself (0.6.4: the engine's silent write-back fallback). Shown as a yellow Note line in the live log,
+        /// written to bake.log, and kept in status.json's notes -- never lost in a scroll of dim Shell lines.</summary>
+        public void Warn(string text)
+        {
+            var p = new ParsedLine { Text = "*** " + text, Kind = LineKind.Note, Utc = DateTime.UtcNow };
+            lock (_lock)
+            {
+                if (_log != null) _log.WriteLine("=== " + p.Text);
+                if (!Status.Notes.Contains(text)) Status.Notes.Add(text);
+            }
+            Ring.Add(p);
+            var h = Line; if (h != null) { try { h(p); } catch { } }
+            SaveStatus();
+        }
+
         public void SetState(RunState st, string waitingFor = null)
         {
             lock (_lock) { Status.State = st; Status.WaitingFor = waitingFor; }

@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text;
 using H2GpuLightmapper.App;
 using H2GpuLightmapper.Core.Payload;
+using H2GpuLightmapper.Core.Preflight;
 using H2GpuLightmapper.Core.Run;
 using H2GpuLightmapper.Core.Util;
 using H2Lm.Proc;
@@ -106,6 +107,12 @@ namespace H2GpuLightmapper.Pipeline
         public bool ProbePointsAssumed;
         /// <summary>X1: what gpu_bake gets for this adapter (-MaxCallsPerPart / -BufCapMB); null = not decided (nothing passed).</summary>
         public GpuLimits Limits;
+        /// <summary>Compatibility mode (DF64): which kernel set this bake runs (Unknown = the GPU is not known at planning time: a dry run, or the
+        /// GPU check was skipped; the engine then decides by the GPU), and whether the engine(s) it runs have the mode at all.</summary>
+        public PrecisionMode Precision;
+        public bool EngineHasCompat;
+        public string PrecisionLine { get { return GpuCheck.PrecisionText(Precision, EngineHasCompat); } }
+        public string PrecisionModeToken { get { return Precision == PrecisionMode.Full ? "full-fp64" : Precision == PrecisionMode.Compat ? "compat-df64" : Precision == PrecisionMode.CompatForced ? "compat-df64-forced" : EngineHasCompat ? "automatic" : "full-fp64-required"; } }
         public bool ProbePath, Install;
         public bool ReuseLightmapCapture, ReuseProbeCapture;
         public string LightmapReuseNote, ProbeReuseNote;
@@ -194,10 +201,10 @@ namespace H2GpuLightmapper.Pipeline
                 return (object)j;
             }).ToList();
             return new JObj().Add("schema", "h2lm-bake-plan/1").Add("dryRun", dryRun).Add("appVersion", AppVersion).Add("payload", PayloadSource)
-                .Add("options", new JObj().Add("root", o.Root).Add("scenario", o.ScenarioRel).Add("bsp", o.Bsp).Add("quality", o.QualityToken)
+                .Add("options", new JObj().Add("root", o.Root).Add("scenario", o.ScenarioRel).Add("bsp", o.Bsp).Add("bspRel", o.BspRel).Add("quality", o.QualityToken)
                     .Add("photons", o.Quality == Quality.Custom ? (object)o.Photons : null).Add("rays", o.Quality == Quality.Custom ? (object)(long)o.Rays : null)
                     .Add("mode", o.ModeToken).Add("ao", o.Ao).Add("aoStrength", o.AoStrength).Add("aoExponent", o.AoExponent).Add("aoTag", o.Ao ? o.AoTag : null)
-                    .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting)
+                    .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting).Add("sceneryPermutationFix", o.SceneryPermutationFix).Add("forceCompat", o.ForceCompat)
                     .Add("guarded", CustomGuarded.HasValue ? (object)CustomGuarded.Value : null))
                 .Add("root", Root).Add("work", Work).Add("inst", InstDir).Add("slotBase", SlotBase).Add("runDir", RunDir).Add("runDirPredicted", RunDirPredicted)
                 .Add("pwsh", Rt == null ? null : Rt.PwshExe).Add("py", Rt == null ? null : Rt.PyExe).Add("engine", Engine)
@@ -205,6 +212,7 @@ namespace H2GpuLightmapper.Pipeline
                 .Add("probeWorker", ProbeWorker.HasValue ? (object)(long)ProbeWorker.Value : null).Add("probeWorkerNote", ProbeWorkerNote)
                 .Add("out", Out).Add("outProbe", OutProbe)
                 .Add("probePoints", (long)ProbePoints).Add("probePointsAssumed", ProbePointsAssumed).Add("probePath", ProbePath)
+                .Add("precision", new JObj().Add("mode", PrecisionModeToken).Add("text", PrecisionLine).Add("engineHasCompatMode", EngineHasCompat).Add("forced", o.ForceCompat))
                 .Add("gpuLimits", Limits == null || !Limits.VramBytes.HasValue ? null : new JObj().Add("vramBytes", Limits.VramBytes.Value).Add("source", Limits.Source)
                     .Add("rowsFit", Limits.RowsFit).Add("maxCallsPerPart", Limits.MaxCallsPerPart).Add("bufCapMB", (long)Limits.BufCapMB)
                     .Add("otherUseBytes", Limits.OtherUseBytes.HasValue ? (object)Limits.OtherUseBytes.Value : null)
@@ -231,6 +239,7 @@ namespace H2GpuLightmapper.Pipeline
             sb.AppendLine("  engine    " + Engine);
             sb.AppendLine("  map       " + o.ScenarioRel + "   bsp " + o.Bsp);
             sb.AppendLine("  options   " + o.Summary());
+            sb.AppendLine("  precision " + PrecisionLine);
             sb.AppendLine("  workers   " + (Worker.HasValue ? "farm_w" + Worker.Value.ToString("D2", CultureInfo.InvariantCulture) + (WorkerNote != null ? " (" + WorkerNote + ")" : "") : "-")
                           + "   probe " + (ProbeWorker.HasValue ? "farm_w" + ProbeWorker.Value.ToString("D2", CultureInfo.InvariantCulture) + (ProbeWorkerNote != null ? " (" + ProbeWorkerNote + ")" : "") : "-"));
             sb.AppendLine("  probes    " + ProbePoints + " point(s)" + (ProbePointsAssumed ? " ASSUMED (dry run: pass --probe-points N; a real run queries the scenario)" : "")

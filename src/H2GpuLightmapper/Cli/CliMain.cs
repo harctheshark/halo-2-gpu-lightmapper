@@ -34,7 +34,7 @@ namespace H2GpuLightmapper.Cli
         [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap]
         [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture] [--no-install] [--yes]
         [--ao-fallback stop|install] [--probes-fallback stop|install] [--install-retries N [--install-retry-wait-s S]]
-        [--responsive] [--exact-vertex-lighting]
+        [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix]
         [--dry-run [--json] [--probe-points N] [--assume-vram-mb N [--assume-other-vram-mb N]]]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --scenario S --bsp B [--list | --from BACKUP | --undo-last-install] [--dry-run]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --recover
@@ -75,6 +75,18 @@ namespace H2GpuLightmapper.Cli
   --exact-vertex-lighting = the window's Advanced settings ""2004 Exact Vertex Lighting?"": every gpu_bake of the bake gets -ExactVertexLighting
   (the tag writer re-runs the CPU's 7-probe per-vertex visibility gate, so the vertex-lit records match the 2004 tool more closely; the tag writer takes
   about 2 minutes longer on cyclotron; the lightmap bitmaps are unchanged). Off = the argv is exactly what it was before the option existed.
+  --scenery-permutation-fix = the window's Advanced settings ""Scenery Multi Permutation Fix (Experimental Improvement)"": every gpu_bake of the bake gets
+  -SceneryOwnPermutationOnly (a fallback for scenery that draws more than one shape from one tag: only the shape the game draws casts shadows, ground hidden
+  inside scenery is filled from its surroundings, a variant's own pieces get lit; it differs from the 2004 tool on purpose, and a capture is reusable only by a
+  bake with the same setting). Needs engine 0.6.4 or newer: when the payload's gpu_bake.ps1 does not declare that parameter the bake is refused (exit 2),
+  also with --dry-run, and the parameter is never passed. Off = the argv is exactly what it was before the option existed.
+  Precision (Compatibility mode, DF64): automatic, there is no option. A GPU with FP64 (NVIDIA, AMD) runs the engine's native FP64 kernels; a GPU
+  without FP64 (Intel integrated / Arc, Qualcomm Adreno) runs its FP32-only double-single (DF64) kernels, which the engine picks itself. Needs engine
+  0.6.4 or newer (its gpu_bake.ps1 validates GPULM_COMPAT); with an older engine a GPU without FP64 is refused, as before. The window, the bake log,
+  the plan (--dry-run, --json) and the run summary all state it as ""Precision: ..."". Experimental: results matched full precision in testing; may be slower.
+  --force-compat (testing only, not in the window): run the DF64 kernels on a GPU that has FP64 too (every GPU step gets GPULM_COMPAT=1). Refused (exit 2),
+  also with --dry-run, when the engine has no Compatibility mode; GPULM_COMPAT is never passed to such an engine.
+  --assume-no-fp64 (dry run only): plan as if the GPU had no FP64 (a real run asks gpucheck): the Compatibility-mode plan, or the plain refusal on an old engine.
   --assume-other-vram-mb N (dry run, with --assume-vram-mb): video memory other programs are assumed to hold. A real run measures it with
   gpucheck and sizes the parts (-MaxCallsPerPart) for what is left when it is more than a normal desktop's 3 GiB.
   --dry-run prints the exact child argv / environment / working folder of every step and starts nothing, writes nothing.
@@ -176,6 +188,8 @@ namespace H2GpuLightmapper.Cli
             o.Fixes = !a.Has("--dev-no-fixes");
             o.Responsive = a.Has("--responsive");
             o.ExactVertexLighting = a.Has("--exact-vertex-lighting");
+            o.SceneryPermutationFix = a.Has("--scenery-permutation-fix");
+            o.ForceCompat = a.Has("--force-compat");
             o.ReuseUnrecorded = a.Has("--reuse-unrecorded");
             if (o.ReuseUnrecorded && !o.ReuseCapture) a.Errors.Add("--reuse-unrecorded needs --reuse-capture");
             if (o.ReuseUnrecorded && !o.Worker.HasValue && o.Mode != BakeMode.Probes) a.Errors.Add("--reuse-unrecorded needs --worker N (the farm whose capture is reused)");
@@ -190,12 +204,13 @@ namespace H2GpuLightmapper.Cli
             var a = ParseFor(args, start + 1,
                 new[] { "--h2ek", "--scenario", "--bsp", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
                         "--worker", "--probe-worker", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s" },
-                new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded" });
+                new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded" });
             var o = BakeOptionsFrom(a);
             var so = new SessionOptions
             {
                 DryRun = a.Has("--dry-run"), SkipPreflight = a.Has("--dev-skip-preflight"), SkipGpuCheck = a.Has("--dev-skip-gpucheck"),
                 AssumeProbePoints = a.GetInt("--probe-points"), AssumeVramMB = a.GetInt("--assume-vram-mb"), AssumeOtherVramUseMB = a.GetInt("--assume-other-vram-mb"), CancelFile = a.Get("--cancel-file"),
+                AssumeNoFp64 = a.Has("--assume-no-fp64"),
             };
             bool json = a.Has("--json");
             var lw = a.GetDouble("--lock-wait-min");
@@ -210,6 +225,7 @@ namespace H2GpuLightmapper.Cli
             if (so.AssumeOtherVramUseMB.HasValue && !so.DryRun) a.Errors.Add("--assume-other-vram-mb is only for --dry-run (a real run measures it with gpucheck)");
             if (so.AssumeOtherVramUseMB.HasValue && !so.AssumeVramMB.HasValue) a.Errors.Add("--assume-other-vram-mb needs --assume-vram-mb");
             if (so.AssumeOtherVramUseMB.HasValue && so.AssumeOtherVramUseMB.Value < 0) a.Errors.Add("--assume-other-vram-mb must be >= 0");
+            if (so.AssumeNoFp64 && !so.DryRun) a.Errors.Add("--assume-no-fp64 is only for --dry-run (a real run asks gpucheck)");
             var retry = InstallRetryFrom(a, o);
             var host = AppHost.Create(HostConfigFrom(a));
             int ae = ArgErrors(a);
@@ -244,6 +260,7 @@ namespace H2GpuLightmapper.Cli
                 return code;
             }
             Console.Out.WriteLine("RESULT " + ResultWord(code) + " (exit " + code + ")" + (s.Reason != null ? ": " + s.Reason : ""));
+            if (s.PrecisionSummary != null) Console.Out.WriteLine(s.PrecisionSummary);
             if (s.Run != null) Console.Out.WriteLine("run folder: " + s.Run.RunDir);
             return code;
         }
@@ -615,7 +632,7 @@ namespace H2GpuLightmapper.Cli
                                        Path.Combine(ShellPaths.StandaloneOf(rt.Work), "scenery_fix_last_scan.json"));
             }
             foreach (var l in SceneryFixDeps.Summarize(r)) Console.Out.WriteLine(l);
-            Console.Out.WriteLine("RESULT " + (r.Ran ? "OK" : "FAILED") + ": " + r.Models + " model(s), " + r.Added.Count + " added, " + r.Updated.Count + " updated, " + r.Conflicts.Count + " conflict(s)");
+            Console.Out.WriteLine("RESULT " + (r.Ran ? "OK" : "FAILED") + ": " + r.Models + " model(s), " + r.Added.Count + " added, " + r.Updated.Count + " updated, " + r.Conflicts.Count + " conflict(s)" + (r.SkyExcluded.Count > 0 ? ", " + r.SkyExcluded.Count + " sky model(s) skipped" : ""));
             return r.Ran ? ExitOk : ExitFailed;
         }
 
@@ -695,6 +712,7 @@ namespace H2GpuLightmapper.Cli
                 GpuCheckExe = !noGpu && rt != null ? rt.GpuCheckExe : null,
                 GpuCheckPlainExe = !noGpu && rt != null && inst != null ? InstLayout.FindByName(inst, rt.InstDir, InstLayout.GpuCheckPlain) : null,
                 PwshExe = rt == null ? null : rt.PwshExe, PwshEnv = env,
+                CompatEngine = host.HasPayload && host.EngineHasCompat(BakeOptions.Defaults()),      // the default bake's engine (Super, no AO): does it have Compatibility mode (DF64)?
             });
             foreach (var it in pf.Items) lines.Add("  " + it);
             ok &= pf.Ok;
