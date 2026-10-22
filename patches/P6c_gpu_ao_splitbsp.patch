@@ -1,0 +1,55 @@
+# title: P6c gpu_ao.py: cross-folder BSP (0.6.5): stage's lm_tagwriter / lmw_validate --bsp is the file the scenario's structure_bsps names (the engine's lmw_skeleton.py resolve-bsp, as gpu_bake does); marker SPLIT_BSP_SUPPORT = 1; same-folder maps keep the beside path (identical argv); install needs no BSP
+# source: _research/ao/gpu_ao.py
+# base-md5: 56eba64dfcf425f9727981cfb6f60019
+# result-md5: a8914dc88a0271d73938679ec6511cbe
+--- a/_research/ao/gpu_ao.py
++++ b/_research/ao/gpu_ao.py
+@@ -25,6 +25,7 @@
+ H2 = os.path.abspath(os.environ.get('H2LM_ROOT') or os.path.join(GLW, '..'))   # ...\H2EKMine (P6: H2LM_ROOT overrides; unset or empty = as before)
+ ENGINE_DEFAULT = os.path.join(HERE, 'dev_AO2')                         # V1 2026-10-14: dev_AO2 = engine_v373 (TIE1) + the AO additions; dev_AO = the pre-tie historical engine
+ FLAGS = 0x08000000 | 0x00004000                                      # CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
++SPLIT_BSP_SUPPORT = 1         # marker (0.6.5): the BSP of `stage` is the file the scenario's structure_bsps names (another folder than the scenario is fine); the exe checks this line
+ METRES_PER_WU = 3.048                                                # 1 Halo world unit = 10 ft
+ UE_DEFAULT_D_CM = 200.0
+ MAX_STRENGTH = 2.0            # user 2026-10-13: strength 1.5 requested; above 1 the AO multipliers floor at 0
+@@ -109,10 +110,29 @@
+     return a[:4].copy(), a[4:].reshape(n, rec)
+ def farm_dir(a):
+     return os.path.abspath(a.farm) if getattr(a, 'farm', None) else os.path.join(GLW, 'farm_w%02d' % a.worker)
+-def scen_paths(a):
++def resolve_bsp_file(a, d, leaf):
++    """0.6.5 cross-folder BSP: the BSP tag the scenario's structure_bsps entry NAMED a.bsp refers to -- the same call gpu_bake.ps1 makes
++    (the ENGINE's lmw_skeleton.py resolve-bsp, so the driver and the bake can never disagree). A scenario may reference a BSP in ANOTHER folder
++    (01b_spacestation -> 01a_tutorial\\01_bsp_1); <scenario folder>\\<bsp>.scenario_structure_bsp is only the fallback (an engine without resolve-bsp, an
++    unreadable scenario, an ambiguous name -- exactly gpu_bake's rule). When the resolved file is in the scenario's own folder the beside path is returned
++    unchanged (same-folder maps: identical argv and report text as before)."""
++    beside = os.path.join(d, a.bsp + '.scenario_structure_bsp')
++    eng = getattr(a, 'engine', None)
++    sk = os.path.join(os.path.abspath(eng), 'v043-tagwriter', 'lmw_skeleton.py') if eng else None
++    if not sk or not os.path.exists(sk) or not os.path.exists(os.path.join(d, leaf + '.scenario')): return beside
++    try:
++        r = subprocess.run([sys.executable, sk, 'resolve-bsp', '--scenario-dir', d, '--scenario-leaf', leaf, '--bsp-name', a.bsp], stdin=subprocess.DEVNULL,
++                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=FLAGS, timeout=300)
++    except (OSError, subprocess.SubprocessError): return beside
++    lines = [l.strip() for l in r.stdout.decode('mbcs', 'replace').splitlines() if l.strip()]
++    if r.returncode != 0 or len(lines) != 1 or not os.path.isfile(lines[0]): return beside
++    got = os.path.abspath(lines[0])
++    if os.path.normcase(os.path.dirname(got)) == os.path.normcase(os.path.abspath(d)): return beside
++    return got
++def scen_paths(a, want_bsp=True):
+     leaf = a.scenario.replace('/', '\\').split('\\')[-1]; rel = os.path.dirname(a.scenario.replace('/', '\\'))
+     d = os.path.join(H2, 'tags', rel)
+-    return dict(leaf=leaf, rel=rel, tagdir=d, bsp=os.path.join(d, a.bsp + '.scenario_structure_bsp'), scn=os.path.join(d, leaf + '.scenario'),
++    return dict(leaf=leaf, rel=rel, tagdir=d, bsp=resolve_bsp_file(a, d, leaf) if want_bsp else os.path.join(d, a.bsp + '.scenario_structure_bsp'), scn=os.path.join(d, leaf + '.scenario'),
+                 ltmp='%s\\%s_%s_lightmap' % (rel, leaf, a.bsp))
+ def link_or_copy(src, dst):
+     if os.path.exists(dst): os.remove(dst)
+@@ -431,7 +451,7 @@
+     if not a.write_back:
+         print('gpu_ao: REFUSED -- install writes the LIVE lightmap tags; pass --write-back to do it. (Nothing was changed.)')
+         return 2
+-    farm = farm_dir(a); out = os.path.join(farm, 'ao', a.tag); stage = os.path.join(out, 'tagw_stage'); sp = scen_paths(a)
++    farm = farm_dir(a); out = os.path.join(farm, 'ao', a.tag); stage = os.path.join(out, 'tagw_stage'); sp = scen_paths(a, False)
+     if not os.path.isdir(stage): die('no stage %s' % stage)
+     if os.path.exists(os.path.join(farm, 'writeback_in_progress.txt')): die('%s exists: an earlier write-back did not finish' % os.path.join(farm, 'writeback_in_progress.txt'))
+     tw = os.path.join(a.engine, 'v043-tagwriter')

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.5 (2026-10-22): pre-release
+
+Exe SHA-256 `ecaa6e5236b9de6d5ab056f45a752b46bca331dc8c912c3530fe9c6bde3c1ef1`.
+
+- **The GPU timeout (TDR) is much harder to hit.**
+  - A tester's Surface laptop (Snapdragon X2 Elite, Adreno X2-85, shared memory, Windows' 2 s timeout) lost the GPU in the sky-chain step. The
+    smallest piece of work the engine could submit was one draw of every "walker" of a batch, and a walker's draw is a whole photon, so a pass
+    took as long as the slowest single photon.
+  - Photons of the sky chain, the exact sun and the photon cast can now pause and resume (the smallest unit is one trace). Every step of the
+    default path starts with a tiny first submission, is timed with a high-resolution clock, grows only while it is far under its target, and
+    shrinks at once after an overshoot. The one-time shader compile is taken by a warm-up dispatch.
+  - Integrated / shared-memory GPUs: the exact-sun step sized its batches from the dedicated video memory only (tiny on such GPUs); it now uses a
+    quarter of the local memory budget when dedicated memory is under 1 GiB.
+  - Scheduling only: the results on the RTX 4090 are unchanged (guard, AO and probe gates re-run; keyed-identical bakes), and the 1.5 s
+    warning never appeared. **Not yet tried on the Surface / Snapdragon / Adreno PC or any slow GPU.**
+- **Maps with more than one cubemap sky are accepted** (for example `07a_highcharity` `high_0`): each sky triangle samples its own sky's cube.
+  The bake ran through the exe; it was not compared with a CPU bake.
+- **Ambient occlusion and light probes now work for a BSP in another folder** (`01b_spacestation` / `01_bsp_1`). The AO driver finds the BSP
+  file the way the bake does; the probe pipeline never needed it. Checked through the exe (Standard + AO + 2 probe points, stage only).
+- Known: two of three Standard bakes of triplicate in the tests stopped at the known final check `set.d.uv_on_alpha255` (a fresh capture passed).
+
 ## 0.6.4 (2026-10-21): pre-release
 
 Exe SHA-256 `34f0e1a144efc157784cc86290696bb0b3b701d4a9304bbe6a606e74923d0a1b`.

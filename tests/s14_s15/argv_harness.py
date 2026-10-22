@@ -56,14 +56,28 @@ def forbidden(*a, **k):
     raise RuntimeError('argv_harness: a real child process was requested: %r' % (a[:1],))
 
 
+RESOLVES = []
+
+
+def fake_run(args, *pa, **kw):
+    """0.6.5 (P6c): gpu_ao asks the engine's lmw_skeleton.py `resolve-bsp` for the BSP file through subprocess.run (it needs the output). Emulated ONLY for that command and only when
+    the spec carries "resolve_bsp": {"rc": 0, "stdout": "..."}; recorded apart from CALLS (so the launched-children comparison of the older tests is unchanged). Anything else is forbidden."""
+    a = [str(x) for x in args]
+    r = spec.get('resolve_bsp')
+    if r is not None and 'resolve-bsp' in a:
+        RESOLVES.append(a)
+        return subprocess.CompletedProcess(a, r.get('rc', 0), stdout=r.get('stdout', '').encode('mbcs'), stderr=b'')
+    raise RuntimeError('argv_harness: a real child process was requested: %r' % (a[:1],))
+
+
 subprocess.call = fake_call
 subprocess.Popen = forbidden
-subprocess.run = forbidden
+subprocess.run = fake_run
 subprocess.check_call = forbidden
 subprocess.check_output = forbidden
 os.system = forbidden
 
-res = dict(calls=CALLS, exit=None, stdout=None, globals=None, error=None)
+res = dict(calls=CALLS, resolves=RESOLVES, exit=None, stdout=None, globals=None, error=None)
 buf = io.StringIO()
 target = spec['target']
 try:

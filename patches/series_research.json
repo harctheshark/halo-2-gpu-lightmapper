@@ -1,15 +1,15 @@
 {
  "format": "h2lm-patch-series/1",
- "comment": "S1.4 research-driver patches (P5 gpu_lightprobes.py, P6 gpu_ao.py). Applied to COPIES of production by tools/patch_series.py (or tools/strict_patch.py apply). No build-time tokens. Pristine bases: patches/base/.",
+ "comment": "S1.4 research-driver patches (P5 gpu_lightprobes.py, P6 gpu_ao.py; 0.6.5 split-BSP task: + P5b probe driver marker, P6c AO driver cross-folder BSP). Applied to COPIES of production by tools/patch_series.py (or tools/strict_patch.py apply). No build-time tokens. Pristine bases: patches/base/.",
  "tokens": {},
  "targets": [
   {"path": "_research/lightprobes/gpu_lightprobes.py",
    "base_md5": "0668095dc7425a6a195a77a226d30ca7",
-   "patches": ["P5_gpu_lightprobes.patch"],
+   "patches": ["P5_gpu_lightprobes.patch", "P5b_gpu_lightprobes_splitbsp.patch"],
    "tokens": []},
   {"path": "_research/ao/gpu_ao.py",
    "base_md5": "04b171cabd16084eff3190de48722f89",
-   "patches": ["P6_gpu_ao.patch", "P6b_gpu_ao_exactvl.patch"],
+   "patches": ["P6_gpu_ao.patch", "P6b_gpu_ao_exactvl.patch", "P6c_gpu_ao_splitbsp.patch"],
    "tokens": []}
  ]
 }

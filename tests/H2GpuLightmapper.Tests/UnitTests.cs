@@ -37,6 +37,7 @@ namespace H2GpuLightmapper.Tests
             yield return T("unit: X2 Keep PC responsive: unticked argv byte-identical, ticked = + -Responsive last on every gpu_bake argv (36 combinations), --responsive, labels", X2Responsive);
             yield return T("unit: W2 2004 Exact Vertex Lighting?: unticked argv byte-identical, ticked = + -ExactVertexLighting last on every gpu_bake argv (72 combinations, with and without -Responsive), --exact-vertex-lighting, labels", W2ExactVertex);
             yield return T("unit: Scenery Multi Permutation Fix: unticked argv byte-identical, ticked = + -SceneryOwnPermutationOnly last on every gpu_bake argv (144 combinations), --scenery-permutation-fix, labels, summary", SceneryPermArgv);
+            yield return T("unit 0.6.5: the python driver marker (SPLIT_BSP_SUPPORT = 1): column 0, comment allowed, not a longer name / other value / indented / string-embedded, fails closed", SplitBspMarker);
             yield return T("unit: Scenery Multi Permutation Fix engine gate: param-block parser (comments / strings / types), the real engines' param blocks, the payload gate (Super, Custom), disabled-when-unsupported", SceneryPermEngineGate);
             yield return T("unit: Scenery Multi Permutation Fix capture identity: a capture is reusable only by a bake with the same setting (older records count as off; the probe capture never carries it)", SceneryPermCaptureIdentity);
             yield return T("unit: W2 run folder label (<= 20 chars), tagbak, and Undo / the Logs button keep working for OLD-style run folders (<ts>_<leaf>_<bsp>, tag_backup_before_writeback)", W2RunFolders);
@@ -141,6 +142,26 @@ namespace H2GpuLightmapper.Tests
         }
 
         private static string Script(params string[] lines) { return string.Join("\r\n", lines); }
+
+        private static void SplitBspMarker()
+        {
+            Func<string, bool> has = s => Core.Payload.EngineSwitches.HasPyMarker(s, BakeOptions.SplitBspMarker);
+            Assert.Eq("SPLIT_BSP_SUPPORT", BakeOptions.SplitBspMarker, "the marker name the drivers carry");
+            Assert.True(has("import os\nSPLIT_BSP_SUPPORT = 1\nx = 2\n"), "plain line");
+            Assert.True(has("import os\r\nSPLIT_BSP_SUPPORT = 1         # marker (0.6.5)\r\nx = 2\r\n"), "CRLF + trailing comment");
+            Assert.True(has("SPLIT_BSP_SUPPORT=1"), "no spaces, last line without newline");
+            Assert.True(!has("SPLIT_BSP_SUPPORT = 0\n"), "other value");
+            Assert.True(!has("SPLIT_BSP_SUPPORT = 10\n"), "1 followed by a digit is another value");
+            Assert.True(!has("SPLIT_BSP_SUPPORT_X = 1\n"), "a longer name");
+            Assert.True(!has("MY_SPLIT_BSP_SUPPORT = 1\n"), "a longer name (prefix)");
+            Assert.True(!has("    SPLIT_BSP_SUPPORT = 1\n"), "indented (inside a function / block)");
+            Assert.True(!has("# SPLIT_BSP_SUPPORT = 1\n"), "a comment");
+            Assert.True(!has("x = 'SPLIT_BSP_SUPPORT = 1'\n"), "inside a string");
+            Assert.True(!has(""), "empty"); Assert.True(!has(null), "null");
+            // the real 0.6.4 drivers (read-only, when present) do not carry it
+            string ao = Path.Combine(C.MineWork, @"_research\ao\gpu_ao.py");
+            if (File.Exists(ao)) Assert.True(!has(File.ReadAllText(ao)), "production gpu_ao.py (0.6.4 base) has no marker");
+        }
 
         private static void SceneryPermEngineGate()
         {

@@ -222,6 +222,23 @@ namespace H2GpuLightmapper.App
             return null;
         }
 
+        /// <summary>Ambient occlusion / light probes for a BSP in ANOTHER folder than the scenario (0.6.5). <paramref name="ao"/>: the AO trace + stage run (gpu_ao.py with the AO
+        /// engine copy dev_AO); <paramref name="probes"/>: the light probe driver runs (gpu_lightprobes.py). Each is supported only when the payload's driver script carries the
+        /// marker line (<see cref="BakeOptions.SplitBspMarker"/>) and, for AO, the AO engine copy's gpu_bake.ps1 resolves the BSP from the scenario (declares the same switches as
+        /// <see cref="CrossFolderBspWhy"/>). Null = supported. Else the plain reason (the 0.6.4 sentence): the layer stays refused, the lightmap alone is still baked.</summary>
+        public string CrossFolderAoProbesWhy(bool ao, bool probes)
+        {
+            if (Manifest == null) return PayloadError ?? "no payload";
+            if (ao)
+            {
+                if (!EngineSwitches.ComponentHasPyMarker(Source, Manifest.InstComponent, InstLayout.AoDriver, BakeOptions.SplitBspMarker)) return BakeOptions.CrossFolderBspNoAoProbes;
+                foreach (var sw in BakeOptions.CrossFolderBspSwitches)
+                    if (!EngineDeclaresIn(InstLayout.AoGpuBake, sw)) return BakeOptions.CrossFolderBspNoAoProbes;
+            }
+            if (probes && !EngineSwitches.ComponentHasPyMarker(Source, Manifest.InstComponent, InstLayout.ProbeDriver, BakeOptions.SplitBspMarker)) return BakeOptions.CrossFolderBspNoAoProbes;
+            return null;
+        }
+
         private bool EngineDeclaresIn(string rel, string name)
         {
             return Manifest != null && EngineSwitches.ComponentDeclares(Source, Manifest.InstComponent, rel, name);

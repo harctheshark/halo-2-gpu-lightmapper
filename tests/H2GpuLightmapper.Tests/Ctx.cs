@@ -124,9 +124,11 @@ namespace H2GpuLightmapper.Tests
         /// <param name="aoCompatEngine">the same for the AO engine copy _research/ao/dev_AO/gpu_bake.ps1; default = compatEngine.</param>
         /// <param name="crossBspEngine">engine 0.6.4 cross-folder BSP (dev_S): the engine_v373 / engine_custom gpu_bake.ps1 declare [switch]$WriterOnly and [switch]$ToolOverlay (false = an older
         /// engine: the two parameter lines are dropped). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
+        /// <param name="splitBspDrivers">0.6.5: which research drivers carry the marker line SPLIT_BSP_SUPPORT = 1 (they read the BSP from the file the scenario's structure_bsps names):
+        /// 1 = gpu_ao.py (+ the AO engine copy's gpu_bake.ps1 declares -WriterOnly / -ToolOverlay), 2 = gpu_lightprobes.py, 3 = both; 0 = a 0.6.4 payload. Use with crossBspEngine.</param>
         public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null,
                                    bool sceneryEngine = true, bool customSceneryEngine = true, bool compatEngine = false, bool? customCompatEngine = null, bool? aoCompatEngine = null,
-                                   bool crossBspEngine = false)
+                                   bool crossBspEngine = false, int splitBspDrivers = 0)
         {
             bool custCompat = customCompatEngine ?? compatEngine, aoCompat = aoCompatEngine ?? compatEngine;
             // another file set needs another extraction dir name (same length: the DLL slot / path budget must not change)
@@ -142,6 +144,12 @@ namespace H2GpuLightmapper.Tests
                 // cross-folder BSP variants: another file set, another dir name of the same length (13): "0.5.0-s25z" + engine kind + scenery + compat
                 instDirName = "0.5.0-s25z" + (customEngine ? 'c' : 'e') + (sceneryEngine && customSceneryEngine ? 's' : 'o') + (compatEngine ? 'k' : 'q');
             }
+            if (splitBspDrivers != 0)
+            {
+                // 0.6.5 variants: another file set, another dir name of the same length (13): "0.5.0-s25y" + driver flags + engine kind + scenery
+                instDirName = "0.5.0-s25y" + splitBspDrivers.ToString() + (customEngine ? 'c' : 'e') + (sceneryEngine && customSceneryEngine ? 's' : 'o');
+            }
+            Func<byte[], bool, byte[]> mark = (b, on) => on ? b.Concat(new UTF8Encoding(false).GetBytes("\nSPLIT_BSP_SUPPORT = 1\n")).ToArray() : b;
             Func<bool, bool, byte[]> fakeBake = (withScenery, withCompat) =>
             {
                 string t = File.ReadAllText(Fixture("fake_gpu_bake.ps1"));
@@ -172,9 +180,9 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "engine_v373/v014-inject-estimator/gpulm_estimator.dll", Data = File.ReadAllBytes(FxProdDll), Role = "dllslot" },
                     new F { Path = "engine_v373/v043-tagwriter/dll/gpulm_estimator.dll", Data = File.ReadAllBytes(FxSkelDll), Role = "dllslot" },
                     new F { Path = "engine_v373/v041-fullgpu/fullgpu.exe", Data = blob(4000) },
-                    new F { Path = "_research/ao/gpu_ao.py", Data = File.ReadAllBytes(Fixture("fake_gpu_ao.py")) },
-                    new F { Path = "_research/ao/dev_AO/gpu_bake.ps1", Data = txt((aoCompat ? "if (Test-Path Env:GPULM_COMPAT) { }   # the AO engine copy of an engine with Compatibility mode (DF64)\n" : "") + "throw 'the test dev_AO gpu_bake is never run directly'\n") },
-                    new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")) },
+                    new F { Path = "_research/ao/gpu_ao.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_ao.py")), (splitBspDrivers & 1) != 0) },
+                    new F { Path = "_research/ao/dev_AO/gpu_bake.ps1", Data = txt(((splitBspDrivers & 1) != 0 ? "param([switch]$WriterOnly, [switch]$ToolOverlay)\n" : "") + (aoCompat ? "if (Test-Path Env:GPULM_COMPAT) { }   # the AO engine copy of an engine with Compatibility mode (DF64)\n" : "") + "throw 'the test dev_AO gpu_bake is never run directly'\n") },
+                    new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")), (splitBspDrivers & 2) != 0) },
                     new F { Path = "standalone/sh_stage.py", Data = File.ReadAllBytes(Fixture("fake_sh_stage.py")) },
                     new F { Path = "standalone/scan_scenery_bounds.py", Data = File.ReadAllBytes(Fixture("fake_scan_scenery_bounds.py")) },
                     new F { Path = "v043-tagwriter/lmw_tagio.py", Data = File.ReadAllBytes(FxTagIo) },

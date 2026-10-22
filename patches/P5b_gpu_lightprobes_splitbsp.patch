@@ -1,0 +1,17 @@
+# title: P5b gpu_lightprobes.py: marker SPLIT_BSP_SUPPORT = 1 (0.6.5; verified: the probe pipeline already handles a BSP in another folder than the scenario, no code change)
+# source: _research/lightprobes/gpu_lightprobes.py
+# base-md5: ffb288d47846b38ed51e0f313761adf3
+# result-md5: 3634172b52a97b019a905750f2697300
+--- a/_research/lightprobes/gpu_lightprobes.py
++++ b/_research/lightprobes/gpu_lightprobes.py
+@@ -16,6 +16,10 @@
+ import argparse, os, sys, subprocess, json, time, shutil
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ H2 = r'G:\SteamLibrary\steamapps\common\H2EKMine'
++# 0.6.5 marker (the exe reads this line from the payload's copy of the script): a BSP that lives in ANOTHER folder than the scenario (01b_spacestation -> 01a_tutorial\01_bsp_1) is
++# handled by this pipeline as is -- no step opens <scenario folder>\<bsp>.scenario_structure_bsp: lp_probes.py matches the scenario's lighting element by the BSP's leaf name,
++# gpu_bake.ps1 resolves the tag from the scenario's structure_bsps, the lightmap tag is named after the SCENARIO.
++SPLIT_BSP_SUPPORT = 1
+ ap = argparse.ArgumentParser()
+ ap.add_argument('--scenario', required=True); ap.add_argument('--bsp', required=True); ap.add_argument('--quality', default='low')
+ ap.add_argument('--worker', type=int, required=True); ap.add_argument('--stage', default=os.path.join(HERE, '..', 'v372', 'stage_LP'))

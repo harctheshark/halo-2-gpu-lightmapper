@@ -21,6 +21,7 @@ namespace H2GpuLightmapper.Tests
     {
         public static IEnumerable<KeyValuePair<string, Action>> All()
         {
+            yield return T("e2e 0.6.5: AO and light probes for a cross-folder BSP: allowed only when the payload's gpu_ao.py / gpu_lightprobes.py carry SPLIT_BSP_SUPPORT (each layer by its own driver); the drivers get the plain BSP name, lmw_validate the referenced tag; a 0.6.4 payload still refuses both", CrossFolderAoProbes);
             yield return T("e2e 0.6.4: cross-folder BSP: a scenario whose BSP lives in another folder bakes with an engine that resolves it (plain -Bsp name, lmw_validate gets the referenced tag, the lightmap lands beside the scenario), AO / probes refused, an older engine refused before gpu_bake starts, a copy beside the scenario is ignored", CrossFolderBsp);
             yield return T("e2e 0.6.4: the engine's silent write-back fallback becomes a visible warning in the log and the run summary (pre-flight switch to tool, writer failed + shell fallback), once per run; a clean bake says nothing", FallbackWarning);
             yield return T("e2e: Lightmap Only install = backup + stage-only gpu_bake + the shell's install (real lmw_install, [4b]'s command) + verify + capture record + history", LightmapInstall);
@@ -909,6 +910,112 @@ namespace H2GpuLightmapper.Tests
             var dryOld = C.Run(l2);
             Assert.Eq(2, dryOld.Exit, "dry run, old engine: refused: " + dryOld);
             Assert.Contains(dryOld.Out, "needs engine 0.6.4 or newer", "plain");
+        }
+
+        // ------------------------------------------------------------------ 0.6.5: AO / light probes for a cross-folder BSP
+
+        private const string Tri2 = @"scenarios\multi\tri2\tri2";
+
+        /// <summary>A sandbox root plus scenarios\multi\tri2\tri2: a copy of the real triplicate scenario (11 probe points) whose structure_bsps entry names scenarios\multi\triplicate\triplicate,
+        /// a BSP in ANOTHER folder; its lightmap set tri2_triplicate_lightmap* (a copy of triplicate's: 11 environments) sits beside tri2.</summary>
+        private static TestRoot XTriRoot()
+        {
+            var r = C.NewRoot();
+            string d = Path.Combine(r.Tags, @"scenarios\multi\tri2");
+            Directory.CreateDirectory(d);
+            File.Copy(Path.Combine(r.TriDir, "triplicate.scenario"), Path.Combine(d, "tri2.scenario"));
+            foreach (var sfx in new[] { ".scenario_structure_lightmap", "_bitmaps.bitmap", "_truecolor_bitmaps.bitmap" })
+                File.Copy(Path.Combine(r.TriDir, "triplicate_triplicate_lightmap" + sfx), Path.Combine(d, "tri2_triplicate_lightmap" + sfx));
+            return r;
+        }
+
+        private static List<string> ArgvOf(JObj call) { return call.Arr("argv").Cast<string>().ToList(); }
+        private static string ArgAfter(List<string> a, string flag) { int i = a.IndexOf(flag); return i < 0 || i + 1 >= a.Count ? null : a[i + 1]; }
+
+        private static void CrossFolderAoProbes()
+        {
+            const string Sentence = "ambient occlusion and light probes are not supported for it yet";
+            string both = C.BuildPayload(C.Sb.Dir("payload_e2e_split3"), crossBspEngine: true, splitBspDrivers: 3);
+            string aoOnly = C.BuildPayload(C.Sb.Dir("payload_e2e_split1"), crossBspEngine: true, splitBspDrivers: 1);
+            string lpOnly = C.BuildPayload(C.Sb.Dir("payload_e2e_split2"), crossBspEngine: true, splitBspDrivers: 2);
+            string v064 = C.BuildPayload(C.Sb.Dir("payload_e2e_split0"), crossBspEngine: true);
+            string refTag = Path.Combine(@"scenarios\multi\cyclotron", "cyclotron");
+
+            // 1. AO, Lightmap Only: the AO driver gets the plain BSP name and the scenario (it resolves the file itself); the stage is the final stage
+            var r1 = XRoot(false);
+            var a = Ok(DfBake(both, r1, "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap", "--ao", "--no-install"), "AO on a cross-folder BSP");
+            Assert.Eq(refTag, BspRelOf(a), "the run recorded the other-folder BSP");
+            var ao = r1.Calls("gpu_ao");
+            Assert.Seq(new[] { "trace", "apply", "stage" }, ao.Select(c => ArgvOf(c)[1]).ToList(), "trace / apply / stage ran");
+            foreach (var c in ao)
+            {
+                var av = ArgvOf(c);
+                Assert.Eq("cyclotron", ArgAfter(av, "--bsp"), "gpu_ao gets the PLAIN BSP name");
+                Assert.Eq(Cyc2, ArgAfter(av, "--scenario"), "gpu_ao gets the scenario");
+            }
+            Assert.Eq(1, r1.Calls("gpu_bake").Count, "one lightmap bake");
+            Assert.True(!File.Exists(Path.Combine(r1.CycDir, "cyc2_cyclotron_lightmap.scenario_structure_lightmap")), "nothing written into the BSP's folder");
+            Assert.Contains(File.ReadAllText(Path.Combine(RunDirOf(a), "bake.log")), "BSP tag (from the scenario's structure_bsps): " + refTag, "the shell found the tag");
+
+            // 2. a payload whose AO driver has no marker (0.6.4, or only the probe driver updated): AO refused, the sentence; nothing started
+            foreach (var pay in new[] { v064, lpOnly })
+            {
+                var r2 = XRoot(false);
+                var d = DfBake(pay, r2, "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap", "--ao");
+                Assert.Eq(2, d.Exit, "refused: " + d);
+                Assert.Contains(d.Out, Sentence, "plain reason");
+                Assert.Eq(0, r2.Calls("gpu_bake").Count, "gpu_bake never started");
+            }
+
+            // 3. Standard + probes on a cross-folder BSP (tri2 -> triplicate): lightmap bake + probe worker + one merge; lmw_validate checks the merged stage against the REFERENCED BSP tag
+            var r3 = XTriRoot();
+            var s = Ok(DfBake(both, r3, "--scenario", Tri2, "--bsp", "triplicate", "--dev-probes", "--no-install"), "Standard with probes, cross-folder BSP");
+            string run = RunDirOf(s);
+            Assert.Contains(s.Out, "11 probe point(s); lightmap present, 11 lighting environment(s)", "the map query finds the points and the lightmap beside the scenario");
+            var lp = r3.Calls("gpu_lightprobes").Single();
+            var lpa = ArgvOf(lp);
+            Assert.Eq("triplicate", ArgAfter(lpa, "--bsp"), "the probe driver gets the PLAIN BSP name");
+            Assert.Eq(Tri2, ArgAfter(lpa, "--scenario"), "and the scenario");
+            Assert.Eq(1, r3.Calls("sh_stage").Count, "one merge");
+            string refBsp = Path.Combine(r3.Tags, @"scenarios\multi\triplicate\triplicate.scenario_structure_bsp");
+            var val = r3.Calls("lmw_validate").Single();
+            Assert.Eq(refBsp, ArgAfter(ArgvOf(val), "--bsp"), "lmw_validate --bsp is the REFERENCED tag, not <scenario folder>\\triplicate");
+            Assert.Eq(Path.Combine(run, "final_stage"), ArgvOf(val)[2], "the merged final stage was checked");
+            Assert.True(File.Exists(Path.Combine(run, "final_stage", "tri2_triplicate_lightmap.scenario_structure_lightmap")), "the final stage carries the lightmap named after the SCENARIO");
+
+            // 4. Lightprobes only (cross-folder): the live lightmap beside the scenario is copied, probed, validated against the referenced BSP
+            var r4 = XTriRoot();
+            var p = Ok(DfBake(both, r4, "--scenario", Tri2, "--bsp", "triplicate", "--mode", "probes", "--dev-probes", "--no-install"), "Lightprobes only, cross-folder BSP");
+            Assert.Eq(Path.Combine(r4.Tags, @"scenarios\multi\triplicate\triplicate.scenario_structure_bsp"), ArgAfter(ArgvOf(r4.Calls("lmw_validate").Single()), "--bsp"), "probes-only validate: the referenced BSP");
+            Assert.Eq(1, r4.Calls("gpu_lightprobes").Count, "one probe driver run");
+
+            // 5. probes with a payload whose probe driver has no marker: refused (AO-only payload and the 0.6.4 payload); Lightmap Only on the same BSP still bakes
+            foreach (var pay in new[] { v064, aoOnly })
+            {
+                var r5 = XTriRoot();
+                var d = DfBake(pay, r5, "--scenario", Tri2, "--bsp", "triplicate", "--dev-probes");
+                Assert.Eq(2, d.Exit, "refused: " + d);
+                Assert.Contains(d.Out, Sentence, "plain reason (probes)");
+                Assert.Eq(0, r5.Calls("gpu_bake").Count, "gpu_bake never started");
+                var ok = Ok(DfBake(pay, XTriRoot(), "--scenario", Tri2, "--bsp", "triplicate", "--mode", "lightmap", "--no-install"), "Lightmap Only on the same BSP still works");
+                Assert.Eq("scenarios\\multi\\triplicate\\triplicate", BspRelOf(ok), "the other-folder BSP");
+            }
+
+            // 6. AO on a payload with both markers but the probe layer not asked: no probe driver call; probes in the same bake need the probe marker (aoOnly refused above)
+            var r6 = XRoot(false);
+            Ok(DfBake(aoOnly, r6, "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap", "--ao", "--no-install"), "AO with an AO-only 0.6.5 payload");
+            Assert.Eq(0, r6.Calls("gpu_lightprobes").Count, "no probe driver call");
+
+            // 7. dry run: the 0.6.5 payload plans AO for the cross-folder BSP; the 0.6.4 payload refuses it
+            var l = C.Base("bake"); l[l.IndexOf("--payload-dir") + 1] = both;
+            l.AddRange(new[] { "--h2ek", r1.Root, "--dry-run", "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap", "--ao" });
+            var dry = C.Run(l);
+            Assert.Eq(0, dry.Exit, "dry run, 0.6.5 payload: " + dry);
+            var l2 = C.Base("bake"); l2[l2.IndexOf("--payload-dir") + 1] = v064;
+            l2.AddRange(new[] { "--h2ek", r1.Root, "--dry-run", "--scenario", Cyc2, "--bsp", "cyclotron", "--mode", "lightmap", "--ao" });
+            var dry2 = C.Run(l2);
+            Assert.Eq(2, dry2.Exit, "dry run, 0.6.4 payload: refused: " + dry2);
+            Assert.Contains(dry2.Out, Sentence, "plain");
         }
 
         // ------------------------------------------------------------------ 0.6.4: the silent write-back fallback

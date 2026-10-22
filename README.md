@@ -8,7 +8,7 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: pre-release (0.6.4).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: pre-release (0.6.5).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -44,6 +44,9 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   only), Lightmap Only.
 - **Any GPU with Direct3D 11.** NVIDIA and AMD cards bake at full FP64 precision; a GPU without FP64 (Intel, Qualcomm Adreno)
   switches to Compatibility mode (DF64) by itself (new in 0.6.4, experimental).
+- **Hard to time out.** The default path asks the GPU for small, measured pieces of work (photons that can pause and resume, tiny
+  first submissions, an immediate shrink after an overshoot), so Windows' 2-second GPU timeout is much harder to hit (new in
+  0.6.5; written after a Snapdragon / Adreno laptop lost the GPU, not yet tried on one).
 - **Ambient occlusion** (optional, off by default): a GPU AO pass for an extra artistic look. It is *not* CPU-faithful.
 - **Capture reuse.** Skip the slow `tool_fast` capture step when you re-bake the same map.
 - **Custom scenery just works.** The scenery fix needs each scenery model's compression bounds. Before every bake the app scans
@@ -136,7 +139,7 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
    supported and any missing prerequisite.
 2. **Map.** Pick the **Scenario**, then the **BSP**. The BSP list shows every BSP the scenario references; one that lives in
    another folder is labelled with it, for example `01_bsp_1  (from scenarios\solo\01a_tutorial)`. Its lightmap is written beside
-   the scenario. For such a BSP only the lightmap is supported so far (use Lightmap Only).
+   the scenario. Ambient occlusion and light probes work for such a BSP too (0.6.5).
 3. **Quality**
    - **Low:** quicker, lower quality.
    - **Super** (default): the high quality, the one that is validated against the CPU.
@@ -246,17 +249,19 @@ Measurements come from one RTX 4090 PC; anything about other hardware is extrapo
 | Light probes | 281 probe points per BSP at the default buffer cap. A BSP above that is refused before anything runs, with a message to use Lightmap Only. | HARD |
 | Video memory | 24 GB held every tested map. The app sizes its work parts from your card's VRAM and, since 0.6.3, from what other programs are using; on an idle 24 GB card nothing changes. | SOFT, not tested below 24 GB |
 | Bake time | Super: 22 s to 17.4 min on the tested maps (RTX 4090). | SOFT |
-| GPU timeout (TDR) | Every long GPU step is paced by measured time (photon cast, probe trace, sky, gather) and, since 0.6.4, the photon lattice is resumable, so no submission is meant to get near Windows' 2 s limit (about 250 ms pieces on the tested maps). A GPU much slower than an RTX 4090 has not been tried. The log warns above 1.5 s. | SOFT |
+| GPU timeout (TDR) | Every long GPU step is paced by measured time and starts with a tiny submission. Since 0.6.5 the photons of the sky chain, the exact sun and the photon cast are resumable (the smallest unit is one trace, not one photon), the photon lattice is resumable (0.6.4), and the exact-sun batch size no longer reads only the dedicated memory of an integrated GPU. None of the tested bakes on the RTX 4090 printed the 1.5 s warning. A GPU much slower than an RTX 4090, or one with shared memory, has not been tried. | SOFT |
 
 ## Known issues (fix in progress)
 
 These are open problems in this build.
 
-1. **GPU-timeout risk (TDR), reduced again in 0.6.4.** The photon cast, the light-probe trace, the sky chain and the gather are
-   paced by measured time, and 0.6.4 makes the photon-lattice step resumable: the one step that had a unit it could not split
-   (about 1.7-2 s per submission on vuthatest even on an RTX 4090). In 0.6.4's own bakes it ran in pieces of about 250 ms and
-   the 1.5 s warning never appeared. **A GPU much slower than an RTX 4090, or a map much denser than the tested ones, has not been
-   tried.** If a bake fails with a GPU reset, the app says so in plain words; "Keep PC responsive" helps.
+1. **GPU-timeout risk (TDR), reduced much further in 0.6.5, not removed, and not tried on the PC that triggered it.** The photon cast,
+   the light-probe trace, the sky chain and the gather are paced by measured time, the photon lattice is resumable (0.6.4), and 0.6.5
+   makes the photons of the sky chain, the exact sun and the photon cast resumable and starts every step with a tiny submission. It was
+   written after a Surface laptop (Snapdragon X2 Elite, Adreno X2-85, 2 s timeout) lost the GPU in the sky chain. **This build has not
+   been run on that PC or on any GPU other than an RTX 4090**, where nothing changes in the output and the 1.5 s warning never appeared.
+   A GPU much slower than a 4090, or a map much denser than the tested ones, has not been tried. If a bake fails with a GPU reset, the
+   app says so in plain words; "Keep PC responsive" helps.
 2. **VRAM sizing is untested below 24 GB.** The app sizes its work parts from your card's memory (and what other programs
    use), but this has only been checked by calculation, not on a 12 or 16 GB card, and the photon-lattice step is not sized by it.
    On a 4 GB card a big map may not fit.
@@ -269,9 +274,11 @@ These are open problems in this build.
    records include samples that `tool_fast` drops (its visibility test is not reproduced by default). The lightmap bitmaps are
    identical. **2004 Exact Vertex Lighting?** (Advanced settings) closes most of the gap; a faster fix inside the GPU bake is
    planned.
-7. **A rare final-check refusal.** One Standard bake of triplicate in the 0.6.3 tests stopped at the last check because a
-   single lightmap UV (1 of 35,572) landed exactly on a texel corner that the bake did not cover. Nothing was installed. It
-   depends on the capture (0.6.4's own Standard run on a fresh capture passed); bake again with a new capture if you hit it.
+7. **A rare final-check refusal.** Standard bakes of triplicate sometimes stop at the last check because a lightmap UV (1 or 2 of
+   35,572) lands exactly on a texel corner that the bake did not cover (`set.d.uv_on_alpha255`). Nothing is installed. It depends on the
+   capture: in 0.6.5's tests two of three Standard runs hit it and one fresh capture passed; bake again with a new capture if you hit it.
+
+Maps with several cubemap skies (for example 07a_highcharity high_0) are accepted since 0.6.5; that bake was not compared with a CPU bake.
 
 Other limits: Custom quality and the Scenery Multi Permutation Fix are Experimental; ambient occlusion is not CPU-faithful; the
 app has not been tested on a clean Windows install, with Smart App Control, or on a second PC or GPU.

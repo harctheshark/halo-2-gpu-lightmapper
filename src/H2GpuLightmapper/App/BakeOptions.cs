@@ -93,6 +93,9 @@ namespace H2GpuLightmapper.App
         /// -ToolOverlay come from the same patch as lmw_skeleton.py resolve-bsp, so an engine that has them resolves the BSP from the scenario.</summary>
         public static readonly string[] CrossFolderBspSwitches = { "WriterOnly", "ToolOverlay" };
         public const string CrossFolderBspNeedsEngine = "Baking a BSP from another folder needs engine 0.6.4 or newer.";
+        /// <summary>0.6.5: the marker line (<c>SPLIT_BSP_SUPPORT = 1</c>) a payload's gpu_ao.py / gpu_lightprobes.py carries when it reads the BSP from the file the scenario's
+        /// structure_bsps names. Without it (a 0.6.4 payload) AO and light probes stay refused for a BSP from another folder.</summary>
+        public const string SplitBspMarker = "SPLIT_BSP_SUPPORT";
         public const string CrossFolderBspNoAoProbes = "this BSP lives in another folder than the scenario; ambient occlusion and light probes are not supported for it yet "
             + "(only the lightmap is): untick Ambient occlusion and use Lightmap Only (CLI: --mode lightmap)";
         public const string ResponsiveLabel ="Keep PC responsive - Slower Bakes!";

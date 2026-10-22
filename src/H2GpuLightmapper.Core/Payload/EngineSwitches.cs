@@ -100,6 +100,16 @@ namespace H2GpuLightmapper.Core.Payload
             return Regex.IsMatch(t, @"(?<![\w])\$?env:" + Regex.Escape(name) + @"(?![\w])", RegexOptions.IgnoreCase);
         }
 
+        /// <summary>Does a PYTHON driver script carry the marker line <c>NAME = 1</c> (at column 0, optionally followed by a comment)? This is the marker for a driver
+        /// feature that is neither a PowerShell parameter nor an environment variable: gpu_ao.py / gpu_lightprobes.py of 0.6.5 declare <c>SPLIT_BSP_SUPPORT = 1</c> when they read
+        /// the BSP from the file the scenario's structure_bsps names (another folder than the scenario). An older driver never mentions it, so it is never trusted with such a
+        /// BSP. Fails closed (false) for an empty script.</summary>
+        public static bool HasPyMarker(string script, string name)
+        {
+            if (string.IsNullOrEmpty(script) || string.IsNullOrEmpty(name)) return false;
+            return Regex.IsMatch(script, @"^" + Regex.Escape(name) + @"[ \t]*=[ \t]*1(?![\w.])", RegexOptions.Multiline);
+        }
+
         /// <summary>The text of one file of a payload component (read from its zip; nothing is extracted), or null when the zip / file is absent.</summary>
         public static string ReadComponentText(IPayloadSource src, PayloadComponent c, string relPath)
         {
@@ -134,6 +144,25 @@ namespace H2GpuLightmapper.Core.Payload
             }
             bool r;
             try { r = DeclaresSwitch(ReadComponentText(src, c, relPath), name); }
+            catch (Exception) { r = false; }
+            lock (Cache) Cache[key] = r;
+            return r;
+        }
+
+        /// <summary>Does the payload's INST python file <paramref name="relPath"/> carry the marker line <c>name = 1</c> (see <see cref="HasPyMarker"/>)? Cached like
+        /// <see cref="ComponentDeclares"/>.</summary>
+        public static bool ComponentHasPyMarker(IPayloadSource src, PayloadComponent c, string relPath, string name)
+        {
+            var f = c == null ? null : c.Find(relPath);
+            if (f == null) return false;
+            string key = (c.ZipMd5 ?? c.Name) + "|" + f.Md5 + "|" + relPath + "|py:" + name;
+            lock (Cache)
+            {
+                bool v;
+                if (Cache.TryGetValue(key, out v)) return v;
+            }
+            bool r;
+            try { r = HasPyMarker(ReadComponentText(src, c, relPath), name); }
             catch (Exception) { r = false; }
             lock (Cache) Cache[key] = r;
             return r;

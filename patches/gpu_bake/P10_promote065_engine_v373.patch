@@ -1,0 +1,20 @@
+# title: P10 promotion 2026-10-22 05:24 (0.6.5): sky_gate.py lookup (multi-cubemap-sky BSPs, per-hit default) (engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 673ab3c898172dcfbae2fdd467ae36ce
+# result-md5: c2fbc03957df8de450c537b6dc8079a8
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -1298,8 +1298,11 @@
+ # HERE, before the 10-minute phase 3, on a multi-cubemap-sky BSP, a cubemap sky mixed with exact-black skies (int_v359),
+ # a cube of the wrong sky, a partial cube, or a BLACK verdict over a cube the CPU really evaluated (int_v359).
+ $sgMode = '--per-hit'   # v372V: several cubemap skies / cube + exact-black skies -> per-hit selection (verdict 5)
+-if ($env:GPULM_RESEARCH_SKY_LEGACY -eq '1') { $sgMode = '--allow-mixed-black'; Write-Host "      *** RESEARCH A/B: GPULM_RESEARCH_SKY_LEGACY=1 -- the pre-v372V ONE-cube sky (NOT the CPU's per-hit rule)" -ForegroundColor Yellow }
+-$sg = & py "$WC\sky_gate.py" "$OUT" $sgMode
++if ($env:GPULM_RESEARCH_SKY_LEGACY -eq '1') { $sgMode = @('--allow-mixed-black', '--allow-multisky'); Write-Host "      *** RESEARCH A/B: GPULM_RESEARCH_SKY_LEGACY=1 -- the pre-v372V ONE-cube sky (NOT the CPU's per-hit rule)" -ForegroundColor Yellow }
++# multisky (2026-10-22): the engine dir's own sky_gate.py (per-hit multi-cubemap sky ACCEPTED) wins over the code-root copy, so a dev engine
++# does not need the shared root file replaced; on promotion sky_gate.py goes to the code root and this fallback is a no-op.
++$sgPy = if (Test-Path -LiteralPath "$BIN\sky_gate.py") { "$BIN\sky_gate.py" } else { "$WC\sky_gate.py" }
++$sg = & py $sgPy "$OUT" $sgMode
+ $sgx = $LASTEXITCODE
+ $sg | ForEach-Object { "      $_" }
+ if ($sgx -ne 0) { throw "PHASE 2: sky_gate.py refused this capture's sky (exit $sgx) -- see the line above" }

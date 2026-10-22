@@ -38,12 +38,12 @@ SANDBOX = os.path.join(os.environ['TEMP'], 's19')      # short on purpose: WORK\
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '7a033e064ef1c222b41e8fbdfcdaa884'),   # W3 2026-10-21: the 0.6.4 promotion (W2: f13328c7, 15771590, fe88bd8b)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', 'cd4883222df27f1c4c7a1924c5787af1'),   # production source _research/ao/dev_AO6 (W3 0.6.4; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'cabc84493fb968a8289b08717407ab59'),   # W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '7ff83e05ecf1cc72e1ca2b72344f4808'),   # production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
 }
 EXPECT_PATCHED = {
-    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', 'ffb288d47846b38ed51e0f313761adf3'),   # P5
-    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', '56eba64dfcf425f9727981cfb6f60019'),   # P6 (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
+    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '3634172b52a97b019a905750f2697300'),   # P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
+    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', 'a8914dc88a0271d73938679ec6511cbe'),   # P6 + P6b + P6c (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
     '_research/ao/ao_seamfix.py': ('93c2fe8c5ce812358b58b7c2073da030', '7b239011f1a9d6becbc11ce593398cd6'),   # N4 (A1 re-make: + stacked-layer rule)
     '_research/ao/ao_denoise.py': ('5da70c2fe14fbb2decd78ce8902b418a', '70522fac1d61f372e6c5af358592e7cf'),   # N4 (A1: ao_denoise.bilateral_raw without scipy)
     # U2 (2026-10-15): the three lmw_tagio.py walkers read SHORT block elements as tool_fast does (patches/tagio/series_tagio.json)

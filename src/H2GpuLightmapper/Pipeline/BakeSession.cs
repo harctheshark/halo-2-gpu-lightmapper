@@ -217,11 +217,19 @@ namespace H2GpuLightmapper.Pipeline
         private void Refuse(string m) { throw new RefusedException(m); }
 
         /// <summary>0.6.4 cross-folder BSP: the lightmap is what engine 0.6.4 verifies for a BSP in another folder (its skeleton, direct writer and tool
-        /// write-back overlay). The AO trace and the light-probe pipeline read the BSP by name from the scenario's folder, so for such a BSP they are refused.</summary>
-        private void RefuseCrossFolderLayers()
+        /// write-back overlay). 0.6.5: the AO driver (gpu_ao stage) and the light-probe driver read the BSP from the file the scenario's structure_bsps names -- but only a payload whose
+        /// drivers carry the marker (AppHost.CrossFolderAoProbesWhy) may be given such a BSP with AO / probes; an older payload's drivers look for it beside the scenario, so
+        /// for them the layer is refused (the 0.6.4 sentence).</summary>
+        private void RefuseCrossFolderLayers() { RefuseCrossFolderLayersFor(_o.BspRel != null); }
+
+        /// <param name="crossFolder">the BSP is in another folder than the scenario: known (BspRel) or, in a dry run, implied (the BSP is not beside the scenario and is looked up by the real run).</param>
+        private void RefuseCrossFolderLayersFor(bool crossFolder)
         {
-            if (_o.BspRel == null) return;
-            if (_o.Ao || _o.Mode == BakeMode.Probes || BakePlanner.NeedsProbes(_o, _points)) Refuse(BakeOptions.CrossFolderBspNoAoProbes);
+            if (!crossFolder) return;
+            bool probes = _o.Mode == BakeMode.Probes || BakePlanner.NeedsProbes(_o, _points);
+            if (!_o.Ao && !probes) return;
+            string why = _host.CrossFolderAoProbesWhy(_o.Ao, probes);
+            if (why != null) Refuse(why);
         }
 
         /// <summary>0.6.4: the map query listed the scenario's structure_bsps. The BSP named <c>_o.Bsp</c> is the entry whose tag path ends in that name -- in
@@ -538,7 +546,10 @@ namespace H2GpuLightmapper.Pipeline
                 }
             }
             if (_bspFromScenario && dry && !File.Exists(Path.Combine(_set.TagDir, _o.Bsp + ".scenario_structure_bsp")))
+            {
                 Say("  (dry run: a BSP tag that is not beside the scenario is looked up in the scenario's structure_bsps by the real run)");
+                RefuseCrossFolderLayersFor(true);       // it is in another folder: AO / probes need the 0.6.5 drivers (the real run decides with the real probe count)
+            }
             bool probes = BakePlanner.NeedsProbes(_o, _points);
             RefuseCrossFolderLayers();
             if (probes && !_host.ProbesEnabled)

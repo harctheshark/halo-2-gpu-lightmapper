@@ -24,6 +24,8 @@ GLW_DEFAULT = os.environ.get('H2LM_TEST_GLW', '')   # <H2EK_ROOT>\GPU Lightmap W
 P5 = os.path.join(PROJ, 'patches', 'P5_gpu_lightprobes.patch')
 P6 = os.path.join(PROJ, 'patches', 'P6_gpu_ao.patch')
 P6B = os.path.join(PROJ, 'patches', 'P6b_gpu_ao_exactvl.patch')       # W2 (0.6.3): gpu_ao stage --exact-vertex-lighting (the series chain is P6 -> P6b)
+P6C = os.path.join(PROJ, 'patches', 'P6c_gpu_ao_splitbsp.patch')       # 0.6.5: gpu_ao stage reads a BSP from another folder than the scenario (chain P6 -> P6b -> P6c)
+P5B = os.path.join(PROJ, 'patches', 'P5b_gpu_lightprobes_splitbsp.patch')   # 0.6.5: gpu_lightprobes marker (chain P5 -> P5b)
 RESULTS = []
 
 
@@ -48,11 +50,11 @@ def child_env(extra=None, drop=()):
     return env
 
 
-def harness(work, target, argv, mode='main', effects=True, env_extra=None, farm_for_effects=None, tag='h'):
+def harness(work, target, argv, mode='main', effects=True, env_extra=None, farm_for_effects=None, tag='h', resolve_bsp=None):
     n = len(os.listdir(os.path.join(work, 'specs')))
     spec = os.path.join(work, 'specs', '%03d_%s.json' % (n, tag))
     out = spec[:-5] + '.result.json'
-    json.dump(dict(target=target, argv=argv, out=out, mode=mode, effects=effects, farm_for_effects=farm_for_effects), open(spec, 'w'), indent=1)
+    json.dump(dict(target=target, argv=argv, out=out, mode=mode, effects=effects, farm_for_effects=farm_for_effects, resolve_bsp=resolve_bsp), open(spec, 'w'), indent=1)
     rc = subprocess.call([sys.executable, '-B', os.path.join(HERE, 'argv_harness.py'), spec], cwd=work, env=child_env(env_extra),
                          stdin=subprocess.DEVNULL, creationflags=0x08000000 | 0x00004000)
     if rc != 0 or not os.path.exists(out):
@@ -146,9 +148,19 @@ def main():
     os.makedirs(os.path.dirname(pb_path), exist_ok=True)
     open(pb_path, 'wb').write(SP.apply_bytes(PB, open(ao_p, 'rb').read()))
     check('P6b: strict apply on the P6 result -> result-md5 %s' % PB['result-md5'][:8], md5f(ao_p) == PB['base-md5'] and md5f(pb_path) == PB['result-md5'])
-    check('patch_series.py apply patches/series_research.json == the strict_patch results (P5; P6 then P6b)', p.returncode == 0
-          and md5f(os.path.join(so_dir, '_research', 'lightprobes', 'gpu_lightprobes.py')) == md5f(lp_p)
-          and md5f(os.path.join(so_dir, '_research', 'ao', 'gpu_ao.py')) == md5f(pb_path), p.stdout + p.stderr)
+    # 0.6.5 (task SPLITBSP): P6b -> P6c (gpu_ao), P5 -> P5b (gpu_lightprobes marker)
+    PCc, P5bb = SP.read_patch(P6C), SP.read_patch(P5B)
+    pc_path = os.path.join(work, 'patched_pc', '_research', 'ao', 'gpu_ao.py')
+    p5b_path = os.path.join(work, 'patched_p5b', '_research', 'lightprobes', 'gpu_lightprobes.py')
+    for pth in (pc_path, p5b_path):
+        os.makedirs(os.path.dirname(pth), exist_ok=True)
+    open(pc_path, 'wb').write(SP.apply_bytes(PCc, open(pb_path, 'rb').read()))
+    open(p5b_path, 'wb').write(SP.apply_bytes(P5bb, open(lp_p, 'rb').read()))
+    check('P6c: strict apply on the P6b result -> result-md5 %s' % PCc['result-md5'][:8], md5f(pb_path) == PCc['base-md5'] and md5f(pc_path) == PCc['result-md5'])
+    check('P5b: strict apply on the P5 result -> result-md5 %s' % P5bb['result-md5'][:8], md5f(lp_p) == P5bb['base-md5'] and md5f(p5b_path) == P5bb['result-md5'])
+    check('patch_series.py apply patches/series_research.json == the strict_patch results (P5 then P5b; P6, P6b then P6c)', p.returncode == 0
+          and md5f(os.path.join(so_dir, '_research', 'lightprobes', 'gpu_lightprobes.py')) == md5f(p5b_path)
+          and md5f(os.path.join(so_dir, '_research', 'ao', 'gpu_ao.py')) == md5f(pc_path), p.stdout + p.stderr)
     subs_tree = [(trees['orig'], '<TREE>'), (trees['patched'], '<TREE>')]
 
     # ---------------------------------------------------------------- 3: --help
@@ -376,6 +388,79 @@ def main():
         check('P5 refuses %s (REFUSED, no child, OUT not created)' % name,
               isinstance(r['exit'], str) and r['exit'].startswith('REFUSED') and not r['calls'] and not os.path.exists(outx),
               'exit %r calls %d out-exists %s' % (r['exit'], len(r['calls']), os.path.exists(outx)))
+
+    # ---------------------------------------------------------------- 7: 0.6.5 (task SPLITBSP): P6c gpu_ao stage / install for a BSP in another folder; P5b marker
+    mark = re.compile(rb'^SPLIT_BSP_SUPPORT[ \t]*=[ \t]*1(?![\w.])', re.M)
+    check('markers: P6c gpu_ao.py and P5b gpu_lightprobes.py carry SPLIT_BSP_SUPPORT = 1; the P6b / P5 results do not',
+          mark.search(open(pc_path, 'rb').read()) and mark.search(open(p5b_path, 'rb').read())
+          and not mark.search(open(pb_path, 'rb').read()) and not mark.search(open(lp_p, 'rb').read()))
+    for verb in ('', 'trace', 'apply', 'stage', 'install', 'selftest', 'check', 'consistency', 'seams', 'stats'):
+        hb = harness(work, pb_path, ([verb] if verb else []) + ['--help'], effects=False, tag='aohelp6b2_' + (verb or 'top'))
+        hc = harness(work, pc_path, ([verb] if verb else []) + ['--help'], effects=False, tag='aohelp6c_' + (verb or 'top'))
+        check('gpu_ao %s --help: byte-identical after P6c' % (verb or '(top)'), hb['stdout'] == hc['stdout'] and hb['exit'] == hc['exit'] == 0)
+    hb = harness(work, lp_p, ['--help'], effects=False, tag='lphelp5')
+    hc = harness(work, p5b_path, ['--help'], effects=False, tag='lphelp5b')
+    check('gpu_lightprobes --help: byte-identical after P5b', hb['stdout'] == hc['stdout'] and hb['exit'] == hc['exit'] == 0)
+
+    def stage_farm(name):
+        f = os.path.join(work, name, 'farm_w%02d' % W)
+        os.makedirs(os.path.join(f, 'ao', 's10e05', 'run'), exist_ok=True); os.makedirs(os.path.join(f, 'skeleton'), exist_ok=True)
+        os.makedirs(os.path.join(f, 'ao', 's10e05', 'tagw_stage'), exist_ok=True)
+        open(os.path.join(f, 'ao', 's10e05', 'run', 'vertdir.bin'), 'wb').write(b'')
+        open(os.path.join(f, 'ao', 's10e05', 'AO_NOT_CPU_FAITHFUL.txt'), 'w').write('x')
+        return f
+
+    sa = lambda farm, bsp, engine: ['stage', '--farm', farm, '--worker', str(W), '--scenario', scen, '--bsp', bsp, '--engine', engine, '--tag', 's10e05', '--overwrite']
+    tdir = os.path.join(fake_root, 'tags', 'scenarios', 'multi', 'triplicate')
+    beside = os.path.join(tdir, 'triplicate.scenario_structure_bsp')
+    other_dir = os.path.join(fake_root, 'tags', 'scenarios', 'solo', 'elsewhere'); os.makedirs(other_dir, exist_ok=True)
+    other = os.path.join(other_dir, 'triplicate.scenario_structure_bsp'); open(other, 'wb').write(b'bsp')
+    open(beside, 'wb').write(b'bsp'); open(os.path.join(tdir, 'triplicate.scenario'), 'wb').write(b'scnr')
+    eng2 = os.path.join(work, 'fake_engine_resolve'); os.makedirs(os.path.join(eng2, 'v043-tagwriter'), exist_ok=True)
+    open(os.path.join(eng2, 'gpu_bake.ps1'), 'w').write('# fake\n'); open(os.path.join(eng2, 'v043-tagwriter', 'lmw_skeleton.py'), 'w').write('# fake\n')
+    renv = {'H2LM_ROOT': fake_root}
+    # an engine WITHOUT resolve-bsp (fake_engine has no lmw_skeleton.py): the argv is exactly P6b's, nothing is asked
+    fb = stage_farm('p6c_a')
+    rb = harness(work, pb_path, sa(fb, 'triplicate', eng), env_extra=renv, tag='p6c_old_b')
+    rc_ = harness(work, pc_path, sa(fb, 'triplicate', eng), env_extra=renv, tag='p6c_old_c', resolve_bsp={'rc': 0, 'stdout': other + '\n'})
+    check('gpu_ao stage P6c, engine without lmw_skeleton.py: identical launched argv to P6b (2 children), nothing asked',
+          rb['calls'] and [c['args'] for c in rb['calls']] == [c['args'] for c in rc_['calls']] and rb['exit'] == rc_['exit'] and not rc_['resolves'], repr((rb['calls'], rc_['calls'])))
+    # an engine WITH it, the answer = the file beside the scenario (a same-folder map): identical argv to P6b; it was asked once with the plain name
+    rb = harness(work, pb_path, sa(fb, 'triplicate', eng2), env_extra=renv, tag='p6c_same_b')
+    rc_ = harness(work, pc_path, sa(fb, 'triplicate', eng2), env_extra=renv, tag='p6c_same_c', resolve_bsp={'rc': 0, 'stdout': beside + '\n'})
+    asked = rc_['resolves'][0] if rc_['resolves'] else []
+    check('gpu_ao stage P6c, same-folder map (resolve-bsp answers the beside file): launched argv identical to P6b; resolve-bsp asked once with the scenario dir / leaf / plain BSP name',
+          [c['args'] for c in rb['calls']] == [c['args'] for c in rc_['calls']] and len(rc_['resolves']) == 1 and '--bsp-name' in asked and asked[asked.index('--bsp-name') + 1] == 'triplicate'
+          and asked[asked.index('--scenario-leaf') + 1] == 'triplicate' and os.path.normcase(asked[asked.index('--scenario-dir') + 1]) == os.path.normcase(tdir), repr((asked, rc_['calls'])))
+    # the answer = a file in ANOTHER folder: lm_tagwriter AND lmw_validate get it; everything else (--scenario, --lightmap-name, --skeleton ...) unchanged
+    rc2 = harness(work, pc_path, sa(fb, 'triplicate', eng2), env_extra=renv, tag='p6c_cross', resolve_bsp={'rc': 0, 'stdout': other + '\n'})
+    ca = [c['args'] for c in rc2['calls']]
+    def swap(args):
+        return [other if x == beside else x for x in args]
+    check('gpu_ao stage P6c, BSP in another folder: lm_tagwriter --bsp and lmw_validate --bsp are the referenced file; every other argument is what P6b launches',
+          len(ca) == 2 and ca == [swap(c['args']) for c in rb['calls']] and ca[0][ca[0].index('--bsp') + 1] == other and ca[1][ca[1].index('--bsp') + 1] == other
+          and ca[0][ca[0].index('--lightmap-name') + 1].replace('/', '\\') == 'scenarios\\multi\\triplicate\\triplicate_triplicate_lightmap', repr(ca))
+    # every way the resolver can fail falls back to the beside path (gpu_bake.ps1's own rule): nonzero exit, two lines, an empty answer, a file that does not exist, a throwing runner
+    for name, rsp in (('exit 1', {'rc': 1, 'stdout': other + '\n'}), ('two lines', {'rc': 0, 'stdout': 'SKELETON: note\n' + other + '\n'}),
+                      ('empty', {'rc': 0, 'stdout': ''}), ('missing file', {'rc': 0, 'stdout': os.path.join(other_dir, 'nope.scenario_structure_bsp') + '\n'})):
+        rf = harness(work, pc_path, sa(fb, 'triplicate', eng2), env_extra=renv, tag='p6c_fb_' + name.replace(' ', '_'), resolve_bsp=rsp)
+        check('gpu_ao stage P6c, resolve-bsp %s: falls back to the beside-the-scenario file (argv identical to P6b)' % name, [c['args'] for c in rb['calls']] == [c['args'] for c in rf['calls']], repr(rf['calls']))
+    # install: the target dir stays the SCENARIO's folder, whatever folder the BSP is in
+    fi = stage_farm('p6c_i')
+    ri = harness(work, pc_path, ['install', '--farm', fi, '--worker', str(W), '--scenario', scen, '--bsp', 'triplicate', '--engine', eng2, '--tag', 's10e05', '--write-back'],
+                 env_extra=renv, tag='p6c_install', resolve_bsp={'rc': 0, 'stdout': other + '\n'})
+    ia = ri['calls'][0]['args'] if ri['calls'] else []
+    check('gpu_ao install P6c, BSP in another folder: lmw_install --target-dir is the scenario folder (the lightmap goes beside the scenario), resolve-bsp not asked',
+          ia and os.path.normcase(os.path.normpath(ia[ia.index('--target-dir') + 1])) == os.path.normcase(os.path.normpath(tdir)) and not ri['resolves'], repr(ia))
+    # gpu_lightprobes P5b: the same launched children as P5 for the same command line
+    farm5 = fake_farm(fake_root, W)
+    la = ['--scenario', scen, '--bsp', 'triplicate', '--worker', str(W), '--quality', 'super', '--skip-capture', '--h2-root', fake_root, '--farm', farm5, '--pwsh', pw,
+          '--stage', eng5, '--plucker-fix', '--scenery-fix', '--ltmp-src', ltmp_src]
+    r5a = harness(work, lp_p, la + ['--out', os.path.join(work, 'lp_out_p5')], env_extra={'H2LM_ROOT': fake_root, 'H2LM_WORK': os.path.join(fake_root, 'GPU Lightmap Work')}, tag='lp5_cmp')
+    r5b = harness(work, p5b_path, la + ['--out', os.path.join(work, 'lp_out_p5b')], env_extra={'H2LM_ROOT': fake_root, 'H2LM_WORK': os.path.join(fake_root, 'GPU Lightmap Work')}, tag='lp5b_cmp')
+    sub5 = [(os.path.join(work, 'lp_out_p5b'), '<OUT>'), (os.path.join(work, 'lp_out_p5'), '<OUT>'), (os.path.dirname(lp_p), '<LP>'), (os.path.dirname(p5b_path), '<LP>')]
+    check('gpu_lightprobes P5b: the launched children / env / exit of a full standalone line are identical to P5 (5 steps)',
+          len(r5a['calls']) == len(r5b['calls']) == 5 and norm(dict(c=r5a['calls'], e=r5a['exit']), sub5) == norm(dict(c=r5b['calls'], e=r5b['exit']), sub5))
 
     n_ok = sum(1 for _, ok, _ in RESULTS if ok)
     if not a.keep and not a.work:
