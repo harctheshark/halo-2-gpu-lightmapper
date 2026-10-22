@@ -142,6 +142,26 @@ namespace H2GpuLightmapper.Pipeline
             }
             try { run.Warn(WriteBackFallback.WarningText(f)); } catch (Exception) { }
         }
+        /// <summary>0.6.6: tolerated stage deviations seen in this run (lmw_validate WARN / the tag writer filled uncovered texels under lit UVs; see
+        /// <see cref="StageWarning"/>): the stage is installed anyway, with a yellow warning in the log and a sentence in the run summary.</summary>
+        private readonly List<StageWarningInfo> _stageWarnSeen = new List<StageWarningInfo>();
+
+        public IList<string> StageWarnings
+        {
+            get { lock (_lock) return _stageWarnSeen.Select(StageWarning.SummaryText).ToList(); }
+        }
+
+        private void NoteStageWarning(BakeRun run, string text)
+        {
+            var w = StageWarning.Detect(text);
+            if (w == null) return;
+            lock (_lock)
+            {
+                if (_stageWarnSeen.Any(x => x.Key == w.Key)) return;
+                _stageWarnSeen.Add(w);
+            }
+            try { run.Warn(StageWarning.WarningText(w)); } catch (Exception) { }
+        }
         /// <summary>The live tags were written by this run (the shell's install, or gpu_bake -WriteBack's [4b] / [4]).</summary>
         private bool _installed;
         private readonly List<RecoveryItem> _markers = new List<RecoveryItem>();
@@ -654,6 +674,8 @@ namespace H2GpuLightmapper.Pipeline
             _tagsNow = new Lazy<TagsFingerprint>(() => TagsFingerprint.Compute(_root, _set));
             var changed = new List<string>();
             int changedTotal = 0;
+            var infoChanged = new List<string>();     // 0.6.6: changed since the capture but not bake-relevant (information only)
+            int infoTotal = 0, identicalResaves = 0;
             string engineRel = BakePlanner.GpuBakeRel(_o, _host.Manifest);
             if (_o.ReuseCapture)
             {
@@ -665,6 +687,7 @@ namespace H2GpuLightmapper.Pipeline
                     if (!v.Allowed) Refuse("Reuse existing capture: " + v.Reason);
                     _reuseN = true; _reuseNNote = v.Describe();
                     if (v.TagsChanged) { changed.AddRange(v.ChangedTags); changedTotal = Math.Max(changedTotal, v.ChangedTagsTotal); }
+                    infoChanged.AddRange(v.InfoTags); infoTotal = Math.Max(infoTotal, v.InfoTagsTotal); identicalResaves = Math.Max(identicalResaves, v.IdenticalResaves);
                 }
                 if (_m.HasValue)
                 {
@@ -674,10 +697,17 @@ namespace H2GpuLightmapper.Pipeline
                     {
                         _reuseM = true; _reuseMNote = v.Describe();
                         if (v.TagsChanged) { foreach (var c in v.ChangedTags) if (!changed.Contains(c)) changed.Add(c); changedTotal = Math.Max(changedTotal, v.ChangedTagsTotal); }
+                        foreach (var c in v.InfoTags) if (!infoChanged.Contains(c)) infoChanged.Add(c);
+                        infoTotal = Math.Max(infoTotal, v.InfoTagsTotal); identicalResaves = Math.Max(identicalResaves, v.IdenticalResaves);
                     }
                     else if (_o.Mode == BakeMode.Probes) Refuse("Reuse existing capture (probe worker): " + v.Reason);
                     else _reuseMNote = "a new probe capture (" + v.Reason + ")";
                 }
+                // 0.6.6: tags that changed but do not feed the lightmap, and re-saves with identical content, never ask -- they are said once
+                if (identicalResaves > 0) Say("  " + identicalResaves + " tag(s) were re-saved since the capture with identical content (Sapien / Guerilla / Tool) -- not a change");
+                if (infoTotal > 0)
+                    Say("  " + infoTotal + " tag(s) changed since the capture but do not feed the lightmap (AI / scripts / sounds / bitmaps and models this map does not use ...) -- information only"
+                        + " (first: " + string.Join("; ", infoChanged.Take(5)) + ")");
                 if (changed.Count > 0)
                 {
                     var pr = new Prompt
@@ -783,6 +813,8 @@ namespace H2GpuLightmapper.Pipeline
                 run.Line += l => { if (l != null && l.Kind != LineKind.Shell && l.Text != null && l.Text.IndexOf("Compatibility mode", StringComparison.Ordinal) >= 0) _engineCompatLine = l.Text.Trim(); };
                 // 0.6.4: the engine's one-line write-back fallbacks (direct tag writer -> tool write-back) get a visible warning and a run-summary sentence
                 run.Line += l => { if (l != null && l.Kind != LineKind.Shell && l.Text != null) NoteWriteBackFallback(run, l.Text); };
+                // 0.6.6: a tolerated stage deviation (lmw_validate WARN, texels filled under lit UVs) is a visible warning too -- the stage installs
+                run.Line += l => { if (l != null && l.Kind != LineKind.Shell && l.Text != null) NoteStageWarning(run, l.Text); };
                 run.StatusChanged += OnStatus;
                 bool cancelledEarly;
                 lock (_lock) cancelledEarly = _cancel;
@@ -853,6 +885,12 @@ namespace H2GpuLightmapper.Pipeline
                 {
                     reason = (reason != null ? reason + "; " : "") + string.Join("; ", fbs);
                     lock (run.Status) run.Status.Extra["writeBackFallback"] = fbs.Cast<object>().ToList();
+                }
+                var sws = StageWarnings;
+                if (sws.Count > 0)
+                {
+                    reason = (reason != null ? reason + "; " : "") + string.Join("; ", sws);
+                    lock (run.Status) run.Status.Extra["stageWarnings"] = sws.Cast<object>().ToList();
                 }
             }
             catch { }
@@ -1088,7 +1126,7 @@ namespace H2GpuLightmapper.Pipeline
         private bool DoStageOrToolFallback(BakePlan plan, PlanStep s)
         {
             string rp = s.Params.Str("report");
-            string why = StageProblem(rp, null, Run.Status.StartedUtc);
+            string why = StageProblem(rp, null, Run.Status.StartedUtc) ?? ValidateProblem(rp, Run.Status.StartedUtc);
             if (why == null) { Run.Shell("the direct writer's stage is ready: " + Path.GetDirectoryName(rp) + " -- the shell installs it (the lmw_install command of gpu_bake's [4b], with Retry)"); return true; }
             Run.Shell("*** " + why + " -- the direct tag writer made no stage: the production tool write-back fallback runs (gpu_bake -WriteBack -SkipCapture on this capture)");
             // 0.6.4: the same fallback, as a visible warning (log + run summary), whoever noticed it
@@ -1167,9 +1205,9 @@ namespace H2GpuLightmapper.Pipeline
             try
             {
                 var id = CaptureIdentity.For(_o, _host.Manifest, _root, BakePlanner.GpuBakeRel(_o, _host.Manifest), skyHi, _toolMd5 ?? CaptureIdentity.Md5OrNull(Path.Combine(_root, "tool_fast.exe")));
-                var fp = TagsFingerprint.Compute(_root, _set);
+                var fp = TagsFingerprint.ComputeWithHashes(_root, _set, _o.ScenarioRel, _o.Bsp);     // 0.6.6: + an md5 on the bake-relevant files, so an identical re-save is not "changed"
                 string why = CaptureRecord.Write(s.CaptureOut, id, _o.ScenarioRel, _o.Bsp, s.CaptureWorker.Value, Run.RunTag, fp, DateTime.Now);
-                Run.Shell(why ?? "capture record written: " + CaptureRecord.PathIn(s.CaptureOut) + " (" + id.Describe() + ", " + fp.Count + " tag files fingerprinted)");
+                Run.Shell(why ?? "capture record written: " + CaptureRecord.PathIn(s.CaptureOut) + " (" + id.Describe() + ", " + fp.Count + " tag files fingerprinted, " + fp.HashedCount + " with a content hash)");
             }
             catch (Exception e) { Run.Shell("capture record NOT written (" + e.Message + ") -- this capture will not be offered for reuse"); }
         }
@@ -1269,6 +1307,25 @@ namespace H2GpuLightmapper.Pipeline
             return null;
         }
 
+        /// <summary>0.6.6: the stage-only gpu_bake runs lmw_validate on its own stage but exits 0 even when it refuses it (it only Notes "tag writer FAILED"),
+        /// so a stage whose report says 'written' could still be one the format gate refused -- and the shell would install it (Lightmap Only / Standard
+        /// without probes have no later gate). Reads OUT\tagw_validate.json (the gate's --json, next to the stage folder): failed checks -> the reason text;
+        /// a missing / stale file or a clean result -> null. WARN-only results (tolerated, see <see cref="StageWarning"/>) are not a problem.</summary>
+        public static string ValidateProblem(string reportPath, DateTime? notBeforeUtc = null)
+        {
+            try
+            {
+                string stageDir = Path.GetDirectoryName(reportPath);
+                string vj = stageDir == null ? null : Path.Combine(Path.GetDirectoryName(stageDir) ?? "", "tagw_validate.json");
+                if (vj == null || !File.Exists(vj)) return null;
+                if (notBeforeUtc.HasValue && File.GetLastWriteTimeUtc(vj) < notBeforeUtc.Value.AddSeconds(-2)) return null;
+                var j = Json.ReadObjFile(vj);
+                string why = j == null ? null : StageWarning.RefusalFromFailed(j.Arr("failed"));
+                return why == null ? null : why + " (" + vj + ")";
+            }
+            catch (Exception) { return null; }
+        }
+
         /// <summary>The last non-empty line of a traceback / message (the exception text), at most 300 characters; null if none.</summary>
         public static string LastLine(string text)
         {
@@ -1282,7 +1339,7 @@ namespace H2GpuLightmapper.Pipeline
         private void DoStageCheck(PlanStep s)
         {
             string rp = s.Params.Str("report");
-            string why = StageProblem(rp, null, Run.Status.StartedUtc);
+            string why = StageProblem(rp, null, Run.Status.StartedUtc) ?? ValidateProblem(rp, Run.Status.StartedUtc);
             if (why == null) { Run.Shell("the direct writer's stage is ready: " + Path.GetDirectoryName(rp)); return; }
             Run.Shell("*** " + why + " -- the direct tag writer did not produce a stage");
             throw new StepFailedException("the direct tag writer did not produce a stage: " + why + ". Nothing was written to the tags. (On a stock H2EK the original "

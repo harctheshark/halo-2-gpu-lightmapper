@@ -8,7 +8,7 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: pre-release (0.6.5).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: pre-release (0.6.6).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -274,9 +274,10 @@ These are open problems in this build.
    records include samples that `tool_fast` drops (its visibility test is not reproduced by default). The lightmap bitmaps are
    identical. **2004 Exact Vertex Lighting?** (Advanced settings) closes most of the gap; a faster fix inside the GPU bake is
    planned.
-7. **A rare final-check refusal.** Standard bakes of triplicate sometimes stop at the last check because a lightmap UV (1 or 2 of
-   35,572) lands exactly on a texel corner that the bake did not cover (`set.d.uv_on_alpha255`). Nothing is installed. It depends on the
-   capture: in 0.6.5's tests two of three Standard runs hit it and one fresh capture passed; bake again with a new capture if you hit it.
+7. **Corner texels (fixed in 0.6.6).** A lightmap UV can land exactly on a chart-corner texel the GPU bake left uncovered (seen on
+   triplicate). 0.6.6 fills such texels from their covered neighbours and logs a warning instead of refusing the bake.
+8. **0.6.4 and 0.6.5: a refused stage could still be accepted.** In those versions a Lightmap Only bake could end DONE, and an install
+   without light probes could install a lightmap, even when the final check had refused it. 0.6.6 fixes this; update if you use those modes.
 
 Maps with several cubemap skies (for example 07a_highcharity high_0) are accepted since 0.6.5; that bake was not compared with a CPU bake.
 

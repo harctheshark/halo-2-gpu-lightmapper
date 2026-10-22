@@ -5,7 +5,10 @@
 //   OUT\standalone_capture_tags.tsv.
 //   Reuse is offered only when the record exists, its crc matches capture_id.json, quality / P / MC match, fixes and binaries
 //   match, and (probes) sky_tex_hi.bin + lp_globals.bin are present. A tags-only difference keeps reuse enabled but needs an
-//   explicit confirmation listing the changed tags -- never silent. A farm without a record (legacy / research) is never
+//   explicit confirmation listing the changed tags -- never silent. 0.6.6: only BAKE-RELEVANT changes (TagRelevance) ask; the others
+//   are listed as information, and a file whose mtime moved but whose md5 equals the one stored at capture time (4th column of the
+//   tags tsv, relevant files <= TagRelevanceCtx.HashCap) is an identical re-save, not a change. A record without hashes keeps the
+//   mtime comparison. A farm without a record (legacy / research) is never
 //   offered. gpu_bake's own -SkipCapture checks still run underneath.
 //   Before a FRESH capture into a farm the old record is renamed aside (never deleted), so a capture that fails half-way can
 //   never be vouched for by an older record.
@@ -85,6 +88,11 @@ namespace H2GpuLightmapper.Pipeline
         public bool TagsChanged;
         public List<string> ChangedTags = new List<string>();
         public int ChangedTagsTotal;
+        /// <summary>0.6.6: tags that changed since the capture but do not feed the lightmap (information only; never asks).</summary>
+        public List<string> InfoTags = new List<string>();
+        public int InfoTagsTotal;
+        /// <summary>0.6.6: tags re-saved with identical content (md5 equal to the recorded one) -- ignored.</summary>
+        public int IdenticalResaves;
         public JObj Record;
         public string RecordPath;
         public bool Unrecorded;
@@ -93,7 +101,8 @@ namespace H2GpuLightmapper.Pipeline
             if (!Allowed) return "not reusable: " + Reason;
             var r = Record;
             string what = r == null ? "an unrecorded capture (dev)" : r.Str("quality") + " capture of " + (r.Str("written") ?? "?");
-            return "reusable: " + what + (TagsChanged ? " -- " + ChangedTagsTotal + " tag(s) changed since (confirmation needed)" : "");
+            return "reusable: " + what + (TagsChanged ? " -- " + ChangedTagsTotal + " tag(s) changed since (confirmation needed)" : "")
+                + (InfoTagsTotal > 0 ? " (+" + InfoTagsTotal + " unrelated tag change(s), info only)" : "");
         }
     }
 
@@ -148,7 +157,7 @@ namespace H2GpuLightmapper.Pipeline
                 .Add("appVersion", id.AppVersion).Add("guarded", id.Guarded.HasValue ? (object)id.Guarded.Value : null)
                 .Add("sceneryPermutationFix", id.SceneryPermutationFix).Add("binaries", bin)
                 .Add("captureId", new JObj().Add("soup_crc32", crc).Add("md5", cidMd5))
-                .Add("tags", tags == null ? null : new JObj().Add("file", TagsFileName).Add("files", (long)tags.Count).Add("md5", tags.Md5));
+                .Add("tags", tags == null ? null : new JObj().Add("file", TagsFileName).Add("files", (long)tags.Count).Add("md5", tags.Md5).Add("hashed", (long)tags.HashedCount));
             SafeFs.WriteAllTextAtomic(PathIn(outDir), Json.Write(j, true));
             return null;
         }
@@ -177,6 +186,9 @@ namespace H2GpuLightmapper.Pipeline
                 {
                     var fi = new FileInfo(full);
                     line = rel + "\t" + fi.Length.ToString(CultureInfo.InvariantCulture) + "\t" + fi.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
+                    // 0.6.6: a line that carried a content hash keeps one (the file as our install wrote it)
+                    if (i >= 0 && fp.Lines[i].Split('\t').Length >= 4 && fi.Length <= TagRelevanceCtx.HashCap)
+                    { try { line += "\t" + SafeFs.Md5File(full); } catch (IOException) { } }
                 }
                 if (i >= 0 && line != null) { if (fp.Lines[i] != line) { fp.Lines[i] = line; changed = true; } }
                 else if (i >= 0) { fp.Lines.RemoveAt(i); changed = true; }
@@ -186,7 +198,7 @@ namespace H2GpuLightmapper.Pipeline
             fp.Lines.Sort(StringComparer.OrdinalIgnoreCase);
             fp = TagsFingerprint.FromLinesPublic(fp.Lines);
             fp.Save(tsv);
-            j["tags"] = new JObj().Add("file", Path.GetFileName(tsv)).Add("files", (long)fp.Count).Add("md5", fp.Md5);
+            j["tags"] = new JObj().Add("file", Path.GetFileName(tsv)).Add("files", (long)fp.Count).Add("md5", fp.Md5).Add("hashed", (long)fp.HashedCount);
             SafeFs.WriteAllTextAtomic(PathIn(outDir), Json.Write(j, true));
             return true;
         }
@@ -267,10 +279,19 @@ namespace H2GpuLightmapper.Pipeline
                     var old = TagsFingerprint.Load(Path.Combine(outDir, t.Str("file") ?? TagsFileName));
                     if (old == null || !SameText(old.Md5, now.Md5))
                     {
-                        v.TagsChanged = true;
-                        int total = 0;
-                        v.ChangedTags = old == null ? new List<string> { "(the recorded fingerprint file is missing)" } : TagsFingerprint.Diff(old, now, 200, out total);
-                        v.ChangedTagsTotal = old == null ? 1 : total;
+                        if (old == null)
+                        {
+                            v.TagsChanged = true;
+                            v.ChangedTags = new List<string> { "(the recorded fingerprint file is missing)" };
+                            v.ChangedTagsTotal = 1;
+                        }
+                        else
+                        {
+                            // 0.6.6: relevance split + content hash for the files whose mtime moved with an equal size
+                            var d = TagsFingerprint.Classify(old, now, TagRelevanceCtx.Build(now.Root ?? "", scenarioRel, bsp, now.Lines.Concat(old.Lines).Select(TagsFingerprint.KeyOf).Distinct(StringComparer.OrdinalIgnoreCase)), 200);
+                            v.ChangedTags = d.Relevant; v.ChangedTagsTotal = d.RelevantTotal; v.TagsChanged = d.RelevantTotal > 0;
+                            v.InfoTags = d.Info; v.InfoTagsTotal = d.InfoTotal; v.IdenticalResaves = d.Identical;
+                        }
                     }
                 }
             }
@@ -304,6 +325,35 @@ namespace H2GpuLightmapper.Pipeline
         public List<string> Lines = new List<string>();
         public string Md5;
         public int Count { get { return Lines.Count; } }
+        /// <summary>The H2EK root this fingerprint was computed from (null for one loaded from a record); lets a comparison hash a file lazily.</summary>
+        public string Root;
+        /// <summary>0.6.6: lines that carry a content hash (4th column).</summary>
+        public int HashedCount { get { int n = 0; foreach (var l in Lines) if (CountTabs(l) >= 3) n++; return n; } }
+
+        private static int CountTabs(string l) { int n = 0; foreach (char c in l) if (c == '\t') n++; return n; }
+        /// <summary>The path (first column) of a line.</summary>
+        public static string KeyOf(string l) { int i = l.IndexOf('\t'); return i < 0 ? l : l.Substring(0, i); }
+        /// <summary>"path TAB size TAB mtime" -- the line without its optional content hash.</summary>
+        private static string Stat3(string l)
+        {
+            int i = l.IndexOf('\t'); if (i < 0) return l;
+            i = l.IndexOf('\t', i + 1); if (i < 0) return l;
+            i = l.IndexOf('\t', i + 1);
+            return i < 0 ? l : l.Substring(0, i);
+        }
+        private static string HashOf(string l)
+        {
+            int i = l.IndexOf('\t'); if (i < 0) return null;
+            i = l.IndexOf('\t', i + 1); if (i < 0) return null;
+            i = l.IndexOf('\t', i + 1);
+            return i < 0 ? null : l.Substring(i + 1);
+        }
+        private static long SizeOf(string l)
+        {
+            var p = l.Split('\t');
+            long n;
+            return p.Length >= 3 && long.TryParse(p[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out n) ? n : -1;
+        }
 
         /// <summary>The top-level tags folder the tool uses as scratch (never a game tag); not fingerprinted.</summary>
         public const string ToolScratchDir = "temp_scenario";
@@ -312,6 +362,25 @@ namespace H2GpuLightmapper.Pipeline
         public static bool IsToolScratch(string relOrLine)
         {
             return relOrLine != null && relOrLine.StartsWith(ToolScratchDir + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>The fingerprint a CAPTURE records (0.6.6): the stat lines plus an md5 4th column on every bake-relevant file of at most
+        /// <see cref="TagRelevanceCtx.HashCap"/> bytes (scenario folder, this BSP's folder, scenery / shader / light / sky ... tags, the bitmaps and
+        /// render_models this map uses). Md5 (the whole-fingerprint check) is over the stat columns only, so it equals a plain Compute of the same state.</summary>
+        public static TagsFingerprint ComputeWithHashes(string root, TagSet exclude, string scenarioRel, string bsp)
+        {
+            var fp = Compute(root, exclude);
+            var ctx = TagRelevanceCtx.Build(root, scenarioRel, bsp, fp.Lines.Select(KeyOf));
+            string tags = Path.Combine(root, "tags");
+            for (int i = 0; i < fp.Lines.Count; i++)
+            {
+                string l = fp.Lines[i];
+                string rel = KeyOf(l);
+                long size = SizeOf(l);
+                if (size < 0 || size > TagRelevanceCtx.HashCap || !ctx.IsRelevant(rel)) continue;
+                try { fp.Lines[i] = l + "\t" + SafeFs.Md5File(Path.Combine(tags, rel)); } catch (Exception) { }     // unreadable: no hash, the mtime comparison stays
+            }
+            return fp;
         }
 
         public static TagsFingerprint Compute(string root, TagSet exclude)
@@ -346,8 +415,10 @@ namespace H2GpuLightmapper.Pipeline
                 }
             }
             lines.Sort(StringComparer.OrdinalIgnoreCase);
-            return FromLines(lines);
+            return FromLines(lines).WithRoot(root);
         }
+
+        private TagsFingerprint WithRoot(string root) { Root = root; return this; }
 
         public static TagsFingerprint FromLinesPublic(List<string> lines) { return FromLines(lines); }
 
@@ -355,7 +426,7 @@ namespace H2GpuLightmapper.Pipeline
         {
             var fp = new TagsFingerprint { Lines = lines };
             var sb = new StringBuilder();
-            foreach (var l in lines) sb.Append(l).Append('\n');
+            foreach (var l in lines) sb.Append(Stat3(l)).Append('\n');     // 0.6.6: the optional content-hash column is not part of the whole-fingerprint md5
             fp.Md5 = SafeFs.Md5Hex(Encoding.UTF8.GetBytes(sb.ToString()));
             return fp;
         }
@@ -379,9 +450,9 @@ namespace H2GpuLightmapper.Pipeline
         {
             Func<string, string> key = l => { int i = l.IndexOf('\t'); return i < 0 ? l : l.Substring(0, i); };
             var a = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var l in old.Lines) a[key(l)] = l;
+            foreach (var l in old.Lines) a[key(l)] = Stat3(l);
             var b = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var l in now.Lines) b[key(l)] = l;
+            foreach (var l in now.Lines) b[key(l)] = Stat3(l);
             var r = new List<string>();
             foreach (var kv in b)
             {
@@ -393,6 +464,40 @@ namespace H2GpuLightmapper.Pipeline
             r.Sort(StringComparer.OrdinalIgnoreCase);
             total = r.Count;
             return r.Take(max).ToList();
+        }
+
+        /// <summary>
+        /// 0.6.6: the changes since a record, split into bake-relevant (these ask) and information only, with identical re-saves dropped.
+        /// A file whose stat line moved with an EQUAL size is hashed now (lazily, only those) and compared with the recorded hash when the record has one.
+        /// <paramref name="ctx"/> null = every change counts as relevant.
+        /// </summary>
+        public static TagDiff Classify(TagsFingerprint old, TagsFingerprint now, TagRelevanceCtx ctx, int max)
+        {
+            var a = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var l in old.Lines) a[KeyOf(l)] = l;
+            var b = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var l in now.Lines) b[KeyOf(l)] = l;
+            var d = new TagDiff();
+            var rel = new List<string>(); var inf = new List<string>();
+            Action<string, string> add = (k, text) => { if (ctx == null || ctx.IsRelevant(k)) rel.Add(text); else inf.Add(text); };
+            foreach (var kv in b)
+            {
+                string o;
+                if (!a.TryGetValue(kv.Key, out o)) { add(kv.Key, "added    " + kv.Key); continue; }
+                if (Stat3(o) == Stat3(kv.Value)) continue;
+                string h = HashOf(o);
+                if (h != null && now.Root != null && SizeOf(o) == SizeOf(kv.Value))
+                {
+                    try { if (string.Equals(h, SafeFs.Md5File(Path.Combine(now.Root, "tags", kv.Key)), StringComparison.OrdinalIgnoreCase)) { d.Identical++; continue; } }
+                    catch (Exception) { }     // unreadable: it counts as changed
+                }
+                add(kv.Key, "changed  " + kv.Key);
+            }
+            foreach (var kv in a) if (!b.ContainsKey(kv.Key)) add(kv.Key, "removed  " + kv.Key);
+            rel.Sort(StringComparer.OrdinalIgnoreCase); inf.Sort(StringComparer.OrdinalIgnoreCase);
+            d.RelevantTotal = rel.Count; d.InfoTotal = inf.Count;
+            d.Relevant = rel.Take(max).ToList(); d.Info = inf.Take(max).ToList();
+            return d;
         }
     }
 }

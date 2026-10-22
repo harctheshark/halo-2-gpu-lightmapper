@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.6 (2026-10-22): pre-release
+
+Exe SHA-256 `60c33ed73398d62c422cb00f72d35b93667f1434f848957c6b8826d1c8a12e9d`.
+
+- **Sapien re-saves no longer stop a bake.** The capture guard now compares only what the lightmap depends on (the bitmaps and render models the BSP uses), and `--reuse-capture` is content-aware.
+- **Triplicate corner texels are filled** from covered neighbours with a warning, instead of the `set.d.uv_on_alpha255` refusal (a large count is still refused).
+- **Safety fix:** a refused stage can no longer be marked done or installed. In 0.6.4 / 0.6.5 a Lightmap Only run with a failed final check still ended DONE, and install could run without probes. Re-bake such runs.
+- Checked on an RTX 4090, stage only: light-probe gate re-run (SH 99.533%), triplicate Standard and Lightmap Only on fresh captures, vuthatest AO + exact vertex lighting. Not re-run: AO neutrality and the Custom guard gate (their pinned engine files did not change).
+
 ## 0.6.5 (2026-10-22): pre-release
 
 Exe SHA-256 `ecaa6e5236b9de6d5ab056f45a752b46bca331dc8c912c3530fe9c6bde3c1ef1`.

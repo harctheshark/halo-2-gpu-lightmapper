@@ -1,0 +1,180 @@
+# title: P11 promotion 2026-10-22 17:24 (0.6.6): relevance-aware Sapien re-save guard, used-set (lmw_usedset.py) (engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: c2fbc03957df8de450c537b6dc8079a8
+# result-md5: 4757b5559a3fe99d2b8f392f8f09d8c0
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -731,6 +731,109 @@
+     if (Test-Path "$tagDirLive\resources") {
+         Get-ChildItem "$tagDirLive\resources" -File | ForEach-Object { $h["resources\" + $_.Name] = (Get-FileHash $_.FullName -Algorithm MD5).Hash } }
+     return $h }
++# >>> dev_GD (2026-10-22): skeleton isolation guard that tells a Sapien/Guerilla RE-SAVE from a bake-breaking change.
++# The 0.6.4 guard stopped on ANY live-tag mtime >= the skeleton launch (an open Sapien re-saving identical bytes killed a 11 min bake).
++# Now: a content snapshot (md5) at launch of (a) the scenario folder, recursive (ai_resources, resources, scripts ...), (b) the BSP's
++# folder (files only), (c) every small bake-relevant tag group anywhere under tags\ (scenery crate device_* light lens_flare sky model
++# shader*...). At the end: identical content = ignored (counted), changed content = bake-relevant -> STOP / other -> WARNING.
++# Lightmap tags of THIS bake (scenario folder / BSP folder) and anything under <leaf>_sk are ALWAYS a stop (never Sapien's writes).
++# bitmap / render_model are too big to snapshot: an mtime move >= the launch is relevant (content not verifiable) ONLY for the ones THIS MAP USES
++# (0.6.6: Get-GuardUsedSet = a tag-reference walk scenario + BSP -> scenery/crate/machines/lights/skies/models/shaders -> bitmap + render_model, lmw_usedset.py,
++# ~1 s); any other bitmap / render_model that moved is a warning. If the walk fails, EVERY bitmap / render_model is relevant again (the 0.6.5 behaviour).
++$script:GuardNoiseRx   = '\(auto-backup|\$\.[A-Za-z_]+$'     # Sapien auto-backups and the timestamped "name<mon>_dd_yyyy_hh_mm_am$.scenario" saves
++$script:GuardTierARx   = '^(scenery|crate|device_machine|device_control|device_light_fixture|light|light_volume|lens_flare|sky|model|decorator_set|shader(_.+)?|scenario_structure_lighting_info)$'
++$script:GuardBigRx     = '^(bitmap|render_model)$'
++$script:GuardScenNonRx = '^(scenario_(ai|bipeds|cinematics|comments|creature|equipment|hs_source_file|sound_scenery|trigger_volumes|vehicles|weapons)_resource|hsc|txt|log)$'
++function Get-GuardMd5([string]$p) {
++    try { $fs = [IO.File]::Open($p, 'Open', 'Read', 'ReadWrite'); try { $m = [Security.Cryptography.MD5]::Create(); return [BitConverter]::ToString($m.ComputeHash($fs)) } finally { $fs.Dispose() } }
++    catch { return 'unreadable' } }
++function Test-GuardLightmapName([string]$n) { return ($n -match '_lightmap[_.]' -or $n -match '\.scenario_structure_lightmap$') }
++function Get-GuardSnapshot {
++    # path -> md5 for the three sets above (noise names, temp_scenario excluded). ~50 MB for a campaign scenario: a few seconds.
++    $h = @{}
++    $scenDir = $tagDirLive.TrimEnd('\') + '\'
++    $bspDir  = (Split-Path $bspLive).TrimEnd('\') + '\'
++    foreach ($f in [IO.Directory]::EnumerateFiles($tagDirLive, '*', [IO.SearchOption]::AllDirectories)) {
++        if ($f -match $script:GuardNoiseRx) { continue }
++        $h[$f] = Get-GuardMd5 $f }
++    if ($bspDir -ne $scenDir -and (Test-Path $bspDir)) {
++        foreach ($f in [IO.Directory]::EnumerateFiles($bspDir)) {
++            if ($f -match $script:GuardNoiseRx) { continue }
++            $h[$f] = Get-GuardMd5 $f } }
++    $tdir = "$RP\tags"
++    foreach ($f in [IO.Directory]::EnumerateFiles($tdir, '*', [IO.SearchOption]::AllDirectories)) {
++        $e = [IO.Path]::GetExtension($f).TrimStart('.').ToLowerInvariant()
++        if ($e -notmatch $script:GuardTierARx -or $h.ContainsKey($f)) { continue }
++        if ($f -like "$tdir\temp_scenario\*" -or $f -match $script:GuardNoiseRx) { continue }
++        $h[$f] = Get-GuardMd5 $f }
++    return $h }
++function Get-GuardUsedSet {
++    # -> a case-insensitive HashSet of the absolute paths of the bitmaps / render_models this map uses, or $null when the walk could not be done (the guard then
++    # treats every bitmap / render_model as relevant, as 0.6.5 did)
++    try {
++        $uf = "$OUT\guard_usedset.txt"
++        Remove-Item $uf -ErrorAction SilentlyContinue
++        $eo = @(& py -I "$TW\lmw_usedset.py" --tags "$RP\tags" --scenario $scnLive --bsp $bspLive --out $uf 2>&1 | ForEach-Object { "$_" })
++        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $uf)) { Write-Host ("      guard: used-set walk failed (exit {0}: {1}) -- every bitmap / render_model counts as relevant" -f $LASTEXITCODE, ($eo -join ' ')) -ForegroundColor DarkYellow; return $null }
++        $hs = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
++        foreach ($l in [IO.File]::ReadAllLines($uf)) { if ($l) { [void]$hs.Add($l) } }
++        Write-Host ("      guard: {0}" -f (($eo | Where-Object { $_ -like '#USEDSET*' } | Select-Object -First 1) -replace '^#USEDSET (\d+) (\d+) (\d+)$', '$2 bitmaps + $3 render_models used by this map (walked $1 tags)'))
++        if ($hs.Count -eq 0) { Write-Host "      guard: the used-set walk found no bitmap / render_model at all -- every bitmap / render_model counts as relevant" -ForegroundColor DarkYellow; return $null }
++        return ,$hs
++    } catch { Write-Host "      guard: used-set walk failed ($_) -- every bitmap / render_model counts as relevant" -ForegroundColor DarkYellow; return $null } }
++function Get-GuardRelevance([string]$f, $used) {
++    # 'rel' = a change of this tag changes what the bake would produce (or cannot be verified), 'non' = it does not
++    $e = [IO.Path]::GetExtension($f).TrimStart('.').ToLowerInvariant()
++    $scenDir = $tagDirLive.TrimEnd('\') + '\'
++    $bspDir  = (Split-Path $bspLive).TrimEnd('\') + '\'
++    if ($f.StartsWith($scenDir, [StringComparison]::OrdinalIgnoreCase)) { if ($e -match $script:GuardScenNonRx) { return 'non' } else { return 'rel' } }
++    if ($f.StartsWith($bspDir, [StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetDirectoryName($f) + '\' -eq $bspDir) {
++        if ($e -match '^scenario_structure_(bsp|lighting.*)$') { return 'rel' } else { return 'non' } }
++    if ($e -match $script:GuardTierARx) { return 'rel' }
++    if ($e -match $script:GuardBigRx) { if ($null -eq $used -or $used.Contains($f)) { return 'rel' } else { return 'non' } }     # 0.6.6: only the bitmaps / render_models this map uses
++    return 'non' }
++function Test-SkeletonIsolation($sk) {
++    # returns nothing; throws (and sets $script:skelBreach) on a breach / a bake-relevant change
++    $snap = $sk.Live
++    $used = $sk.Used     # 0.6.6: the bitmaps / render_models this map uses ($null = unknown: all of them count)
++    $now  = Get-GuardSnapshot
++    $scenDir = $tagDirLive.TrimEnd('\') + '\'
++    $bspDir  = (Split-Path $bspLive).TrimEnd('\') + '\'
++    $skRx = '\\' + [regex]::Escape("$($scenLeaf)_sk") + '\\'
++    $tdir = "$RP\tags"
++    $hard = [Collections.Generic.List[string]]::new(); $rel = [Collections.Generic.List[string]]::new(); $non = [Collections.Generic.List[string]]::new()
++    $cand = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
++    foreach ($fi in [IO.DirectoryInfo]::new($tdir).EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
++        if ($fi.LastWriteTime -lt $sk.T0) { continue }
++        $f = $fi.FullName
++        if ($f -like "$tdir\temp_scenario\*" -or $f -match $script:GuardNoiseRx) { continue }
++        [void]$cand.Add($f) }
++    foreach ($k in $snap.Keys) { if (-not $now.ContainsKey($k) -or $now[$k] -ne $snap[$k]) { [void]$cand.Add($k) } }
++    foreach ($k in $now.Keys)  { if (-not $snap.ContainsKey($k)) { [void]$cand.Add($k) } }
++    $resaved = 0
++    foreach ($f in ($cand | Sort-Object)) {
++        $name = [IO.Path]::GetFileName($f); $dir = [IO.Path]::GetDirectoryName($f) + '\'
++        $ours = $f.StartsWith($scenDir, [StringComparison]::OrdinalIgnoreCase) -or $dir -eq $bspDir
++        if ($f -match $skRx) { $hard.Add($f); continue }                                      # a leak out of the overlay's renamed scenario
++        if ((Test-GuardLightmapName $name) -and $ours) { $hard.Add($f); continue }           # this bake's own lightmap tags: never Sapien's
++        if ($snap.ContainsKey($f)) {
++            $exists = Test-Path -LiteralPath $f
++            $nh = if ($exists) { $(if ($now.ContainsKey($f)) { $now[$f] } else { Get-GuardMd5 $f }) } else { 'deleted' }
++            if ($nh -eq $snap[$f]) { $resaved++; continue }                                   # same bytes: Sapien/Guerilla re-save
++            if ((Get-GuardRelevance $f $used) -eq 'rel') { $rel.Add($f + $(if ($nh -eq 'deleted') { ' (deleted)' } else { '' })) } else { $non.Add($f) }
++            continue }
++        # not in the launch snapshot: a NEW file, or a big tag (bitmap / render_model) whose content was never hashed
++        if ((Get-GuardRelevance $f $used) -eq 'rel') { $rel.Add($f + $(if ((Test-Path -LiteralPath $f) -and -not $now.ContainsKey($f)) { ' (modified; too big to verify its content)' } else { ' (new)' })) } else { $non.Add($f) } }
++    if ($resaved) { Write-Host ("      NOTE: {0} live tag(s) were re-saved with identical content during the bake (Sapien/Guerilla?) -- ignored" -f $resaved) -ForegroundColor DarkYellow }
++    if ($non.Count) { Note ("{0} live tag(s) NOT relevant to the lightmap were written during the bake (AI / scripts / sounds ... Sapien/Guerilla?; content changed or not compared) -- continuing: {1}{2}" -f $non.Count, (($non | Select-Object -First 6) -join ', '), $(if ($non.Count -gt 6) { ', ...' } else { '' })) }
++    if ($hard.Count) {
++        $script:skelBreach = $true
++        throw ("*** THE SKELETON RUN WROTE LIVE LIGHTMAP / OVERLAY TAGS -- {0} file(s): {1}. These are never written by Sapien/Guerilla: restore them before anything else." -f $hard.Count, (($hard | Select-Object -First 5) -join ', ')) }
++    if ($rel.Count) {
++        $script:skelBreach = $true
++        throw ("*** BAKE-RELEVANT LIVE TAGS CHANGED DURING THE SKELETON RUN -- {0} file(s): {1}{2}. The lightmap would be baked from STALE data (an editor saved a scenery / BSP / scenario / machine / shader ... tag while the bake ran). Save your edits and RE-RUN the bake." -f $rel.Count, (($rel | Select-Object -First 6) -join ', '), $(if ($rel.Count -gt 6) { ', ...' } else { '' })) }
++    }
++# <<< dev_GD
+ function Build-SkelOverlay {
+     # $SKW\tags mirrors the live tags tree: every folder OFF the scenario's path is a junction to live (read-only use), the
+     # folders ON the path are real, the scenario's own folder holds real COPIES of its files (no auto-backups, no radiance
+@@ -823,7 +926,8 @@
+     New-Item -ItemType Directory -Force -Path $run | Out-Null
+     foreach ($f in 'gpulm.log', 'skel_manifest.bin', 'tool_stdout.txt', 'tool_stderr.txt') {
+         if (Test-Path "$run\$f") { Move-Item "$run\$f" "$run\$f.prev" -Force } }     # this overlay's own logs of the last run
+-    $live = Get-LiveTagHashes
++    $live = Get-GuardSnapshot     # dev_GD: content snapshot (scenario folder + BSP folder + small bake-relevant tag groups)
++    $usedSet = Get-GuardUsedSet   # 0.6.6: the bitmaps / render_models this map uses (the only big tags whose change can stop the bake)
+     $t0 = Get-Date
+     $since = [DateTimeOffset]::new($t0).ToUnixTimeMilliseconds() / 1000.0
+     # The skeleton gets its OWN environment: snapshot every GPULM_* (phases 1-2 set several that phase 3 still needs),
+@@ -869,7 +973,7 @@
+     if (-not $injected) { if (-not $p.HasExited) { $p.Kill() }
+         throw "skeleton: injection FAILED -- the tool was killed (un-injected it would CPU-bake the renamed overlay scenario)" }
+     Write-Host ("      skeleton tool run started: pid {0}, injected after {1:n1}s, overlay {2}" -f $p.Id, ((Get-Date) - $t0).TotalSeconds, $o.SkDir)
+-    return [pscustomobject]@{ Cached = $false; Key = $keyF; Proc = $p; T0 = $t0; Since = $since; Live = $live; Overlay = $o; Run = $run } }
++    return [pscustomobject]@{ Cached = $false; Key = $keyF; Proc = $p; T0 = $t0; Since = $since; Live = $live; Used = $usedSet; Overlay = $o; Run = $run } }
+ function Wait-Skeleton($sk) {
+     if ($null -eq $sk) { throw "the skeleton run was not started (see the phase-3 note)" }
+     if ($sk.Cached) { Write-Host "      skeleton: the cached one for this capture ($OUT\skeleton)"; return }
+@@ -878,17 +982,10 @@
+     if (-not $p.WaitForExit(1800000)) { $p.Kill(); throw "the skeleton tool run was still running after 30 min -- killed" }
+     $p.WaitForExit()
+     $wall = try { ($p.ExitTime - $sk.T0).TotalSeconds } catch { -1 }
+-    # isolation proof BEFORE its output is trusted: the live scenario folder + resources md5-identical, and no file anywhere
+-    # under live tags\ written since the launch (phase 3 writes none). A breach stops the bake -- never a silent fallback.
+-    $now = Get-LiveTagHashes
+-    $chg = @($sk.Live.Keys | Where-Object { $now[$_] -ne $sk.Live[$_] }) + @($now.Keys | Where-Object { -not $sk.Live.ContainsKey($_) })
+-    # v064: Sapien's own temp scenario and its (auto-backup ...) saves are written while Sapien is open -- not the skeleton's writes
+-    $hits = @(Get-ChildItem "$RP\tags" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $sk.T0 -and
+-              $_.FullName -notlike "$RP\tags\temp_scenario\*" -and $_.Name -notlike '*(auto-backup*' })
+-    if ($chg.Count -or $hits.Count) {
+-        $script:skelBreach = $true
+-        throw ("*** THE SKELETON RUN WROTE LIVE TAGS -- changed: {0} | written since its launch: {1}. Restore them before anything else." -f `
+-               ($chg -join ', '), (($hits | Select-Object -First 5 | ForEach-Object { $_.FullName }) -join ', ')) }
++    # isolation proof BEFORE its output is trusted (dev_GD): a bake-relevant content change, a write to this bake's own lightmap tags or a leak out
++    # of the overlay stops the bake (never a silent fallback); a re-save with identical bytes (open Sapien/Guerilla) is ignored, a change to a
++    # tag that does not feed the lightmap (AI, scripts, sounds ...) is a warning. Test-SkeletonIsolation throws on a breach.
++    Test-SkeletonIsolation $sk
+     $ec = $p.ExitCode
+     Assert-NoHookCollision "$($sk.Run)\gpulm.log" "skeleton"     # v370 (a no-op with the switches off)
+     $ca = @("$TW\lmw_skeleton.py", "collect", "--run-dir", $OUT, "--key", $sk.Key, "--skel-run", $sk.Run, "--skel-leaf", $sk.Overlay.SkDir,
+@@ -896,7 +993,7 @@
+     if ($null -ne $ec) { $ca += @("--tool-exit", "$ec") }
+     & py @ca | ForEach-Object { Write-Host "      $_" }
+     if ($LASTEXITCODE -ne 0) { throw "the skeleton did not verify (lmw_skeleton.py collect exit $LASTEXITCODE; tool exit $ec; logs in $($sk.Run))" }
+-    Write-Host ("      skeleton tool run: exit {0}, {1:n1}s, live tags untouched ({2} files md5-checked + tree scan)" -f $ec, $wall, $now.Count) }
++    Write-Host ("      skeleton tool run: exit {0}, {1:n1}s, live tags checked ({2} files md5-snapshotted + tree scan)" -f $ec, $wall, $sk.Live.Count) }
+ function Invoke-TagWriterStage {
+     # -> the validated stage folder; throws on any failure (the caller falls back to the tool or stops)
+     Wait-Skeleton $script:skel
+@@ -917,8 +1014,12 @@
+         throw ("PAGE OVER 4096: {0} -- see {1}\tagw_report.json" -f $why, $stage) }
+     if ($twx -ne 0) { throw ("lm_tagwriter.py exit {0} ({1}) -- see {2}\tagw_report.json" -f $twx, $(if ($twx -eq 3) { "a generality / identity gate refused" } else { "error" }), $stage) }
+     & py "$TW\lmw_validate.py" --check-set $stage --bsp $bspLive --json "$OUT\tagw_validate.json" 2>&1 |
+-        Select-String -Pattern "FAIL|checks," | ForEach-Object { Write-Host "      $_" }
++        Select-String -Pattern "FAIL|WARN|checks," | ForEach-Object { Write-Host "      $_" }
+     if ($LASTEXITCODE -ne 0) { throw "lmw_validate.py --check-set REFUSED the stage (see $OUT\tagw_validate.json)" }
++    # 0.6.6 (user): a tolerated deviation (the writer filled a few uncovered texels under lit UVs, or lmw_validate WARNed on <= 16 lit UVs) is
++    # NOT a refusal: the stage installs, and the deviation is a visible yellow note in the log and the run summary
++    try { foreach ($w in @((Get-Content "$stage\tagw_report.json" -Raw | ConvertFrom-Json).warnings)) { if ("$w" -like 'filled * uncovered texel*') { Note "tag writer: $w" } } } catch { }
++    try { foreach ($w in @((Get-Content "$OUT\tagw_validate.json" -Raw | ConvertFrom-Json).warnings)) { Note ("lmw_validate: {0}: {1}" -f $w.check, $w.detail) } } catch { }
+     return $stage }
+ # v366 pre-flight for direct|both: fail fast (before a 7-minute bake), or with -WriteBack fall back to tool mode
+ if ($WriteBackMode -ne "tool") {

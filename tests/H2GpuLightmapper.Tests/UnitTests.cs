@@ -27,11 +27,14 @@ namespace H2GpuLightmapper.Tests
             yield return T("unit: capture record + reuse gate rules (crc, quality, P / MC, fixes, binaries, probes, tags)", ReuseGate);
             yield return T("unit: tags fingerprint excludes this BSP's outputs, Sapien auto-backups and the tool's temp_scenario scratch; diff lists changes", Fingerprint);
             yield return T("unit: after our install only the .scenario line is restamped; other changes keep warning", Restamp);
+            yield return T("unit 0.6.6: reuse gate is content-aware (identical re-save ignored, old records keep mtime) and relevance-aware (only bake-relevant changes ask)", ReuseContent066);
+            yield return T("unit 0.6.6: relevance = scenario folder / BSP / scenery-shader-light-sky tags / the bitmaps + render_models the tag-reference walk reaches", Relevance066);
             yield return T("unit: history + Custom ETA scaling", HistoryEta);
             yield return T("unit: map-query result parsing", MapQueryParse);
             yield return T("unit 0.6.4: cross-folder BSP picker: every structure_bsps entry by tag path, other folders labelled 'name  (from folder)', old engine keeps the beside-the-scenario list, ambiguity / missing tag notes, options (BspRel validation, summary, tag file)", CrossFolderPicker);
             yield return T("unit 0.6.4: cross-folder BSP engine gate (gpu_bake.ps1 declares -WriterOnly and -ToolOverlay): new engine supported, older engine / Custom engine / no payload refused with the plain sentence", CrossFolderGate);
             yield return T("unit 0.6.4: write-back fallback detector: the engine's three direct->tool lines (and a tool->direct one) are recognised, ordinary lines and the shell's own warning are not; warning + summary texts", FallbackDetect);
+            yield return T("unit 0.6.6: tolerated stage deviation: lmw_validate WARN / 'filled N uncovered texel(s)' lines are recognised (one warning per kind, own text ignored, ordinary lines not); OUT\\tagw_validate.json with failed checks is a stage problem, WARN-only / clean / stale / missing is not", StageWarningDetect);
             yield return T("unit: review fixes: on-disk case, install-without-layer flags, the undo time rule, --probes-fallback", ReviewFixes);
             yield return T("unit: V6 --install-retries: parsing (ranges, needs an install) + the Retry answers (N yes, then no; a cancel ends the wait)", InstallRetries);
             yield return T("unit: X2 Keep PC responsive: unticked argv byte-identical, ticked = + -Responsive last on every gpu_bake argv (36 combinations), --responsive, labels", X2Responsive);
@@ -752,7 +755,7 @@ namespace H2GpuLightmapper.Tests
             string root = Path.Combine(sb, "H2");
             Directory.CreateDirectory(Path.Combine(root, @"tags\scenarios\m\m"));
             File.WriteAllText(Path.Combine(root, @"tags\scenarios\m\m\m.scenario"), "s");
-            File.WriteAllText(Path.Combine(root, @"tags\other.tag"), "o");
+            File.WriteAllText(Path.Combine(root, @"tags\other.scenery"), "o");
             var set = TagSet.For(root, @"scenarios\m\m\m", "m");
             string farm = Path.Combine(sb, "farm_w200");
             Func<TagsFingerprint> tags = () => TagsFingerprint.Compute(root, set);
@@ -792,13 +795,13 @@ namespace H2GpuLightmapper.Tests
             File.WriteAllText(Path.Combine(farm, "sky_tex_hi.bin"), "s"); File.WriteAllText(Path.Combine(farm, "lp_globals.bin"), "g");
             Assert.Eq(null, CaptureRecord.Write(farm, Id(sky: true), @"scenarios\m\m\m", "m", 200, "run3", tags(), DateTime.Now), "probe record");
             Assert.True(CaptureRecord.Evaluate(farm, Id(sky: true), @"scenarios\m\m\m", "m", true, tags).Allowed, "probe-ready");
-            File.WriteAllText(Path.Combine(root, @"tags\other.tag"), "o changed");
-            File.WriteAllText(Path.Combine(root, @"tags\new.tag"), "n");
+            File.WriteAllText(Path.Combine(root, @"tags\other.scenery"), "o changed");
+            File.WriteAllText(Path.Combine(root, @"tags\new.scenery"), "n");
             v = CaptureRecord.Evaluate(farm, Id(sky: true), @"scenarios\m\m\m", "m", true, tags);
             Assert.True(v.Allowed && v.TagsChanged, "tags changed: still allowed, needs confirmation");
             Assert.Eq(2, v.ChangedTagsTotal, "2 changed");
-            Assert.Contains(string.Join("|", v.ChangedTags), "changed  other.tag", "changed listed");
-            Assert.Contains(string.Join("|", v.ChangedTags), "added    new.tag", "added listed");
+            Assert.Contains(string.Join("|", v.ChangedTags), "changed  other.scenery", "changed listed");
+            Assert.Contains(string.Join("|", v.ChangedTags), "added    new.scenery", "added listed");
             // superseded aside, never deleted
             var moved = CaptureRecord.SupersedeExisting(farm, DateTime.Now);
             Assert.Eq(2, moved.Count, "record + tsv renamed aside");
@@ -842,7 +845,7 @@ namespace H2GpuLightmapper.Tests
             string d = Path.Combine(root, @"tags\scenarios\m\m");
             Directory.CreateDirectory(d);
             File.WriteAllText(Path.Combine(d, "m.scenario"), "s");
-            File.WriteAllText(Path.Combine(root, @"tags\other.tag"), "o");
+            File.WriteAllText(Path.Combine(root, @"tags\other.scenery"), "o");
             var set = TagSet.For(root, @"scenarios\m\m\m", "m");
             string farm = Path.Combine(sb, "farm_w200");
             Directory.CreateDirectory(farm);
@@ -856,10 +859,116 @@ namespace H2GpuLightmapper.Tests
             var v = CaptureRecord.Evaluate(farm, Id(), @"scenarios\m\m\m", "m", false, tags);
             Assert.True(v.Allowed && !v.TagsChanged, "our own install no longer reads as a change: " + string.Join("; ", v.ChangedTags));
             Assert.Eq(tags().Md5, CaptureRecord.Read(farm).Obj("tags").Str("md5"), "restamped md5 == a fresh fingerprint");
-            File.WriteAllText(Path.Combine(root, @"tags\other.tag"), "o changed by the user");
+            File.WriteAllText(Path.Combine(root, @"tags\other.scenery"), "o changed by the user");
             Assert.True(!CaptureRecord.RestampFiles(farm, root, new[] { @"scenarios\m\m\m.scenario" }), "nothing to restamp for the scenario");
             v = CaptureRecord.Evaluate(farm, Id(), @"scenarios\m\m\m", "m", false, tags);
-            Assert.True(v.TagsChanged && v.ChangedTags.Single().Contains("other.tag"), "a user change keeps warning: " + string.Join("; ", v.ChangedTags));
+            Assert.True(v.TagsChanged && v.ChangedTags.Single().Contains("other.scenery"), "a user change keeps warning: " + string.Join("; ", v.ChangedTags));
+        }
+
+        private static void Touch(string f, int minutes) { File.SetLastWriteTimeUtc(f, File.GetLastWriteTimeUtc(f).AddMinutes(minutes)); }
+
+        /// <summary>A tiny map: the scenario names a shader, the shader names the bitmap "used"; "unused" is referenced by nobody.</summary>
+        private static string Map066(string sb, out TagSet set, out string farm)
+        {
+            string root = Path.Combine(sb, "H2");
+            string t = Path.Combine(root, "tags");
+            Directory.CreateDirectory(Path.Combine(t, @"scenarios\m\m"));
+            Directory.CreateDirectory(Path.Combine(t, @"shaders"));
+            Directory.CreateDirectory(Path.Combine(t, @"bitmaps"));
+            Directory.CreateDirectory(Path.Combine(t, @"sounds"));
+            var L1 = System.Text.Encoding.GetEncoding(28591);
+            File.WriteAllBytes(Path.Combine(t, @"scenarios\m\m\m.scenario"), L1.GetBytes("HDR base_mapshaders\\s1\0 tail bsp\0"));
+            File.WriteAllText(Path.Combine(t, @"scenarios\m\m\m.scenario_structure_bsp"), "bsp");
+            File.WriteAllText(Path.Combine(t, @"scenarios\m\m\m.scenario_ai_resource"), "ai");
+            File.WriteAllBytes(Path.Combine(t, @"shaders\s1.shader"), L1.GetBytes("base_mapbitmaps\\used\0 more"));
+            File.WriteAllText(Path.Combine(t, @"bitmaps\used.bitmap"), "bitmap-used-0");
+            File.WriteAllText(Path.Combine(t, @"bitmaps\unused.bitmap"), "bitmap-unused-0");
+            File.WriteAllText(Path.Combine(t, @"sounds\a.sound"), "snd-0");
+            File.WriteAllText(Path.Combine(t, @"scenery1.scenery"), "scen-0");
+            set = TagSet.For(root, @"scenarios\m\m\m", "m");
+            farm = Path.Combine(sb, "farm_w200");
+            Directory.CreateDirectory(farm);
+            File.WriteAllText(Path.Combine(farm, "capture_id.json"), "{\"soup_crc32\": \"ABCD1234\"}");
+            return root;
+        }
+
+        private static void Relevance066()
+        {
+            TagSet set; string farm;
+            string root = Map066(C.Sb.Dir("unit_rel066"), out set, out farm);
+            var fp = TagsFingerprint.Compute(root, set);
+            var ctx = TagRelevanceCtx.Build(root, @"scenarios\m\m\m", "m", fp.Lines.Select(TagsFingerprint.KeyOf));
+            Assert.True(ctx.Used != null && ctx.Used.Contains(@"bitmaps\used.bitmap") && !ctx.Used.Contains(@"bitmaps\unused.bitmap"), "the walk reaches scenario -> shader -> bitmap, not the unreferenced one: " + (ctx.Used == null ? "null" : string.Join(",", ctx.Used)));
+            Assert.True(ctx.IsRelevant(@"scenarios\m\m\m.scenario") && ctx.IsRelevant(@"scenarios\m\m\m.scenario_structure_bsp"), "scenario + bsp");
+            Assert.True(!ctx.IsRelevant(@"scenarios\m\m\m.scenario_ai_resource"), "AI resource in the scenario folder: not relevant");
+            Assert.True(ctx.IsRelevant(@"scenery1.scenery") && ctx.IsRelevant(@"shaders\s1.shader"), "scenery / shader anywhere");
+            Assert.True(ctx.IsRelevant(@"bitmaps\used.bitmap") && !ctx.IsRelevant(@"bitmaps\unused.bitmap"), "a bitmap only if the map uses it");
+            Assert.True(!ctx.IsRelevant(@"sounds\a.sound"), "a sound: not relevant");
+            // the walk failed (no scenario readable): every bitmap / render_model counts
+            var c2 = TagRelevanceCtx.Build(root, @"scenarios\nope\x", "m", fp.Lines.Select(TagsFingerprint.KeyOf));
+            Assert.True(c2.Used == null && c2.IsRelevant(@"bitmaps\unused.bitmap"), "no walk -> all bitmaps relevant (0.6.5 behaviour)");
+        }
+
+        private static void ReuseContent066()
+        {
+            TagSet set; string farm;
+            string root = Map066(C.Sb.Dir("unit_reuse066"), out set, out farm);
+            string t = Path.Combine(root, "tags");
+            Func<TagsFingerprint> tags = () => TagsFingerprint.Compute(root, set);
+            Func<ReuseVerdict> eval = () => CaptureRecord.Evaluate(farm, Id(), @"scenarios\m\m\m", "m", false, tags);
+            // record with hashes: the whole-fingerprint md5 equals a plain Compute of the same state (the hash column is not part of it)
+            var fh = TagsFingerprint.ComputeWithHashes(root, set, @"scenarios\m\m\m", "m");
+            Assert.Eq(tags().Md5, fh.Md5, "hash column is outside the whole-fingerprint md5");
+            Assert.True(fh.HashedCount >= 5 && fh.Lines.Any(l => l.StartsWith("bitmaps\\used.bitmap\t")) && fh.Lines.Single(l => l.StartsWith("bitmaps\\unused.bitmap\t")).Split('\t').Length == 3,
+                        "hashes on the relevant files only: " + fh.HashedCount);
+            Assert.Eq(null, CaptureRecord.Write(farm, Id(), @"scenarios\m\m\m", "m", 200, "r1", fh, DateTime.Now), "record with hashes");
+            Assert.True(eval().Allowed && !eval().TagsChanged, "nothing changed");
+            // (1) Sapien re-saves the scenario + a shader + the used bitmap with IDENTICAL bytes: mtime moves, content equal -> not a change
+            foreach (var f in new[] { @"scenarios\m\m\m.scenario", @"shaders\s1.shader", @"bitmaps\used.bitmap", "scenery1.scenery" }) Touch(Path.Combine(t, f), 1);
+            var v = eval();
+            Assert.True(v.Allowed && !v.TagsChanged && v.ChangedTagsTotal == 0, "identical re-saves do not ask: " + string.Join("; ", v.ChangedTags));
+            Assert.Eq(4, v.IdenticalResaves, "four identical re-saves counted");
+            // (2) a relevant change (same size, different bytes, mtime moved) asks
+            File.WriteAllText(Path.Combine(t, "scenery1.scenery"), "scen-1"); Touch(Path.Combine(t, "scenery1.scenery"), 2);
+            v = eval();
+            Assert.True(v.TagsChanged && v.ChangedTagsTotal == 1 && v.ChangedTags.Single() == "changed  scenery1.scenery", "same-size content change is a change: " + string.Join("; ", v.ChangedTags));
+            File.WriteAllText(Path.Combine(t, "scenery1.scenery"), "scen-0"); Touch(Path.Combine(t, "scenery1.scenery"), 2);
+            // (3) not bake-relevant changes are information only: a sound, the AI resource, a bitmap the map does not use
+            File.WriteAllText(Path.Combine(t, @"sounds\a.sound"), "snd-CHANGED-longer");
+            File.WriteAllText(Path.Combine(t, @"scenarios\m\m\m.scenario_ai_resource"), "ai2");
+            File.WriteAllText(Path.Combine(t, @"bitmaps\unused.bitmap"), "bitmap-unused-1-longer");
+            File.WriteAllText(Path.Combine(t, @"sounds\new.sound"), "n");
+            v = eval();
+            Assert.True(v.Allowed && !v.TagsChanged, "unrelated changes never ask: " + string.Join("; ", v.ChangedTags));
+            Assert.Eq(4, v.InfoTagsTotal, "four info-only changes");
+            Assert.Contains(string.Join("|", v.InfoTags), "changed  bitmaps\\unused.bitmap", "the unused bitmap is listed as info");
+            Assert.Contains(v.Describe(), "info only", "Describe says so");
+            // (4) the used bitmap really changes (bigger): relevant
+            File.WriteAllText(Path.Combine(t, @"bitmaps\used.bitmap"), "bitmap-used-1-longer");
+            v = eval();
+            Assert.True(v.TagsChanged && v.ChangedTags.Single() == @"changed  bitmaps\used.bitmap", "a used bitmap change asks: " + string.Join("; ", v.ChangedTags));
+            File.WriteAllText(Path.Combine(t, @"bitmaps\used.bitmap"), "bitmap-used-0"); Touch(Path.Combine(t, @"bitmaps\used.bitmap"), 3);
+            // (5) an OLD record (no hash column) keeps the mtime behaviour for the relevant files: a touched scenery asks; the relevance split still applies
+            File.WriteAllText(Path.Combine(t, @"sounds\a.sound"), "snd-0"); File.Delete(Path.Combine(t, @"sounds\new.sound"));
+            File.WriteAllText(Path.Combine(t, @"scenarios\m\m\m.scenario_ai_resource"), "ai");
+            File.WriteAllText(Path.Combine(t, @"bitmaps\unused.bitmap"), "bitmap-unused-0");
+            Assert.Eq(null, CaptureRecord.Write(farm, Id(), @"scenarios\m\m\m", "m", 200, "r2", TagsFingerprint.Compute(root, set), DateTime.Now), "an old-style record (no hashes)");
+            Assert.Eq(0L, CaptureRecord.Read(farm).Obj("tags").Long("hashed") ?? -1L, "hashed = 0");
+            Touch(Path.Combine(t, "scenery1.scenery"), 5);
+            v = eval();
+            Assert.True(v.TagsChanged && v.ChangedTags.Single() == "changed  scenery1.scenery" && v.IdenticalResaves == 0, "old record: mtime-only change still asks: " + string.Join("; ", v.ChangedTags));
+            Touch(Path.Combine(t, @"sounds\a.sound"), 5);
+            v = eval();
+            Assert.Eq(1, v.InfoTagsTotal, "old record: an unrelated touch is info only");
+            // (6) our own install restamps the scenario line and a hashed record keeps its hash column
+            Assert.Eq(null, CaptureRecord.Write(farm, Id(), @"scenarios\m\m\m", "m", 200, "r3", TagsFingerprint.ComputeWithHashes(root, set, @"scenarios\m\m\m", "m"), DateTime.Now), "hashed record again");
+            File.WriteAllText(Path.Combine(t, @"scenarios\m\m\m.scenario"), "HDR base_mapshaders\\s1\0 tail bsp\0 + lightmap ref");
+            Assert.True(CaptureRecord.RestampFiles(farm, root, new[] { @"scenarios\m\m\m.scenario" }), "restamped");
+            var fp2 = TagsFingerprint.Load(Path.Combine(farm, CaptureRecord.TagsFileName));
+            Assert.True(fp2.Lines.Single(l => l.StartsWith("scenarios\\m\\m\\m.scenario\t")).Split('\t').Length == 4, "the restamped scenario line kept a content hash");
+            Assert.Eq(tags().Md5, CaptureRecord.Read(farm).Obj("tags").Str("md5"), "restamped md5 == a fresh fingerprint");
+            v = eval();
+            Assert.True(v.Allowed && !v.TagsChanged, "after the restamp: no change: " + string.Join("; ", v.ChangedTags));
         }
 
         private static void HistoryEta()
@@ -973,6 +1082,61 @@ namespace H2GpuLightmapper.Tests
             // the BSP selection is the only thing it gates: Compatibility mode and the Scenery fix gates are independent
             Assert.Eq(null, good.SceneryPermutationFixWhy(o), "independent of the scenery gate");
             Assert.True(good.CompatEngineWhy(o) != null, "independent of the compat gate (this payload has no compat engine)");
+        }
+
+        private static void StageWarningDetect()
+        {
+            // the exact engine 0.6.6 texts
+            var v = StageWarning.Detect("         WARN  set.d.uv_on_alpha255                                       WARNING: 1 of 44171 lit UVs are not on an alpha-255 texel (tolerated: <= 16); cluster lit UVs 35571/35572, definition lit UVs 8599/8599 on alpha-255 texels");
+            Assert.True(v != null && v.Kind == "validate", "lmw_validate WARN line");
+            Assert.Contains(v.Detail, "set.d.uv_on_alpha255: 1 of 44171 lit UVs", "check name + detail without the WARNING: prefix");
+            var v2 = StageWarning.Detect("      *** lmw_validate: set.d.uv_on_alpha255: WARNING: 1 of 44171 lit UVs are not on an alpha-255 texel (tolerated: <= 16); x");
+            Assert.True(v2 != null && v2.Kind == "validate" && v2.Key == v.Key, "the gpu_bake Note form: same kind");
+            var f = StageWarning.Detect("[tagwriter   10.8s] *** WARNING: filled 2 uncovered texel(s) under lit vertex UVs from their covered neighbours (page, x, y: [(17, 167, 179)])");
+            Assert.True(f != null && f.Kind == "fill", "writer fill line");
+            Assert.Contains(f.Detail, "filled 2 uncovered texel(s)", "count carried");
+            var f2 = StageWarning.Detect("      *** tag writer: filled 2 uncovered texel(s) under lit vertex UVs from their covered neighbours (page, x, y: [])");
+            Assert.True(f2 != null && f2.Key == f.Key, "the Note form of the fill: same kind");
+            Assert.True(v.Key != f.Key, "two kinds, two warnings");
+            // not warnings
+            Assert.True(StageWarning.Detect("14 checks, 0 failed, 1 warning(s): set.d.uv_on_alpha255  (1.9 s)") == null, "the summary line");
+            Assert.True(StageWarning.Detect("   *** FAIL  set.d.uv_on_alpha255      cluster lit UVs 9/100") == null, "a FAIL is not a tolerated deviation");
+            Assert.True(StageWarning.Detect("      *** tag writer FAILED: lmw_validate.py --check-set REFUSED the stage") == null, "a refusal");
+            Assert.True(StageWarning.Detect("uncovered texels under lit UVs: none to fill") == null && StageWarning.Detect("") == null && StageWarning.Detect(null) == null, "none / empty");
+            string w = StageWarning.WarningText(f);
+            Assert.True(w.StartsWith(StageWarning.WarnPrefix, StringComparison.Ordinal), "warning text: " + w);
+            Assert.True(StageWarning.Detect(w) == null && StageWarning.Detect("*** " + w) == null, "own warning ignored");
+            Assert.Contains(StageWarning.SummaryText(f), "installed with a tolerated deviation", "summary sentence");
+            // OUT\tagw_validate.json decides a stage-only result
+            string dir = Path.Combine(Path.GetTempPath(), "h2lm_vp_" + Guid.NewGuid().ToString("N"));
+            string stage = Path.Combine(dir, "tagw_stage");
+            Directory.CreateDirectory(stage);
+            try
+            {
+                string rep = Path.Combine(stage, "tagw_report.json");
+                File.WriteAllText(rep, "{\"status\":\"written\"}");
+                string vj = Path.Combine(dir, "tagw_validate.json");
+                Assert.True(BakeSession.ValidateProblem(rep) == null, "no gate json: no problem");
+                File.WriteAllText(vj, "{\"failed\":[],\"warnings\":[{\"check\":\"set.d.uv_on_alpha255\",\"detail\":\"x\"}]}");
+                Assert.True(BakeSession.ValidateProblem(rep) == null, "WARN only: the stage installs");
+                File.WriteAllText(vj, "{\"failed\":[\"set.d.uv_on_alpha255\",\"set.d.checksum\"],\"warnings\":[]}");
+                string why = BakeSession.ValidateProblem(rep);
+                Assert.True(why != null && why.StartsWith("lmw_validate refused the stage: set.d.uv_on_alpha255, set.d.checksum", StringComparison.Ordinal), "failed checks: " + why);
+                Assert.True(BakeSession.ValidateProblem(rep, DateTime.UtcNow.AddHours(1)) == null, "a gate json older than the run is stale, not this run's");
+                File.WriteAllText(vj, "not json");
+                Assert.True(BakeSession.ValidateProblem(rep) == null, "unreadable: the older rule (the report) stands");
+            }
+            finally
+            {
+                try
+                {
+                    foreach (var fl in Directory.GetFiles(stage)) File.Delete(fl);
+                    foreach (var fl in Directory.GetFiles(dir)) File.Delete(fl);
+                    Directory.Delete(stage);
+                    Directory.Delete(dir);
+                }
+                catch (Exception) { }
+            }
         }
 
         private static void FallbackDetect()

@@ -38,8 +38,8 @@ SANDBOX = os.path.join(os.environ['TEMP'], 's19')      # short on purpose: WORK\
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'cabc84493fb968a8289b08717407ab59'),   # W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '7ff83e05ecf1cc72e1ca2b72344f4808'),   # production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'cefcf497e5434411ac2a0ac3d3b9a46d'),   # W6 0.6.6 promotion (cabc8449); W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '59d529c5996dc4983f294d52462013a6'),   # W6 0.6.6: dev_AO9 (dev_AO8 7ff83e05); production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
 }
 EXPECT_PATCHED = {
     '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '3634172b52a97b019a905750f2697300'),   # P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
