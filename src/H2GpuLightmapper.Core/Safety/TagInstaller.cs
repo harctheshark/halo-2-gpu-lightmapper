@@ -47,6 +47,8 @@ namespace H2GpuLightmapper.Core.Safety
         /// <summary>exit 1: the live set may be half-installed -- offer lmw_install restore from BackupDir.</summary>
         public bool OfferRestore { get { return Outcome == InstallOutcome.FailedAfterChange; } }
         public string BackupDir, TargetDir, Marker;
+        /// <summary>The Sapien reload signal's one-line result (SapienReloadPing.Note); null when none was sent.</summary>
+        public string SapienPing;
     }
 
     public static class TagInstaller
@@ -82,7 +84,12 @@ namespace H2GpuLightmapper.Core.Safety
             var res = new InstallResult { BackupDir = r.BackupDir, TargetDir = r.TargetDir, Marker = r.Marker };
             int exit; bool cancelled;
             Exec(r.PyExe, InstallArgs(r), r.Work, r.Env, r.TimeoutMs, run, "lmw_install install", res.Lines, out exit, out cancelled);
-            return Map(res, exit, cancelled, "install");
+            Map(res, exit, cancelled, "install");
+            // the install replaced the tags through <name>.gpulm_new + MoveFileEx: an open Sapien gets no change event for that
+            // (its ReadDirectoryChangesW filter is size | last-write), so signal it; the files installed = the stage's tag files
+            if (!r.DryRun && (res.Outcome == InstallOutcome.Installed || res.Outcome == InstallOutcome.FailedAfterChange))
+                Signal(res, r.TargetDir, SapienReloadPing.TagNamesIn(r.Stage));
+            return res;
         }
 
         public static void Validate(TagRestoreRequest r)
@@ -105,7 +112,22 @@ namespace H2GpuLightmapper.Core.Safety
             var res = new InstallResult { BackupDir = r.BackupDir, TargetDir = r.TargetDir, Marker = r.Marker };
             int exit; bool cancelled;
             Exec(r.PyExe, a, r.Work, r.Env, r.TimeoutMs, run, "lmw_install restore", res.Lines, out exit, out cancelled);
-            return Map(res, exit, cancelled, "restore");
+            Map(res, exit, cancelled, "restore");
+            if (res.Outcome == InstallOutcome.Installed || res.Outcome == InstallOutcome.FailedAfterChange)
+                Signal(res, r.TargetDir, SapienReloadPing.TagNamesIn(r.BackupDir));
+            return res;
+        }
+
+        /// <summary>Raises the LastWriteTime change an open Sapien watches for (SapienReloadPing); never throws, only adds a note.</summary>
+        private static void Signal(InstallResult res, string targetDir, List<string> names)
+        {
+            try
+            {
+                var p = SapienReloadPing.Touch(targetDir, names);
+                res.SapienPing = p.Note;
+                if (p.Note != null) res.Lines.Add("SAPIEN: " + p.Note);
+            }
+            catch (Exception) { }
         }
 
         private static void Exec(string py, List<string> args, string cwd, ChildEnvironment env, int timeoutMs, BakeRun run, string name,

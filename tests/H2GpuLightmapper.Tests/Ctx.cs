@@ -128,7 +128,7 @@ namespace H2GpuLightmapper.Tests
         /// 1 = gpu_ao.py (+ the AO engine copy's gpu_bake.ps1 declares -WriterOnly / -ToolOverlay), 2 = gpu_lightprobes.py, 3 = both; 0 = a 0.6.4 payload. Use with crossBspEngine.</param>
         public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null,
                                    bool sceneryEngine = true, bool customSceneryEngine = true, bool compatEngine = false, bool? customCompatEngine = null, bool? aoCompatEngine = null,
-                                   bool crossBspEngine = false, int splitBspDrivers = 0)
+                                   bool crossBspEngine = false, int splitBspDrivers = 0, bool mapbakeComponent = false)
         {
             bool custCompat = customCompatEngine ?? compatEngine, aoCompat = aoCompatEngine ?? compatEngine;
             // another file set needs another extraction dir name (same length: the DLL slot / path budget must not change)
@@ -190,6 +190,13 @@ namespace H2GpuLightmapper.Tests
                 }),
             };
             if (customEngine) comps[2].Item4.Add(new F { Path = "engine_custom/gpu_bake.ps1", Data = fakeBake(customSceneryEngine, custCompat) });
+            // milestone 2: the rt component with the mapbake entry point (stubs: the dry-run tests never start it)
+            if (mapbakeComponent)
+                comps.Add(Tuple.Create("rt-mapbake-test", "mapbake-test-s25dddd", "rt", new List<F>
+                {
+                    new F { Path = "mapbake.py", Data = txt("# test stub: the real entry point is src/standalone/mapbake/mapbake.py\n") },
+                    new F { Path = "h2conv_run.py", Data = txt("# test stub\n") },
+                }));
             Directory.CreateDirectory(dir);
             var carr = new List<object>();
             foreach (var c in comps)

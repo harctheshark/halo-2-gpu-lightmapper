@@ -125,6 +125,9 @@ namespace H2GpuLightmapper.Core.Payload
         public PayloadComponent PwshComponent { get { return RtComponents.FirstOrDefault(c => c.Has("pwsh.exe")); } }
         /// <summary>The rt component whose root holds py.exe (the S0.3 bundle).</summary>
         public PayloadComponent PyComponent { get { return RtComponents.FirstOrDefault(c => c.Has("py.exe")); } }
+        /// <summary>The rt component whose root holds mapbake.py: the internal "bake straight from a .map" entry point plus the separate program h2conv it starts
+        /// (GPL-3.0-or-later, see NOTICES). Null for a payload that has none (the .map path is then refused in plain words).</summary>
+        public PayloadComponent MapbakeComponent { get { return RtComponents.FirstOrDefault(c => c.Has("mapbake.py")); } }
         /// <summary>The engine instance (INST) component: exactly one target=inst component.</summary>
         public PayloadComponent InstComponent
         {

@@ -52,6 +52,8 @@ namespace H2GpuLightmapper.Core.Payload
         public string AppVersion;
         public string Root, Work, InstDir, SlotBase;
         public string PwshDir, PwshExe, PyDir, PyExe;
+        /// <summary>The extracted mapbake component (rt\mapbake-&lt;h8&gt;: mapbake.py + h2conv\) and its entry point; null when the payload has none.</summary>
+        public string MapbakeDir, MapbakePy;
         /// <summary>INST\engine_v373\gpu_bake.ps1 (S0.2: the bake argv is pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File this).</summary>
         public string GpuBakePs1;
         /// <summary>INST\engine_v373\v043-tagwriter\lmw_install.py when present.</summary>
@@ -385,6 +387,8 @@ namespace H2GpuLightmapper.Core.Payload
                 SlotBase = marker == null ? null : marker.Str("slotBase"),
                 PwshDir = RtDir(pw), PwshExe = Path.Combine(RtDir(pw), "pwsh.exe"),
                 PyDir = RtDir(py), PyExe = Path.Combine(RtDir(py), "py.exe"),
+                MapbakeDir = Manifest.MapbakeComponent == null ? null : RtDir(Manifest.MapbakeComponent),
+                MapbakePy = Manifest.MapbakeComponent == null ? null : Path.Combine(RtDir(Manifest.MapbakeComponent), "mapbake.py"),
                 GpuBakePs1 = instFile("engine_v373/gpu_bake.ps1"),
                 LmwInstallPy = instFile("engine_v373/v043-tagwriter/lmw_install.py"),
                 BoundsDb = bdb == null ? null : Path.Combine(inst, bdb.Path.Replace('/', '\\')),

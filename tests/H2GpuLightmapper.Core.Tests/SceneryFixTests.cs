@@ -143,7 +143,19 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static string Scanner { get { return Path.Combine(C.Project, "tools", "scan_scenery_bounds.py"); } }
 
-        /// <summary>A scratch H2EK holding vuthatest's scenario and its one scenery chain (lifepod), copied (READ) from the mine root.</summary>
+        /// <summary>The small test map's scenario (tags-relative, without extension): the environment variable H2LM_TEST_SCENARIO, e.g. scenarios\multi\NAME\NAME. It must place one
+        /// scenery chain, the lifepod. Without it the tests that need it are skipped.</summary>
+        private static string TestScenario
+        {
+            get
+            {
+                string s = Environment.GetEnvironmentVariable("H2LM_TEST_SCENARIO");
+                if (string.IsNullOrWhiteSpace(s)) throw new TestSkip("set H2LM_TEST_SCENARIO to a small test map's scenario (tags-relative, no extension) that places one lifepod scenery chain");
+                return s.Trim();
+            }
+        }
+
+        /// <summary>A scratch H2EK holding the small test map's scenario and its one scenery chain (lifepod), copied (READ) from the mine root.</summary>
         private static string MakeRoot(string leaf, bool withChain)
         {
             string root = C.Sb.Dir("sf\\" + leaf);
@@ -156,7 +168,7 @@ namespace H2GpuLightmapper.Core.Tests
                 File.Copy(from, to);
                 return to;
             };
-            cp(@"scenarios\multi\vuthatest\vuthatest.scenario");
+            cp(TestScenario + ".scenario");
             if (withChain) foreach (var e in new[] { "scenery", "model", "render_model" }) cp(@"h1\vehicles\lifepod\lifepod." + e);
             return root;
         }
@@ -173,7 +185,7 @@ namespace H2GpuLightmapper.Core.Tests
             // a legacy database the user already has: its lines stay byte-for-byte, a timestamped backup is made before it changes
             string legacy = Path.Combine(root, SceneryFixDeps.LegacyDbName);
             File.WriteAllBytes(legacy, System.Text.Encoding.ASCII.GetBytes("# keep me\r\n"));
-            var r1 = RunReal(root, @"scenarios\multi\vuthatest\vuthatest");
+            var r1 = RunReal(root, TestScenario);
             Assert.True(r1.Ran, "ran: " + r1.Error + " | " + string.Join(" | ", r1.Output));
             Assert.Eq(1, r1.Models, "the scenario places one render_model");
             Assert.Seq(new[] { @"h1\vehicles\lifepod\lifepod.render_model" }, r1.Added, "the lifepod was not in an empty database: added");
@@ -183,7 +195,7 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.True(File.ReadAllText(legacy).StartsWith("# keep me\r\n"), "the legacy file's existing line is kept byte-for-byte");
             Assert.Eq(1, Directory.GetFiles(root, SceneryFixDeps.LegacyDbName + ".bak_*").Length, "the legacy file was backed up before it changed");
             string md5 = SafeFs.Md5File(r1.Db);
-            var r2 = RunReal(root, @"scenarios\multi\vuthatest\vuthatest");
+            var r2 = RunReal(root, TestScenario);
             Assert.True(r2.Ran, "second run: " + r2.Error);
             Assert.Eq(0, r2.Added.Count, "nothing to add the second time");
             Assert.Eq(md5, SafeFs.Md5File(r2.Db), "the database file is byte-identical after a no-op scan");
@@ -201,7 +213,7 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.True(full.Ran, "full scan ran: " + full.Error);
             Assert.True(full.Models >= 1, "scanned the tags folder");
             Assert.Contains(string.Join("|", full.Added), "lifepod", "the lifepod was added by the full scan");
-            var scen = RunReal(root, @"scenarios\multi\vuthatest\vuthatest");
+            var scen = RunReal(root, TestScenario);
             Assert.True(scen.Ran, "scenario scan after the full scan: " + scen.Error);
             Assert.Eq(0, scen.Added.Count, "already in the database: nothing added");
             Assert.True(full.Db != null && scen.Db == full.Db, "both scans name the same database file");

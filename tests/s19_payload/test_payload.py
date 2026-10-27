@@ -38,8 +38,8 @@ SANDBOX = os.path.join(os.environ['TEMP'], 's19')      # short on purpose: WORK\
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'cefcf497e5434411ac2a0ac3d3b9a46d'),   # W6 0.6.6 promotion (cabc8449); W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '59d529c5996dc4983f294d52462013a6'),   # W6 0.6.6: dev_AO9 (dev_AO8 7ff83e05); production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '669dcc144a4961043cbb572611d55756'),   # W7 0.6.7 promotion (cefcf497 = 0.6.6); W6 0.6.6 promotion (cabc8449); W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '92ee02265849c266a85c385bc63b0589'),   # W7 0.6.7: dev_AO10 (59d529c5 = dev_AO9, W6 0.6.6): dev_AO9 (dev_AO8 7ff83e05); production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
 }
 EXPECT_PATCHED = {
     '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '3634172b52a97b019a905750f2697300'),   # P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
@@ -113,7 +113,7 @@ def t_manifest_and_zips():
     m = manifest()
     check(m['format'] == 1 and m['appVersion'] == L.app_version(), 'format / appVersion')
     names = {c['name'] for c in m['components']}
-    check(names == {'pwsh-7.6.6', 'py310-np226', 'notices', 'engine'}, 'components %s' % names)
+    check(names == {'pwsh-7.6.6', 'py310-np226', 'mapbake', 'notices', 'engine'}, 'components %s' % names)
     for c in m['components']:
         zp = os.path.join(PAYLOAD, c['resource'].split('/', 1)[1])
         check(c['zipMd5'] == L.md5_file(zp) and c['zipSize'] == os.path.getsize(zp), '%s zip md5/size' % c['name'])
@@ -207,7 +207,8 @@ def t_roles_layout():
     roles = lambda r: [p for p, f in paths.items() if r in f.get('role', '').split(',')]
     check(roles('boundsdb') == ['standalone/h2v_scenery_bounds.db'], 'boundsdb')
     check(roles('gpucheck') == ['standalone/gpucheck.exe'], 'gpucheck')
-    bad = [p for p in paths if p.endswith(('cleanup_farm.ps1', '.md')) or '.bak' in p or '/_backup' in p or '__pycache__' in p
+    bad = [p for p in paths if p.endswith('cleanup_farm.ps1') or (p.endswith('.md') and not p.endswith('/CULLMARK_SPEC.md')) or      # 0.6.7: CULLMARK_SPEC.md ships beside the engine (the spec of the marker-map port)
+            '.bak' in p or '/_backup' in p or '__pycache__' in p
            or '/ao_seam_' in p or 'scnobs' in p or p.endswith('.h') or p.endswith('.cpp')]
     check(not bad, 'unexpected files in INST: %s' % bad)
     rt = [x for x in m['components'] if x['target'] == 'rt']

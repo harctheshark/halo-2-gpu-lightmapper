@@ -8,7 +8,7 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: pre-release (0.6.6).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: pre-release (0.6.7).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -186,6 +186,21 @@ open in another program; the window then offers **Retry**.
 The progress row shows Preflight, Back up, Capture, Derive, GPU bake, Tag writer, AO, Probe capture, Probes, Install and Verify,
 with a live log. The logs of every run are in `<H2EK>\GPU Lightmap Work\standalone\runs\`.
 
+### Baking straight from a .map (new in 0.6.7)
+
+Under **Map**, choose **.map file** instead of **Scenario** and pick a compiled map. The app reads the map, bakes its lightmap
+with the same engine, and writes a lightmapped **copy** next to it (`<name>_gpulm.map`); the input map is never modified. Only
+the lightmap and its bitmap change in the copy. Temporary work files are cleaned up after the run.
+
+- **Supported:** MCC maps built with the Halo 2 Editing Kit, and Halo 2 Vista maps. A Vista map is converted for the bake and,
+  with **Convert result back to Vista** (on by default), written back as a Vista map. Ambient occlusion and light probes work.
+- **Sky cube map:** compiling a map drops the sky's cube-map reference, and the cube map is what gives the sky its ambient fill.
+  For every sky that needs one, a dropdown lists the cube-map bitmaps in your Editing Kit (and any inside the map). A matching
+  stock sky's cube map is chosen automatically when there is one; otherwise pick one, or choose **Leave empty** (the bake then
+  lacks that ambient fill and comes out darker).
+- **Not supported yet:** stock compressed MCC maps (the ones that keep their textures in a separate `textures.dat`).
+- A map with several BSPs asks which BSP to bake.
+
 ## Command line
 
 The same exe works from a terminal, and no window opens.
@@ -194,6 +209,8 @@ The same exe works from a terminal, and no window opens.
 "H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --scenario S --bsp B
       [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap]
       [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture] [--yes] [--no-install]
+"H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --map FILE.map [--map-out OUT.map] [--bsp B]
+      [--sky-cubemap SKY=BITMAP|none|auto] [--vista-out yes|no] [same quality / mode / AO options]
 "H2 GPU Lightmapper.exe" --cli restore --h2ek DIR --scenario S --bsp B [--list | --from BACKUP | --undo-last-install]
 "H2 GPU Lightmapper.exe" --cli doctor [--h2ek DIR]
 "H2 GPU Lightmapper.exe" --cli help
@@ -315,6 +332,9 @@ part of this snapshot. See [docs/BUILDING.md](docs/BUILDING.md) for what is need
 - **The Osoyoos Launcher project and its authors** (num0005 and the Osoyoos Launcher contributors) for the Plücker and
   scenery fixes and the `H2ToolHooks` hook DLL, which this tool ships under their MIT license (and the scenery-bounds database
   that goes with it). Their license is reproduced in [THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES.txt).
+- **h2conv** ([Halo2-Map-Converter](https://github.com/harctheshark/Halo2-Map-Converter), GPL-3.0-or-later), the converter that
+  reads and writes `.map` files for the .map source. It is bundled in the exe's runtime as a separate program; this repository
+  holds none of its code. Its tag definitions come from [Assembly](https://github.com/xboxchaos/assembly) (GPL-3.0).
 - **Unreal Engine Lightmass** (Epic Games) for the ambient-occlusion formula that the AO layer follows.
 - **PowerShell** (Microsoft, MIT), **CPython** (Python Software Foundation) and **numpy** (the NumPy developers), which are
   bundled inside the exe under their own licenses.

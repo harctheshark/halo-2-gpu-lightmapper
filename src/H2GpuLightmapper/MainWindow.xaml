@@ -45,8 +45,15 @@
                     </StackPanel>
                 </GroupBox>
 
-                <!-- 2. Map -->
+                <!-- 2. Map: a scenario of the editing kit's tags (default) or, since milestone 2, a compiled .map file -->
                 <GroupBox Header="Map">
+                    <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                        <RadioButton x:Name="SrcScenario" GroupName="Src" Content="Scenario" IsChecked="True" Checked="Source_Changed"
+                                     ToolTip="Bake a scenario from the editing kit's tags (the normal way)"/>
+                        <RadioButton x:Name="SrcMap" GroupName="Src" Content=".map file" Checked="Source_Changed"
+                                     ToolTip="Bake the lightmap straight from a compiled .map (built with the Halo 2 Editing Kit). The result is a COPY of the map next to it, named &lt;name&gt;_gpulm.map; the map you pick is never modified."/>
+                    </StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -57,13 +64,31 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Style="{StaticResource FieldLabel}" Text="Scenario"/>
+                        <TextBlock x:Name="ScenarioLabel" Style="{StaticResource FieldLabel}" Text="Scenario"/>
                         <ComboBox x:Name="ScenarioCombo" Grid.Column="1" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True" MaxDropDownHeight="320"
                                   SelectionChanged="ScenarioCombo_SelectionChanged" ToolTip="Type to filter, e.g. cyclotron"/>
                         <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="BSP" Margin="0,5,8,0"/>
                         <ComboBox x:Name="BspCombo" Grid.Row="1" Grid.Column="1" Margin="0,5,0,0" SelectionChanged="BspCombo_SelectionChanged"/>
                         <TextBlock x:Name="MapInfo" Grid.Row="2" Grid.ColumnSpan="2" Margin="0,5,0,0" Style="{StaticResource Dim}" Text=""/>
                     </Grid>
+                    <!-- the .map source (shown when ".map file" is ticked): file, output, per-sky cube map dropdowns (built in code: MainWindow.MapBake.cs) -->
+                    <StackPanel x:Name="MapPanel" Visibility="Collapsed" Margin="0,6,0,0">
+                        <DockPanel>
+                            <Button x:Name="MapBrowseBtn" DockPanel.Dock="Right" Content="Browse…" Margin="6,0,0,0" Click="MapBrowse_Click" ToolTip="Pick the compiled .map to bake from"/>
+                            <TextBox x:Name="MapPathBox" IsReadOnly="True" FontSize="11.5" ToolTip="The map to bake from (read only: it is never modified)"/>
+                        </DockPanel>
+                        <DockPanel Margin="0,4,0,0">
+                            <Button x:Name="MapOutBrowseBtn" DockPanel.Dock="Right" Content="Change…" Margin="6,0,0,0" Click="MapOutBrowse_Click" ToolTip="Choose where the baked copy of the map is saved"/>
+                            <TextBlock DockPanel.Dock="Left" Style="{StaticResource FieldLabel}" Text="Output"/>
+                            <TextBox x:Name="MapOutBox" IsReadOnly="True" FontSize="11.5" ToolTip="The baked copy of the map (the input map is never overwritten)"/>
+                        </DockPanel>
+                        <CheckBox x:Name="VistaOutCheck" Margin="0,6,0,0" Visibility="Collapsed" IsChecked="True" Content="Convert result back to Vista" Checked="VistaOut_Changed" Unchecked="VistaOut_Changed"
+                                  ToolTip="Shown for a Halo 2 Vista map only. The map is converted to its MCC form, baked there, and (ticked) the result is converted back to a Vista map. Unticked, the MCC map is the result."/>
+                        <TextBlock x:Name="MapNote" Margin="0,4,0,0" TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource FgDim}"
+                                   Text="Mode, ambient occlusion and quality work as for a scenario. Light probes are baked when the map's BSP has probe points (Standard)."/>
+                        <StackPanel x:Name="SkyPanel" Margin="0,4,0,0"/>
+                    </StackPanel>
+                    </StackPanel>
                 </GroupBox>
 
                 <!-- 3. Quality -->

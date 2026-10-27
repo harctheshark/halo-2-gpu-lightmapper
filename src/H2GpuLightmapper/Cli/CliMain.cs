@@ -23,7 +23,7 @@ namespace H2GpuLightmapper.Cli
     {
         public const int ExitOk = 0, ExitRefused = 2, ExitFailed = 3, ExitCancelled = 4;
 
-        private static readonly string[] HostValues = { "--payload-dir", "--localappdata", "--alias-localappdata", "--alias-volume-root", "--rt-pwsh", "--rt-py" };
+        private static readonly string[] HostValues = { "--payload-dir", "--localappdata", "--alias-localappdata", "--alias-volume-root", "--rt-pwsh", "--rt-py", "--dev-h2conv-home" };
         // --dev-custom: accepted and IGNORED since 0.6.1 (Custom needs no switch; old scripts keep working)
         private static readonly string[] HostSwitches = { "--dev-custom", "--dev-custom-unguarded", "--dev-probes" };
 
@@ -36,6 +36,19 @@ namespace H2GpuLightmapper.Cli
         [--ao-fallback stop|install] [--probes-fallback stop|install] [--install-retries N [--install-retry-wait-s S]]
         [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix]
         [--dry-run [--json] [--probe-points N] [--assume-vram-mb N [--assume-other-vram-mb N]]]
+  ""H2 GPU Lightmapper.exe"" --cli bake --h2ek DIR --map FILE.map [--bsp B] [--map-out OUT.map] [--vista-out yes|no] [--sky-cubemap SKY=BITMAP|none|auto ...]
+        [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap] [--ao [--ao-strength X --ao-exponent Y]]
+        [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix] [--dry-run [--json]]
+        Bakes the lightmap straight from a compiled .map (an MCC map built with the Halo 2 Editing Kit, self-contained; or a Vista map, below) and writes a COPY of the
+        map with only the lightmap and its bitmap replaced, next to the input as <name>_gpulm.map (or --map-out; the input is never modified, an earlier output is set
+        aside as .old_<time>). The map's lightmapper inputs are read into a temporary folder under the work folder (removed after the run) and baked in a real-copy overlay of
+        the kit; the live tags are not written. Stock maps (compressed, textures.dat) are refused. Ambient occlusion (--ao), light probes (--mode standard on a
+        BSP with probe points, or --mode probes = the lightmap tag only changes) and the quality options work as for a scenario; --mode lightmap on a probe BSP
+        resets its probes to zero, like tool lightmaps. --bsp is needed when the scenario has several. A sky with cube map power scale > 0 but no cube map reference (compiled maps
+        lose it) takes the automatic match (the kit's sky with the same sky model) or is left empty with a warning (about 30% darker on headlong);
+        --sky-cubemap <sky tag name or its last part>=<cube-map bitmap tag path | none | auto> sets it per sky (repeatable).
+        A Vista map (cache v8): converted to MCC form with h2conv, baked like an MCC map, injected into an MCC copy; --vista-out yes (the default) then converts
+        the result back to a Vista map = <name>_gpulm.map; --vista-out no keeps the MCC map = <name>_gpulm_mcc.map.
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --scenario S --bsp B [--list | --from BACKUP | --undo-last-install] [--dry-run]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --recover
   ""H2 GPU Lightmapper.exe"" --cli cleanup-alias --h2ek DIR   (removes the H2GLM\<k6> short-path link to that H2EK's work folder)
@@ -132,9 +145,9 @@ namespace H2GpuLightmapper.Cli
             }
         }
 
-        private static CliArgs ParseFor(string[] args, int start, IEnumerable<string> values, IEnumerable<string> switches)
+        private static CliArgs ParseFor(string[] args, int start, IEnumerable<string> values, IEnumerable<string> switches, IEnumerable<string> multi = null)
         {
-            return CliArgs.Parse(args, start, new HashSet<string>(values.Concat(HostValues)), new HashSet<string>(switches.Concat(HostSwitches)));
+            return CliArgs.Parse(args, start, new HashSet<string>(values.Concat(HostValues)), new HashSet<string>(switches.Concat(HostSwitches)), multi == null ? null : new HashSet<string>(multi));
         }
 
         public static HostConfig HostConfigFrom(CliArgs a)
@@ -142,7 +155,7 @@ namespace H2GpuLightmapper.Cli
             return new HostConfig
             {
                 PayloadDir = a.Get("--payload-dir"), LocalAppData = a.Get("--localappdata"), AliasLocalAppData = a.Get("--alias-localappdata"),
-                AliasVolumeRoot = a.Get("--alias-volume-root"), RtPwshDir = a.Get("--rt-pwsh"), RtPyDir = a.Get("--rt-py"),
+                AliasVolumeRoot = a.Get("--alias-volume-root"), RtPwshDir = a.Get("--rt-pwsh"), RtPyDir = a.Get("--rt-py"), DevH2convHome = a.Get("--dev-h2conv-home"),
                 DevCustomUnguarded = a.Has("--dev-custom-unguarded"), DevProbes = a.Has("--dev-probes"),
             };
         }
@@ -163,6 +176,31 @@ namespace H2GpuLightmapper.Cli
             o.Root = a.Get("--h2ek");
             o.ScenarioRel = a.Get("--scenario");
             o.Bsp = a.Get("--bsp");
+            // milestone 2: --map FILE.map instead of --scenario (the .map path); --sky-cubemap only exists there
+            string mp = a.Get("--map");
+            if (mp != null) o.MapPath = mp;
+            o.MapOut = a.Get("--map-out");
+            foreach (var sc in a.GetAll("--sky-cubemap"))
+            {
+                int eq = sc.IndexOf('=');
+                if (eq <= 0 || eq == sc.Length - 1) { a.Errors.Add("--sky-cubemap expects <sky>=<bitmap tag path | none | auto> (got '" + sc + "')"); continue; }
+                o.SkyCubemaps.Add(new KeyValuePair<string, string>(sc.Substring(0, eq).Trim(), sc.Substring(eq + 1).Trim()));
+            }
+            string vo = a.Get("--vista-out");
+            if (vo != null)
+            {
+                if (mp == null) a.Errors.Add("--vista-out is only for --map (a Vista map)");
+                else if (vo.Equals("yes", StringComparison.OrdinalIgnoreCase) || vo.Equals("no", StringComparison.OrdinalIgnoreCase)) { o.VistaOutGiven = true; o.VistaOut = vo.Equals("yes", StringComparison.OrdinalIgnoreCase); }
+                else a.Errors.Add("--vista-out expects yes or no (got '" + vo + "')");
+            }
+            if (mp != null)
+            {
+                // milestone 3: a Vista map (cache v8) is read through its MCC form; its default output name depends on --vista-out
+                try { var hi = MapHeaderInfo.Read(mp.Trim().Trim('"')); o.MapIsVista = hi.Error == null && hi.IsVista; } catch (Exception) { }
+            }
+            if (mp == null && o.MapOut != null) a.Errors.Add("--map-out is only for --map");
+            if (mp == null && o.SkyCubemaps.Count > 0) a.Errors.Add("--sky-cubemap is only for --map (a scenario bake has no sky cube-map choice)");
+            if (mp != null && !string.IsNullOrWhiteSpace(o.ScenarioRel)) a.Errors.Add("give --scenario or --map, not both");
             string q = a.Choice("--quality", "super", "low", "super", "custom");
             o.Quality = q == "low" ? Quality.Low : q == "custom" ? Quality.Custom : Quality.Super;
             var p = a.GetLong("--photons");
@@ -194,23 +232,24 @@ namespace H2GpuLightmapper.Cli
             if (o.ReuseUnrecorded && !o.ReuseCapture) a.Errors.Add("--reuse-unrecorded needs --reuse-capture");
             if (o.ReuseUnrecorded && !o.Worker.HasValue && o.Mode != BakeMode.Probes) a.Errors.Add("--reuse-unrecorded needs --worker N (the farm whose capture is reused)");
             if (string.IsNullOrWhiteSpace(o.Root)) a.Errors.Add("--h2ek DIR is required");
-            if (string.IsNullOrWhiteSpace(o.ScenarioRel)) a.Errors.Add("--scenario S is required");
-            if (string.IsNullOrWhiteSpace(o.Bsp)) a.Errors.Add("--bsp B is required");
+            if (mp == null && string.IsNullOrWhiteSpace(o.ScenarioRel)) a.Errors.Add("--scenario S (or --map FILE.map) is required");
+            if (mp == null && string.IsNullOrWhiteSpace(o.Bsp)) a.Errors.Add("--bsp B is required");
             return o;
         }
 
         private static int Bake(string[] args, int start)
         {
             var a = ParseFor(args, start + 1,
-                new[] { "--h2ek", "--scenario", "--bsp", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
+                new[] { "--h2ek", "--scenario", "--bsp", "--map", "--map-out", "--vista-out", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
                         "--worker", "--probe-worker", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s" },
-                new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded" });
+                new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp" },
+                new[] { "--sky-cubemap" });
             var o = BakeOptionsFrom(a);
             var so = new SessionOptions
             {
                 DryRun = a.Has("--dry-run"), SkipPreflight = a.Has("--dev-skip-preflight"), SkipGpuCheck = a.Has("--dev-skip-gpucheck"),
                 AssumeProbePoints = a.GetInt("--probe-points"), AssumeVramMB = a.GetInt("--assume-vram-mb"), AssumeOtherVramUseMB = a.GetInt("--assume-other-vram-mb"), CancelFile = a.Get("--cancel-file"),
-                AssumeNoFp64 = a.Has("--assume-no-fp64"),
+                AssumeNoFp64 = a.Has("--assume-no-fp64"), KeepMapTemp = a.Has("--dev-keep-mapbake-temp"),
             };
             bool json = a.Has("--json");
             var lw = a.GetDouble("--lock-wait-min");
@@ -230,6 +269,7 @@ namespace H2GpuLightmapper.Cli
             var host = AppHost.Create(HostConfigFrom(a));
             int ae = ArgErrors(a);
             if (ae >= 0) return ae;
+            if (o.IsMapBake) return BakeMap(host, o, so, json);
 
             var s = new BakeSession(host, o, so);
             TextWriter info = json ? Console.Error : Console.Out;
@@ -257,6 +297,40 @@ namespace H2GpuLightmapper.Cli
                     else Console.Out.Write(planned.ToText(true, true));
                 }
                 else if (json) Console.Out.WriteLine(Json.Write(new JObj().Add("schema", "h2lm-bake-plan/1").Add("dryRun", true).Add("refused", s.Reason).Add("exitCode", (long)code), true));
+                return code;
+            }
+            Console.Out.WriteLine("RESULT " + ResultWord(code) + " (exit " + code + ")" + (s.Reason != null ? ": " + s.Reason : ""));
+            if (s.PrecisionSummary != null) Console.Out.WriteLine(s.PrecisionSummary);
+            if (s.Run != null) Console.Out.WriteLine("run folder: " + s.Run.RunDir);
+            return code;
+        }
+
+        /// <summary>The .map path (milestone 2): same output conventions as the scenario bake; a dry run prints the .map plan and starts nothing.</summary>
+        private static int BakeMap(AppHost host, BakeOptions o, SessionOptions so, bool json)
+        {
+            var s = new MapBakeSession(host, o, so);
+            TextWriter info = json ? Console.Error : Console.Out;
+            s.Info += m => info.WriteLine(m);
+            s.Line += l => Console.Out.WriteLine(l.Kind == LineKind.Shell ? "=== " + l.Text : l.IsErr ? "ERR| " + l.Text : l.Text);
+            s.Ask = p => CliAnswer(o, p);
+            string lastStep = null;
+            s.StatusChanged += st =>
+            {
+                if (st.Step != lastStep) { lastStep = st.Step; Console.Out.WriteLine("=== [step] " + st.Step + (st.Phase != null ? "  (phase " + st.Phase + ")" : "")); }
+            };
+            ConsoleCancelEventHandler cc = (sender, e) => { e.Cancel = true; Console.Error.WriteLine("Ctrl+C: cancelling"); s.RequestCancel(); };
+            Console.CancelKeyPress += cc;
+            int code;
+            try { code = s.Execute(); }
+            finally { Console.CancelKeyPress -= cc; }
+            if (so.DryRun)
+            {
+                if (code == ExitOk)
+                {
+                    if (json) Console.Out.WriteLine(Json.Write(s.DryJson, true));
+                    else Console.Out.Write(s.DryText);
+                }
+                else if (json) Console.Out.WriteLine(Json.Write(new JObj().Add("schema", "h2lm-mapbake-plan/1").Add("dryRun", true).Add("refused", s.Reason).Add("exitCode", (long)code), true));
                 return code;
             }
             Console.Out.WriteLine("RESULT " + ResultWord(code) + " (exit " + code + ")" + (s.Reason != null ? ": " + s.Reason : ""));

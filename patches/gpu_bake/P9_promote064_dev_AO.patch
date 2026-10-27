@@ -218,7 +218,7 @@
              # tool_stdout.txt / tool_stderr.txt stay EMPTY on this run (no script reads them; gpulm.log + skel_manifest.bin are unaffected)
 -            $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt"
 +            # v373V2: with -SceneryOwnPermutationOnly the skeleton DLL is injected while the tool is still HELD (v373M), so process_scenery_object's descriptor hook is in
-+            # before the first placement (a 3 s late injection missed placement 0 on vuthatest). Without the switch: the unchanged launch + late injection below.
++            # before the first placement (a 3 s late injection missed placement 0 on a small test map). Without the switch: the unchanged launch + late injection below.
 +            if ($SceneryOwnPermutationOnly) { $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt" -earlyDll $SKDLL -readyLog "$run\gpulm.log" }
 +            else { $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt" }
          } else {

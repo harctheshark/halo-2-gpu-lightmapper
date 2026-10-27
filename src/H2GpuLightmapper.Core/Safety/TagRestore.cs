@@ -281,11 +281,14 @@ namespace H2GpuLightmapper.Core.Safety
             }
             try { SafeFs.MoveNoReplace(markerPath, markerPath + ".done_" + ts); } catch (IOException) { }
             try { res.ClearedMarkers = StartupRecovery.ClearMarkersFor(work, set, now, null, ownLockContent); } catch (Exception) { }
+            // the files went back through .gpulm_new + MoveFileEx: an open Sapien gets no change event for that; signal it
+            string ping = null;
+            try { ping = SapienReloadPing.Touch(set.TagDir, res.Restored).Note; } catch (Exception) { }
             res.Outcome = RestoreOutcome.Restored;
             res.Message = "restored " + res.Restored.Count + " file(s) from " + c.Dir + (res.RenamedAside.Count > 0 ? "; renamed aside " + string.Join(", ", res.RenamedAside) + " (created after that backup)" : "")
                           + (c.Verified ? "" : " (a legacy backup without md5s: restored as found)")
                           + (res.ClearedMarkers.Count > 0 ? "; cleared the unfinished write-back marker(s) of this lightmap: " + string.Join(", ", res.ClearedMarkers) : "")
-                          + ". Reload the map in Sapien.";
+                          + (ping != null ? ". " + ping + " (if it does not reload, reload the map in Sapien)." : ". Reload the map in Sapien.");
             return res;
         }
     }

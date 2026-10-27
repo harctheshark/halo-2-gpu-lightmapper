@@ -204,6 +204,54 @@ def zip_py(spec, out_dir, app_version, keep):
         'pybundle_json_scrubbed': scrubbed}
 
 
+# ---------------------------------------------------------------------------------------------------------------- mapbake
+MAPBAKE_README = """mapbake -- the runtime of H2 GPU Lightmapper's "bake straight from a .map" path.
+mapbake.py and h2conv_run.py belong to H2 GPU Lightmapper. The folder h2conv\\ is a SEPARATE program, "h2conv" (Halo 2 MCC to Vista Converter,
+GPL-3.0-or-later; https://github.com/harctheshark/Halo2-Map-Converter), shipped here as unmodified source files (without its xbox package, Xbox map conversion, which this program never uses): mapbake.py starts
+its command line tools as child processes and does not import or copy their code. Its licence text is LICENSE-h2conv-GPL-3.0.txt; see NOTICES.txt.
+The app reads the map, bakes, and writes a lightmapped copy; the temporary work files of a run are deleted when the run ends.
+"""
+
+
+def zip_mapbake(spec, out_dir, app_version):
+    mb = spec['mapbake']
+    roots = dict(mb['roots'])
+    entries = {}
+    for name, ref in mb['entry'].items():
+        entries[name] = open(L.resolve(ref, roots), 'rb').read()
+    lic_p = L.resolve(mb['license'], roots)
+    lic = open(lic_p, 'rb').read()
+    if L.md5_bytes(lic) != mb['license_md5']:
+        raise Refused('%s md5 %s is not the recorded %s' % (lic_p, L.md5_bytes(lic), mb['license_md5']))
+    entries['LICENSE-h2conv-GPL-3.0.txt'] = lic
+    entries['README.txt'] = MAPBAKE_README.encode('utf-8')
+    src = L.resolve(mb['h2conv_dir'], roots)
+    if os.environ.get('H2LM_H2CONV_DIR'):
+        # 0.6.7: a frozen copy of the converter's h2conv folder (the converter's own folder keeps changing while it is developed; a release is built from the tested copy)
+        src = os.path.abspath(os.environ['H2LM_H2CONV_DIR'])
+    if not os.path.isdir(os.path.join(src, 'data')):
+        raise Refused('%s is not the h2conv package folder' % src)
+    skip_dirs, skip_has, skip_ext = set(mb['skip_dir_names']), mb['skip_name_contains'], tuple(mb['skip_ext'])
+    for dp, dns, fns in os.walk(src):
+        dns[:] = sorted(d for d in dns if d not in skip_dirs)
+        for fn in sorted(fns):
+            if fn.lower().endswith(skip_ext) or any(x in fn for x in skip_has):
+                continue
+            full = os.path.join(dp, fn)
+            if L.is_reparse(full):
+                raise Refused('%s is a reparse point' % full)
+            rel = 'h2conv/' + os.path.relpath(full, src).replace('\\', '/')
+            entries[rel] = open(full, 'rb').read()
+    for need in mb['required']:
+        if need not in entries:
+            raise Refused('the mapbake component lacks %s (is %s the right folder?)' % (need, src))
+    if 'mapbake.py' not in entries:
+        raise Refused('mapbake.py missing')
+    zp = os.path.join(out_dir, mb['zip'])
+    files = L.write_det_zip(zp, sorted(entries.items()))
+    return component(mb['name'], zp, files, 'rt', mb['dirName'], app_version), {'h2conv_source': src, 'files': len(files), 'license_md5': mb['license_md5']}, lic
+
+
 # ---------------------------------------------------------------------------------------------------------------- notices
 SECTIONS = """1. PowerShell {pwsh_version} -- Copyright (c) Microsoft Corporation -- MIT License
    The unmodified files of the official PowerShell-{pwsh_version}-win-x64.zip (sha256 {pwsh_sha256}).
@@ -233,10 +281,21 @@ SECTIONS = """1. PowerShell {pwsh_version} -- Copyright (c) Microsoft Corporatio
    extended in your H2EK folder by this program's scanner (standalone\\scan_scenery_bounds.py, the "Scan and Build Scenery
    Fix Dependencies" button and the automatic scan before a bake) in the format of the Osoyoos database, so it falls under the
    same MIT notice. The scanner keeps h2v_scenery_bounds.db in step, after a timestamped backup.
-   File: licenses\\Osoyoos\\LICENSE.md"""
+   File: licenses\\Osoyoos\\LICENSE.md
+
+6. h2conv (Halo 2 MCC to Vista Converter) -- GPL-3.0-or-later -- the converter that reads and writes the map of the ".map file" source
+   A SEPARATE program, shipped as its unmodified Python source files (without its xbox package, Xbox map conversion, which this program never uses) in the runtime folder mapbake-<hash>\\h2conv\\ (so its complete
+   corresponding source is the shipped files themselves; it also bundles the Assembly layout files, GPL-3.0, and the tag definitions of
+   the blam-tags project, whose definitions originate from Assembly, https://github.com/xboxchaos/assembly, GPL-3.0).
+   Source of h2conv: https://github.com/harctheshark/Halo2-Map-Converter
+   H2 GPU Lightmapper starts the converter's command line tools as child
+   processes through mapbake.py; it does not link to, import or copy their code (aggregation). Under the GPL you may copy, modify and
+   redistribute h2conv under the licence text in licenses\\h2conv\\LICENSE.txt (the GNU General Public License, version 3).
+   It reads a map you choose and writes a lightmapped copy of it; temporary work files are removed when the bake ends. Halo 2 content belongs to Microsoft / 343 Industries and is never shipped by this program.
+   File: licenses\\h2conv\\LICENSE.txt"""
 
 
-def zip_notices(spec, out_dir, app_version, keep, pwsh_info, py_info):
+def zip_notices(spec, out_dir, app_version, keep, pwsh_info, py_info, h2conv_license=None):
     n = spec['notices']
     oso_p = L.resolve(n['osoyoos_license'], {})
     oso = open(oso_p, 'rb').read()
@@ -247,6 +306,8 @@ def zip_notices(spec, out_dir, app_version, keep, pwsh_info, py_info):
            ('licenses/CPython/LICENSE.txt', keep['LICENSE.txt@py']),
            ('licenses/NumPy/LICENSE.txt', keep['site-packages/numpy-2.2.6.dist-info/LICENSE.txt']),
            ('licenses/Osoyoos/LICENSE.md', oso)]
+    if h2conv_license is not None:
+        lic.append(('licenses/h2conv/LICENSE.txt', h2conv_license))
     for p, d in lic:
         if not d:
             raise Refused('license text %s not found in its component' % p)
@@ -337,7 +398,9 @@ def main(argv=None):
         keep = {'LICENSE.txt@pwsh': keep_pwsh['LICENSE.txt'], 'ThirdPartyNotices.txt': keep_pwsh['ThirdPartyNotices.txt'],
                 'LICENSE.txt@py': keep_py['LICENSE.txt'],
                 'site-packages/numpy-2.2.6.dist-info/LICENSE.txt': keep_py['site-packages/numpy-2.2.6.dist-info/LICENSE.txt']}
-        c_not = zip_notices(spec, tmp, ver, keep, i_pwsh, i_py)
+        c_map, i_map, h2c_lic = zip_mapbake(spec, tmp, ver)
+        print('  mapbake %-27s %8.1f MB  %d files  %s' % (c_map['resource'], c_map['zipSize'] / 1e6, c_map['fileCount'], c_map['dirName']))
+        c_not = zip_notices(spec, tmp, ver, keep, i_pwsh, i_py, h2c_lic)
         print('  notice %-28s %8.1f MB  %d files  %s' % (c_not['resource'], c_not['zipSize'] / 1e6, c_not['fileCount'], c_not['dirName']))
         c_inst, srep = zip_inst(spec, os.path.abspath(a.stage), tmp, ver)
         print('  inst   %-28s %8.1f MB  %d files  %s' % (c_inst['resource'], c_inst['zipSize'] / 1e6, c_inst['fileCount'], c_inst['dirName']))
@@ -346,7 +409,7 @@ def main(argv=None):
             raise Refused('the stage report has no features.ao verdict (review fix 15): re-run stage_engine.py')
         if not isinstance(feats.get('probes'), dict) or not isinstance(feats['probes'].get('enabled'), bool):
             raise Refused('the stage report has no features.probes verdict (V5, gate T4): re-run stage_engine.py')
-        man = {'format': 1, 'appVersion': ver, 'components': [c_pwsh, c_py, c_not, c_inst],
+        man = {'format': 1, 'appVersion': ver, 'components': [c_pwsh, c_py, c_map, c_not, c_inst],
                'features': {'ao': {k: v for k, v in feats['ao'].items() if v is not None},
                             'probes': {k: v for k, v in feats['probes'].items() if v is not None}}}
         if isinstance(feats.get('driveRoot'), dict) and isinstance(feats['driveRoot'].get('enabled'), bool):     # X1: optional (an older stage report has none)
@@ -362,7 +425,7 @@ def main(argv=None):
             'seconds': round(time.time() - t0, 1), 'appVersion': ver, 'payload_dir': out, 'manifest_md5': man_md5,
             'stage_report': os.path.join(os.path.abspath(a.stage), 'stage_report.json'),
             'stage_content_hash': srep['content_hash'], 'stage_engine': srep['engine'],
-            'sources': {'pwsh': i_pwsh, 'py': i_py},
+            'sources': {'pwsh': i_pwsh, 'py': i_py, 'mapbake': i_map},
             'zips': [{k: c[k] for k in ('name', 'resource', 'dirName', 'target', 'zipSize', 'zipMd5', 'fileCount', 'totalBytes', 'maxPathLen')}
                      for c in man['components']],
             'payload_bytes': sum(c['zipSize'] for c in man['components']) + os.path.getsize(os.path.join(tmp, 'MANIFEST.json')),

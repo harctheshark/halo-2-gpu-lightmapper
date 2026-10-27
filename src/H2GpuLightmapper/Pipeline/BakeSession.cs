@@ -61,6 +61,24 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>Dev: another file whose appearance requests a cancel (besides RUN\cancel.request).</summary>
         public string CancelFile;
         public DateTime? Now;
+        /// <summary>Milestone 2 (bake straight from a .map): set ONLY by <see cref="MapBakeSession"/> for its nested stage-only bake. Null for every other bake, which then
+        /// runs exactly the code it ran before this field existed.</summary>
+        public OverlayContext Overlay;
+        /// <summary>Dev (MapBakeSession only): keep the temporary work folder (the map's files + overlay) instead of deleting it.</summary>
+        public bool KeepMapTemp;
+    }
+
+    /// <summary>
+    /// The nested bake of a .map: the scenario / BSP / tool live in a real-copy OVERLAY root (<see cref="OverlayRoot"/>: tags = the kit tags + the ones read from the map), while the runtime
+    /// (INST, DLL slots), the worker's farm folder, the GPU lock, the run folder and the history stay in the user's REAL H2EK work folder. gpu_bake sees the overlay through
+    /// H2LM_ROOT / H2LM_WORK (its skeleton overlay must sit under H2LM_ROOT); the overlay work folder holds a junction farm_wNN -> the real farm folder because the estimator
+    /// DLL's capture base is the real slot base.
+    /// </summary>
+    public sealed class OverlayContext
+    {
+        public string RealRoot, RealWork, OverlayRoot, OverlayWork;
+        /// <summary>Lines written to bake.log's header ("pre| ...") and notes added to the plan text (the .map path, the output, the cube map choice ...).</summary>
+        public List<string> PreLines = new List<string>(), PlanNotes = new List<string>();
     }
 
     public sealed class RefusedException : Exception { public RefusedException(string m) : base(m) { } }
@@ -378,11 +396,12 @@ namespace H2GpuLightmapper.Pipeline
                     _bspFromScenario = crossWhy == null;     // a copy beside the scenario must be the BSP the scenario references (checked after the map query)
                 }
             }
-            _work = ShellPaths.WorkOf(_root);
+            _work = _so.Overlay != null ? _so.Overlay.RealWork : ShellPaths.WorkOf(_root);
             string bad = PathTextProblem(_root);
             if (bad != null) Refuse(bad);
             Say("H2 GPU Lightmapper " + _host.AppVersion + (dry ? "   DRY RUN" : "") + "   " + _o.Summary());
             Say("  map " + rel + " / " + _o.Bsp + "   root " + _root);
+            if (_so.Overlay != null) foreach (var pl in _so.Overlay.PreLines) Say(pl);
             CheckCancel();
 
             // ---- preflight (section 8)
@@ -401,7 +420,7 @@ namespace H2GpuLightmapper.Pipeline
             else
             {
                 Say("  preflight ...");
-                _pf = PreflightChecks.Run(_root, new PreflightOptions
+                _pf = PreflightChecks.Run(PfRoot, new PreflightOptions
                 {
                     ProbeWrite = true, RunToolSmoke = true, Custom = _o.Quality == Quality.Custom, CustomPhotons = _o.Photons,
                     InstDirName = inst.DirName, InstMaxPathLen = inst.MaxPathLen, ScenarioRel = rel, Bsp = _o.Bsp,
@@ -418,7 +437,7 @@ namespace H2GpuLightmapper.Pipeline
             // ---- payload: extract what is missing, full verify + repair (section 9)
             if (dry)
             {
-                _rt = _host.Resolve(_root);
+                _rt = _host.Resolve(PfRoot);
                 if (_rt.SlotBase == null)
                 {
                     try { _rt.SlotBase = SlotAliasPlanner.Plan(_work, _host.Paths.AliasLocalAppData, _host.Paths.AliasVolumeRoot).SlotBase + " (planned)"; }
@@ -430,9 +449,9 @@ namespace H2GpuLightmapper.Pipeline
                 Say("  runtime: extract / verify ...");
                 try
                 {
-                    var q = _host.Installer.StartupEnsure(_root, new ExtractOptions { Cancel = _cts.Token });
+                    var q = _host.Installer.StartupEnsure(PfRoot, new ExtractOptions { Cancel = _cts.Token });
                     if (!q.Ok) Refuse("the runtime could not be prepared: " + q);
-                    var v = _host.Installer.VerifyAndRepairBeforeBake(_root, _cts.Token);
+                    var v = _host.Installer.VerifyAndRepairBeforeBake(PfRoot, _cts.Token);
                     Say(string.Format(CultureInfo.InvariantCulture, "  runtime ok ({0:0.0} s md5): slot base {1}", v.Seconds, v.SlotBase));
                 }
                 catch (SlotAliasRefusedException e) { Refuse("no DLL slot base fits this H2EK path: " + e.Message); }
@@ -440,9 +459,17 @@ namespace H2GpuLightmapper.Pipeline
                 catch (RefusedException) { throw; }
                 catch (Exception e) when (e is IOException || e is InvalidDataException || e is UnauthorizedAccessException || e is PathTooLongException || e is TimeoutException)
                 { Refuse("the runtime payload could not be extracted / verified: " + e.Message); }
-                _rt = _host.Resolve(_root);
+                _rt = _host.Resolve(PfRoot);
             }
             _env = BakeEnv.Build(_rt);
+            if (_so.Overlay != null)
+            {
+                // .map bake: tool_fast, the tags and the scenery database come from the overlay root; the shell's own paths (INST, farm folders, run folder) stay real.
+                // gpu_bake gets H2LM_ROOT / H2LM_WORK of the overlay (H2LM_CODE stays the real INST).
+                _rt.Root = _so.Overlay.OverlayRoot;
+                _env.Set("H2LM_ROOT", _so.Overlay.OverlayRoot);
+                _env.Set("H2LM_WORK", _so.Overlay.OverlayWork);
+            }
             CheckCancel();
 
             // ---- GPU + pwsh policy (needs the extracted runtime)
@@ -451,7 +478,7 @@ namespace H2GpuLightmapper.Pipeline
             {
                 bool gpu = !_so.SkipGpuCheck && _rt.GpuCheckExe != null;
                 if (!_so.SkipGpuCheck && _rt.GpuCheckExe == null) Say("  gpucheck: the payload has no gpucheck.exe -- the GPU is not checked");
-                var pf2 = PreflightChecks.Run(_root, new PreflightOptions
+                var pf2 = PreflightChecks.Run(PfRoot, new PreflightOptions
                 {
                     ProbeWrite = false, RunToolSmoke = false, Custom = _o.Quality == Quality.Custom, CustomPhotons = _o.Photons,
                     InstDirName = inst.DirName, InstMaxPathLen = inst.MaxPathLen, ScenarioRel = rel, Bsp = _o.Bsp,
@@ -772,6 +799,9 @@ namespace H2GpuLightmapper.Pipeline
             return null;
         }
 
+        /// <summary>The H2EK folder whose runtime / preflight this bake uses: the overlay's REAL root for a .map bake, else the root itself.</summary>
+        private string PfRoot { get { return _so.Overlay != null ? _so.Overlay.RealRoot : _root; } }
+
         private string PredictRunDir()
         {
             var now = _so.Now ?? DateTime.Now;
@@ -780,9 +810,17 @@ namespace H2GpuLightmapper.Pipeline
 
         private BakePlan BuildPlan(string runDir, bool predicted)
         {
+            var bp = BuildPlanCore(runDir, predicted);
+            if (_so.Overlay != null) bp.Notes.AddRange(_so.Overlay.PlanNotes);
+            return bp;
+        }
+
+        private BakePlan BuildPlanCore(string runDir, bool predicted)
+        {
             return BakePlanner.Build(new PlanInput
             {
                 O = _o, AppVersion = _host.AppVersion, PayloadSource = _host.Source.Describe, Manifest = _host.Manifest, Rt = _rt, Env = _env,
+                OverlayWork = _so.Overlay != null ? _so.Overlay.OverlayWork : null,
                 RunDir = runDir, RunDirPredicted = predicted, Worker = _n, ProbeWorker = _m, WorkerNote = _nNote, ProbeWorkerNote = _mNote,
                 ProbePoints = _points, ProbePointsAssumed = _pointsAssumed, ReuseLightmap = _reuseN, ReuseProbe = _reuseM,
                 Limits = _limits, ProbeWarning = _probeWarning, Precision = _precision, EngineHasCompat = _engineHasCompat,
@@ -1160,7 +1198,7 @@ namespace H2GpuLightmapper.Pipeline
             if (fresh)
                 foreach (var m in CaptureRecord.SupersedeExisting(fs.CaptureOut, DateTime.Now)) Run.Shell("the earlier capture record was renamed aside: " + m);
             var oc = RunWriteBackProcess(fs, marker, bak);
-            if (InstallRan(oc)) MarkInstalled();
+            if (InstallRan(oc)) { MarkInstalled(); SignalSapien(); }
             if (fresh && (oc.Ok || oc.Parser.PhasesSeen.Any(ph => ph != "1"))) WriteCaptureRecord(fs, false);
             if (oc.Cancelled && !_installed) throw new OperationCanceledException("cancelled during the install");
             if (!oc.Ok && !(oc.Cancelled && _installed)) throw FailedStep("the production write-back stopped (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
@@ -1458,6 +1496,7 @@ namespace H2GpuLightmapper.Pipeline
                     BackupDir = plan.InstallBackupDir, AutoBackupRoot = Path.Combine(_work, "_TAGBAK_auto"), Marker = plan.Marker, Env = _env,
                 }, Run);
                 Run.Shell("install: " + r.Message);
+                if (r.SapienPing != null) Run.Shell(r.SapienPing);
                 // review fix (finding 4): status.json names the install backup only when the install changed the live set
                 if (r.Outcome == InstallOutcome.Installed || r.Outcome == InstallOutcome.FailedAfterChange)
                 {
@@ -1484,6 +1523,19 @@ namespace H2GpuLightmapper.Pipeline
                         throw new StepFailedException("the install did not run: " + r.Message);
                 }
             }
+        }
+
+        /// <summary>gpu_bake's [4b] installs through lmw_install (rename-over) and its [4] tool write-back may too: an open Sapien gets no
+        /// file-change event for a rename, so raise the LastWriteTime change it watches (SapienReloadPing). Never throws.</summary>
+        private void SignalSapien()
+        {
+            try
+            {
+                var names = _o.Mode == BakeMode.Probes ? new List<string> { _set.LtmpName } : _set.PresentNames().Where(n => !TagSet.IsRadiance(n)).ToList();
+                var p = SapienReloadPing.Touch(_set.TagDir, names);
+                if (p.Note != null) Run.Shell(p.Note);
+            }
+            catch (Exception) { }
         }
 
         private string RestoreFrom(string backupDir, string marker)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.7 (2026-10-27): pre-release
+
+Exe SHA-256 `38f7d49c3c852f14c0804e3d7cfa1cb39240775155a488580542a7f57f147ea2`.
+
+- **Bake straight from a compiled `.map`.** Window: Map: .map file; CLI `--map FILE.map [--map-out] [--bsp] [--vista-out yes|no] [--sky-cubemap SKY=BITMAP|none|auto]`. MCC maps built with the Editing Kit and Halo 2 Vista maps; AO and light probes work; a dropdown per sky whose cube-map reference the compile lost. The input is never modified; the result is a copy with only the lightmap and its bitmap replaced. Stock compressed maps are refused. The app reads the map, bakes, and writes a lightmapped copy; temporary work files are cleaned up after the run.
+- **Bundled converter (h2conv)** that reads and writes the map: GPL-3.0-or-later, a separate program, https://github.com/harctheshark/Halo2-Map-Converter; shipped as unmodified source in the runtime, not in this repository. NOTICES section 6.
+- **Sapien reload signal** after install, restore and undo.
+- **Engine:** multi-sun maps get their sun photons from the CPU's own cast (box level 98.07% -> 98.31%); `lightmap_cull` / `lightmap_cull_pvs` marker maps partly ported (see README); `{` Ignored-by-Lightmapper fix in exact vertex lighting.
+
 ## 0.6.6 (2026-10-22): pre-release
 
 Exe SHA-256 `60c33ed73398d62c422cb00f72d35b93667f1434f848957c6b8826d1c8a12e9d`.
@@ -7,7 +16,7 @@ Exe SHA-256 `60c33ed73398d62c422cb00f72d35b93667f1434f848957c6b8826d1c8a12e9d`.
 - **Sapien re-saves no longer stop a bake.** The capture guard now compares only what the lightmap depends on (the bitmaps and render models the BSP uses), and `--reuse-capture` is content-aware.
 - **Triplicate corner texels are filled** from covered neighbours with a warning, instead of the `set.d.uv_on_alpha255` refusal (a large count is still refused).
 - **Safety fix:** a refused stage can no longer be marked done or installed. In 0.6.4 / 0.6.5 a Lightmap Only run with a failed final check still ended DONE, and install could run without probes. Re-bake such runs.
-- Checked on an RTX 4090, stage only: light-probe gate re-run (SH 99.533%), triplicate Standard and Lightmap Only on fresh captures, vuthatest AO + exact vertex lighting. Not re-run: AO neutrality and the Custom guard gate (their pinned engine files did not change).
+- Checked on an RTX 4090, stage only: light-probe gate re-run (SH 99.533%), triplicate Standard and Lightmap Only on fresh captures, a small test map with AO + exact vertex lighting. Not re-run: AO neutrality and the Custom guard gate (their pinned engine files did not change).
 
 ## 0.6.5 (2026-10-22): pre-release
 
@@ -40,7 +49,7 @@ Exe SHA-256 `34f0e1a144efc157784cc86290696bb0b3b701d4a9304bbe6a606e74923d0a1b`.
     nothing to switch on; NVIDIA and AMD cards keep full FP64.
   - The window has a new **Graphics card** group (under Quality) that shows the GPU and the precision: `Precision: Full FP64`, or
     `Precision: Compatibility mode (DF64) ...`. The same line is in the log, `--dry-run` and the run summary.
-  - **Experimental.** On an RTX 4090 with the mode forced on, real maps came out identical to full precision (vuthatest,
+  - **Experimental.** On an RTX 4090 with the mode forced on, real maps came out identical to full precision (a small test map,
     earthcity_1, an AO trace of cyclotron). It has not run on a real Intel or Qualcomm GPU or on Windows on ARM.
   - `--force-compat` (command line, for testing) runs those kernels on a GPU that has FP64.
 - **Scenery Multi Permutation Fix (Experimental Improvement)** (Advanced settings, off by default, `--scenery-permutation-fix`).
@@ -50,9 +59,9 @@ Exe SHA-256 `34f0e1a144efc157784cc86290696bb0b3b701d4a9304bbe6a606e74923d0a1b`.
   - It differs from the 2004 tool on purpose. Most maps never need it: giving each shape its own scenery tag avoids the problem.
   - Off is byte-identical to 0.6.3. AO and light probes do not take it (the plan says so).
 - **GPU timeout (TDR) risk reduced again: the photon-lattice step is resumable.**
-  - The one GPU step that had a unit it could not split (about 1.7-2 s per submission on vuthatest even on an RTX 4090, against
+  - The one GPU step that had a unit it could not split (about 1.7-2 s per submission on a small test map even on an RTX 4090, against
     Windows' 2 s limit) now stops after a work budget sized from the measured time and resumes. Bit-identical results.
-  - It is also much faster: on the RTX 4090 vuthatest's lattice went from 16.8 s to about 4 s and cyclotron's from 32.6 s to
+  - It is also much faster: on the RTX 4090 the small test map's lattice went from 16.8 s to about 4 s and cyclotron's from 32.6 s to
     about 6-7 s.
 - **Keep PC responsive is v2.** About 10 ms GPU pieces, each waited for, with an idle gap after each so the GPU is busy about 60%
   of the time, plus lowest GPU and below-normal CPU priority (0.6.3: 40 ms pieces back to back). The lightmap is identical; bakes
@@ -63,7 +72,7 @@ Exe SHA-256 `34f0e1a144efc157784cc86290696bb0b3b701d4a9304bbe6a606e74923d0a1b`.
 - **A fallback to the tool write-back is no longer silent:** the log and the run summary show a yellow warning with the reason.
 - **Scan and Build Scenery Fix Dependencies** lists the added models by name and skips sky models.
 - **Sapien's scratch files** (`temp_scenario`, auto-backups) are no longer listed as maps or read as the bake touching your tags.
-- The 0.6.3 AO stage failure with "2004 Exact Vertex Lighting?" on is fixed (checked end to end on vuthatest).
+- The 0.6.3 AO stage failure with "2004 Exact Vertex Lighting?" on is fixed (checked end to end on a small test map).
 
 ## 0.6.3 (2026-10-20): pre-release
 
@@ -87,7 +96,7 @@ Exe SHA-256 `81264a3c166c3aea392bf57d65db2643993bbc8c18df4c8c4d2687fce3fddcd5`.
   - Gather pacing grows by at most 1.25x per step.
   - Results are identical on every tested map.
   - A per-dispatch survey (`GPULM_DISPATCH_SURVEY=1`) is built in.
-  - **Not fixed:** one unit of the photon lattice is not yet splittable (about 1.7-2 s on vuthatest on an RTX 4090). The log
+  - **Not fixed:** one unit of the photon lattice is not yet splittable (about 1.7-2 s on a small test map on an RTX 4090). The log
     warns above 1.5 s.
 - **Clearer GPU-reset messages.** The engine names the reason for a device loss in plain words and says which step and chunk
   died. The app explains a Windows GPU reset and suggests the responsive option.

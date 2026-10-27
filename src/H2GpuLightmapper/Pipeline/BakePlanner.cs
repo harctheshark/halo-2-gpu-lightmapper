@@ -48,6 +48,9 @@ namespace H2GpuLightmapper.Pipeline
         public ResolvedRuntime Rt;
         public ChildEnvironment Env;
         public string RunDir;
+        /// <summary>Milestone 3 (.map bake): the overlay work folder (H2LM_WORK). gpu_lightprobes.py refuses a --farm that is not directly under H2LM_WORK, so its --farm is the
+        /// overlay's farm_wNN junction (to the same real folder); every path the shell reads stays the real one. Null for every scenario bake.</summary>
+        public string OverlayWork;
         public bool RunDirPredicted;
         public int? Worker, ProbeWorker;
         public string WorkerNote, ProbeWorkerNote;
@@ -399,7 +402,7 @@ namespace H2GpuLightmapper.Pipeline
             if (o.Quality == Quality.Custom)
                 s.Args.AddRange(new[] { "--photons", o.Photons.ToString(CultureInfo.InvariantCulture), "--mc-samples", o.Rays.ToString(CultureInfo.InvariantCulture) });
             if (pi.ReuseProbe) s.Args.Add("--skip-capture");
-            s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", outM, "--pwsh", rt.PwshExe });
+            s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", pi.OverlayWork != null ? FarmDir(pi.OverlayWork, m) : outM, "--pwsh", rt.PwshExe });
             if (o.Fixes) { s.Args.Add("--plucker-fix"); s.Args.Add("--scenery-fix"); }
             if (o.Responsive) s.EnvExtra["GPULM_RESPONSIVE"] = "1";             // X2: gpu_lightprobes.py runs gpu_bake itself and has no -Responsive argument
             s.Params.Add("adds", "GPULM_PROBES=RUN\\probes\\probes.bin and GPULM_SKY_HI=1 for its gpu_bake only (the lightmap capture never sees SKY_HI)");
@@ -410,7 +413,7 @@ namespace H2GpuLightmapper.Pipeline
             return new ResolvedRuntime
             {
                 AppVersion = rt.AppVersion, Root = rt.Root, Work = rt.Work, InstDir = rt.InstDir, SlotBase = rt.SlotBase,
-                PwshDir = rt.PwshDir, PwshExe = rt.PwshExe, PyDir = rt.PyDir, PyExe = rt.PyExe, GpuBakePs1 = script,
+                PwshDir = rt.PwshDir, PwshExe = rt.PwshExe, PyDir = rt.PyDir, PyExe = rt.PyExe, MapbakeDir = rt.MapbakeDir, MapbakePy = rt.MapbakePy, GpuBakePs1 = script,
                 LmwInstallPy = rt.LmwInstallPy, BoundsDb = rt.BoundsDb, ScanSceneryPy = rt.ScanSceneryPy, GpuCheckExe = rt.GpuCheckExe,
             };
         }

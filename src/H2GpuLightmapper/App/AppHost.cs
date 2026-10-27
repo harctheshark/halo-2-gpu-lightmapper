@@ -30,6 +30,8 @@ namespace H2GpuLightmapper.App
         public bool DevCustomUnguarded;
         /// <summary>--dev-probes: allow the light-probe pipeline (Standard on a probe BSP, Lightprobes) before gate T4.</summary>
         public bool DevProbes;
+        /// <summary>--dev-h2conv-home: run the .map path's separate program h2conv from this folder (the one that holds the h2conv package) instead of the payload's copy.</summary>
+        public string DevH2convHome;
     }
 
     public sealed class AppHost

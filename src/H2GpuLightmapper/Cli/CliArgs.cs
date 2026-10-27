@@ -12,12 +12,14 @@ namespace H2GpuLightmapper.Cli
         private readonly Dictionary<string, string> _vals = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly HashSet<string> _switches = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> _used = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<string>> _multi = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         public string Verb { get; private set; }
         public List<string> Errors { get; } = new List<string>();
 
         /// <param name="valueOptions">options that take a value</param>
         /// <param name="switchOptions">options without a value</param>
-        public static CliArgs Parse(IList<string> args, int start, ISet<string> valueOptions, ISet<string> switchOptions)
+        /// <param name="multiOptions">options that take a value and may be given more than once (--sky-cubemap)</param>
+        public static CliArgs Parse(IList<string> args, int start, ISet<string> valueOptions, ISet<string> switchOptions, ISet<string> multiOptions = null)
         {
             var a = new CliArgs();
             int i = start;
@@ -33,6 +35,18 @@ namespace H2GpuLightmapper.Cli
                 {
                     if (inline != null) a.Errors.Add(k + " takes no value");
                     a._switches.Add(k);
+                }
+                else if (multiOptions != null && multiOptions.Contains(k))
+                {
+                    string v = inline;
+                    if (v == null)
+                    {
+                        if (i + 1 >= args.Count) { a.Errors.Add(k + " needs a value"); continue; }
+                        v = args[++i];
+                    }
+                    List<string> l;
+                    if (!a._multi.TryGetValue(k, out l)) a._multi[k] = l = new List<string>();
+                    l.Add(v);
                 }
                 else if (valueOptions.Contains(k))
                 {
@@ -51,6 +65,8 @@ namespace H2GpuLightmapper.Cli
         }
 
         public bool Has(string k) { _used.Add(k); return _switches.Contains(k); }
+        /// <summary>Every value of a repeatable option, in the order given (empty when absent).</summary>
+        public List<string> GetAll(string k) { _used.Add(k); List<string> l; return _multi.TryGetValue(k, out l) ? new List<string>(l) : new List<string>(); }
         public string Get(string k) { _used.Add(k); string v; return _vals.TryGetValue(k, out v) ? v : null; }
 
         public long? GetLong(string k)
@@ -90,6 +106,6 @@ namespace H2GpuLightmapper.Cli
         }
 
         /// <summary>Options that were given but that this verb never reads.</summary>
-        public IEnumerable<string> Unused { get { return _vals.Keys.Concat(_switches).Where(k => !_used.Contains(k)); } }
+        public IEnumerable<string> Unused { get { return _vals.Keys.Concat(_switches).Concat(_multi.Keys).Where(k => !_used.Contains(k)); } }
     }
 }

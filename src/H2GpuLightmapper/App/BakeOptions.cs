@@ -101,9 +101,43 @@ namespace H2GpuLightmapper.App
         public const string ResponsiveLabel ="Keep PC responsive - Slower Bakes!";
         public const string ResponsiveTip = "Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer.";
 
+        // ------------------------------------------------------------------------------------------------------------------ direct .map baking (milestone 2)
+        /// <summary>The compiled .map to bake from (MCC Halo 2 cache built with the Halo 2 Editing Kit). Null = an ordinary scenario bake: every pre-existing bake,
+        /// whose argv and plan must not change by even a byte. Non-null = <see cref="Pipeline.MapBakeSession"/>: the dependency subset of the map is read into a temporary
+        /// work folder, baked there in a real-copy overlay root, and ONLY the lightmap and its bitmap are injected into a COPY of the map.</summary>
+        public string MapPath;
+        /// <summary>The output map (null = <c>&lt;input folder&gt;\&lt;name&gt;_gpulm.map</c>). Never the input.</summary>
+        public string MapOut;
+        /// <summary>Per sky: sky tag name (or its last part) -> a cube-map bitmap tag path, or "none" (leave the Cube Map Reference empty), or "auto" (the automatic
+        /// match). A sky the map has that is not listed gets the preselected default (the automatic match, else none). Only meaningful with <see cref="MapPath"/>.</summary>
+        public List<KeyValuePair<string, string>> SkyCubemaps = new List<KeyValuePair<string, string>>();
+        public bool IsMapBake { get { return MapPath != null; } }
+        public const string MapOutSuffix = "_gpulm", MapOutMccSuffix = "_gpulm_mcc";
+        /// <summary>Milestone 3: the input map is a Vista map (cache v8). Set from the map's header by the window, the command line and the session (the session's reading is the one that counts).
+        /// A Vista map is converted to MCC form, baked like an MCC map and, by <see cref="VistaOut"/>, converted back.</summary>
+        public bool MapIsVista;
+        /// <summary>Vista input only: convert the baked MCC result back to a Vista map (default yes = the window's checkbox "Convert result back to Vista", on). No = the MCC map is the result.
+        /// <see cref="VistaOutGiven"/> is true when the user (CLI --vista-out) chose; giving it for a non-Vista map is refused.</summary>
+        public bool VistaOut = true;
+        public bool VistaOutGiven;
+        public const string VistaOutNotVista = "--vista-out is for a Vista map only (this map is an MCC map, which is baked and written as an MCC map)";
+
+        /// <summary>"&lt;input folder&gt;\&lt;name&gt;_gpulm.map" next to the input; <paramref name="mccIntermediate"/> (a Vista map whose result stays an MCC map): "&lt;name&gt;_gpulm_mcc.map".</summary>
+        public static string DefaultMapOut(string mapPath, bool mccIntermediate = false)
+        {
+            string full = Path.GetFullPath(mapPath.Trim().Trim('"'));
+            return Path.Combine(Path.GetDirectoryName(full), Path.GetFileNameWithoutExtension(full) + (mccIntermediate ? MapOutMccSuffix : MapOutSuffix) + ".map");
+        }
+
+        /// <summary>True when the result is an MCC map made from a Vista map (the user chose not to convert back).</summary>
+        public bool ResultIsMccFromVista { get { return MapIsVista && !VistaOut; } }
+
+        /// <summary>The output path this bake writes (the user's, else the default next to the input).</summary>
+        public string MapOutPath { get { return string.IsNullOrWhiteSpace(MapOut) ? DefaultMapOut(MapPath, ResultIsMccFromVista) : Path.GetFullPath(MapOut.Trim().Trim('"')); } }
+
         public static BakeOptions Defaults() { return new BakeOptions(); }
 
-        public BakeOptions Clone() { return (BakeOptions)MemberwiseClone(); }
+        public BakeOptions Clone() { var c = (BakeOptions)MemberwiseClone(); c.SkyCubemaps = new List<KeyValuePair<string, string>>(SkyCubemaps); return c; }
 
 
         /// <summary>The folder part of a tags-relative tag path ("scenarios\solo\01a_tutorial" for "scenarios\solo\01a_tutorial\01_bsp_1").</summary>
@@ -212,6 +246,7 @@ namespace H2GpuLightmapper.App
         public List<string> Validate(bool customAvailable)
         {
             var e = new List<string>();
+            if (IsMapBake) return ValidateMapBake(customAvailable);
             if (string.IsNullOrWhiteSpace(Root)) e.Add("no H2EK folder given");
             if (string.IsNullOrWhiteSpace(ScenarioRel)) e.Add("no scenario given");
             if (string.IsNullOrWhiteSpace(Bsp)) e.Add("no BSP given");
@@ -240,8 +275,61 @@ namespace H2GpuLightmapper.App
             return e;
         }
 
+        /// <summary>Validation of a .map bake (<see cref="MapPath"/> set). The scenario / BSP are decided from the map; AO and light probes are refused.</summary>
+        private List<string> ValidateMapBake(bool customAvailable)
+        {
+            var e = new List<string>();
+            if (string.IsNullOrWhiteSpace(Root)) e.Add("no H2EK folder given");
+            if (!string.IsNullOrWhiteSpace(ScenarioRel)) e.Add("give either a scenario or a .map, not both");
+            if (string.IsNullOrWhiteSpace(MapPath) || !MapPath.Trim().Trim('"').EndsWith(".map", StringComparison.OrdinalIgnoreCase)) e.Add("the map file must be a .map");
+            else
+            {
+                try
+                {
+                    string inp = Path.GetFullPath(MapPath.Trim().Trim('"')), outp = MapOutPath;
+                    if (string.Equals(inp, outp, StringComparison.OrdinalIgnoreCase)) e.Add("the output map would overwrite the input map: choose another output file");
+                    if (!outp.EndsWith(".map", StringComparison.OrdinalIgnoreCase)) e.Add("the output file must end in .map");
+                }
+                catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException) { e.Add("not a usable map or output path: " + ex.Message); }
+            }
+            if (!string.IsNullOrWhiteSpace(Bsp) && (Bsp.IndexOfAny(new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' }) >= 0 || Bsp.Trim() != Bsp)) e.Add("the BSP name '" + Bsp + "' is not a plain tag name");
+            if (Ao && Mode == BakeMode.Probes) e.Add("ambient occlusion is a lightmap layer: it is not available in Lightprobes mode");
+            if (Ao)
+            {
+                if (!(AoStrength >= AoStrengthMin && AoStrength <= AoStrengthMax)) e.Add(string.Format(CultureInfo.InvariantCulture, "AO strength must be {0} - {1} (got {2})", AoStrengthMin, AoStrengthMax, AoStrength));
+                if (!(AoExponent >= AoExponentMin && AoExponent <= AoExponentMax)) e.Add(string.Format(CultureInfo.InvariantCulture, "AO exponent must be {0} - {1} (got {2})", AoExponentMin, AoExponentMax, AoExponent));
+            }
+            if (VistaOutGiven && !MapIsVista) e.Add(VistaOutNotVista);
+            if (ReuseCapture) e.Add("a capture cannot be reused when baking from a .map (every .map bake makes a new capture in its own temporary copy)");
+            if (Quality == Quality.Custom)
+            {
+                if (!customAvailable) e.Add("Custom quality needs the N3 guarded fullgpu (engine_custom), which this payload does not carry");
+                if (Photons < PhotonsMin || Photons > PhotonsMax) e.Add(string.Format(CultureInfo.InvariantCulture, "photons must be {0:N0} - {1:N0} (got {2:N0})", PhotonsMin, PhotonsMax, Photons));
+                if (Rays < RaysMin || Rays > RaysMax) e.Add("gather rays (MC samples) must be " + RaysMin + " - " + RaysMax + " (got " + Rays + ")");
+            }
+            foreach (var kv in SkyCubemaps)
+                if (string.IsNullOrWhiteSpace(kv.Key) || string.IsNullOrWhiteSpace(kv.Value)) e.Add("--sky-cubemap needs <sky>=<bitmap tag path | none>");
+            foreach (var w in new[] { Worker, ProbeWorker })
+                if (w.HasValue && !Core.Safety.Guards.WorkerAllowed(w.Value)) e.Add("worker " + w.Value + " is not allowed (the standalone uses 200-299; farm_w149 never)");
+            return e;
+        }
+
         public string Summary()
         {
+            if (IsMapBake)
+            {
+                var m = "from map " + Path.GetFileName(MapPath) + "   quality " + QualityToken;
+                if (Quality == Quality.Custom) m += string.Format(CultureInfo.InvariantCulture, " (Experimental: {0:N0} photons, MC {1})", Photons, Rays);
+                m += "   mode " + ModeToken + "   AO " + (Ao ? string.Format(CultureInfo.InvariantCulture, "on (strength {0}, exponent {1})", AoStrength, AoExponent) : "off");
+                if (MapIsVista) m += "   Vista map: " + (VistaOut ? "result converted back to Vista" : "result stays an MCC map");
+                m += "   output " + Path.GetFileName(MapOutPath);
+                if (Responsive) m += "   responsive on";
+                if (ExactVertexLighting) m += "   exact vertex lighting on";
+                if (SceneryPermutationFix) m += "   scenery multi permutation fix on";
+                if (ForceCompat) m += "   compatibility mode (DF64) FORCED";
+                if (!Fixes) m += "   FIXES OFF (dev)";
+                return m;
+            }
             var s = "quality " + QualityToken;
             if (Quality == Quality.Custom) s += string.Format(CultureInfo.InvariantCulture, " (Experimental: {0:N0} photons, MC {1} = {2:N0} rays per gather call)", Photons, Rays, RaysPerCall(Rays));
             s += "   mode " + ModeToken;

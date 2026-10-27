@@ -150,9 +150,9 @@ namespace H2GpuLightmapper
                         // UI test: press Bake (stage-only presets skip the install confirmation); snapshot when the run ends
                         BakeBtn_Click(BakeBtn, null);
                         var guard = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) };
-                        guard.Tick += (s2, a2) => { guard.Stop(); SaveSnapshot(_g.Snapshot + ".timeout.png"); if (_session != null) _session.RequestCancel(); };
+                        guard.Tick += (s2, a2) => { guard.Stop(); SaveSnapshot(_g.Snapshot + ".timeout.png"); CancelBake(); };
                         guard.Start();
-                        if (_session == null) { SaveSnapshot(_g.Snapshot); Close(); }
+                        if (!BakeRunning) { SaveSnapshot(_g.Snapshot); Close(); }
                         return;
                     }
                     SaveSnapshot(_g.Snapshot); Close();
@@ -245,7 +245,7 @@ namespace H2GpuLightmapper
             DetachView();
             _root = root;
             _work = ShellPaths.WorkOf(root);
-            _rt = null; _env = null; _runtimeReady = false; _mapInfo = null;
+            _rt = null; _env = null; _runtimeReady = false; _mapInfo = null; _mapQuery = null;
             WorkBox.Text = _work;
             ToolStatus.Text = "Checking " + root + " …";
             ToolStatus.Foreground = Palette.Dim;
@@ -452,7 +452,7 @@ namespace H2GpuLightmapper
                               Action<T, bool> present = null)
         {
             if (_op != null) { MessageBox.Show(this, "\"" + _op + "\" is still running.", title, MessageBoxButton.OK, MessageBoxImage.Information); return; }
-            if (_session != null) { MessageBox.Show(this, "A bake is running in this window.", title, MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            if (BakeRunning) { MessageBox.Show(this, "A bake is running in this window.", title, MessageBoxButton.OK, MessageBoxImage.Information); return; }
             string why = TagWriteGate.Blocked(work, name);
             if (why != null) { MessageBox.Show(this, why, title, MessageBoxButton.OK, MessageBoxImage.Warning); return; }
             SetOp(name);
@@ -497,7 +497,7 @@ namespace H2GpuLightmapper
 
         private void OnSessionEnding(object sender, SessionEndingCancelEventArgs e)
         {
-            bool tagWrite = _op != null || (_session != null && _session.Run != null && _session.Run.Status.InTagWrite);
+            bool tagWrite = _op != null || (CurRun != null && CurRun.Status.InTagWrite);
             if (tagWrite) e.Cancel = true;      // Windows shows the ShutdownBlock reason; a forced shutdown still ends the process
         }
 
@@ -593,6 +593,7 @@ namespace H2GpuLightmapper
         /// <summary>Info line: probe points, lightmap + environments, the last capture, the last bake. Then the reuse gate.</summary>
         private void RefreshMap()
         {
+            if (IsMapSource) { if (_mapQuery == null) RefreshMapFile(); return; }        // milestone 2: the .map source is queried by MainWindow.MapBake.cs
             string root = _root, scen = CurScenario, bsp = CurBsp;
             if (root == null || scen == null || bsp == null) return;
             int ver = ++_mapVersion;
@@ -737,6 +738,7 @@ namespace H2GpuLightmapper
             o.Responsive = ResponsiveCheck.IsChecked == true;        // X2
             o.ExactVertexLighting = ExactVertexCheck.IsChecked == true;        // W2 (0.6.3): "2004 Exact Vertex Lighting?" -> gpu_bake -ExactVertexLighting
             o.SceneryPermutationFix = SceneryPermCheck.IsChecked == true && SceneryPermCheck.IsEnabled;     // engine-gated: a greyed box is never passed on
+            if (IsMapSource) ApplyMapOptions(o);        // milestone 2: the .map source replaces the scenario fields
             return o;
         }
 
@@ -788,8 +790,14 @@ namespace H2GpuLightmapper
             }
             // Lightmap Only on a probe BSP
             int pts = _mapInfo != null && _mapInfo.Points.HasValue ? _mapInfo.Points.Value : 0;
+            bool ptsKnown = _mapInfo != null && _mapInfo.Ok;
+            if (IsMapSource)       // milestone 3: the .map source knows the probe points from the map query
+            {
+                var sp = _mapQuery != null && _mapQuery.Ok ? _mapQuery.SingleBspProbePoints : null;
+                pts = sp ?? 0; ptsKnown = sp.HasValue;
+            }
             if (MLightmap.IsChecked == true && pts > 0) { ModeNotice.Text = "Resets this BSP's " + pts + " light probes to zero, as `tool lightmaps` does."; ModeNotice.Visibility = Visibility.Visible; }
-            else if (MProbes.IsChecked == true && _mapInfo != null && _mapInfo.Ok && pts == 0) { ModeNotice.Text = "This BSP has no light probe points."; ModeNotice.Visibility = Visibility.Visible; }
+            else if (MProbes.IsChecked == true && ptsKnown && pts == 0) { ModeNotice.Text = "This BSP has no light probe points."; ModeNotice.Visibility = Visibility.Visible; }
             else if (MStandard.IsChecked == true && pts > 0 && !_host.ProbesEnabled)
             {
                 // review fix (finding 14): never a silent downgrade -- Standard on a probe BSP is refused unless this build's payload
@@ -799,6 +807,7 @@ namespace H2GpuLightmapper
             }
             else ModeNotice.Visibility = Visibility.Collapsed;
             if (!_busy) BakeBtn.IsEnabled = _host.HasPayload && _attachRunDir == null && _op == null;
+            ApplyMapModeUi();
             UpdatePrecisionUi();       // the quality / AO choice can change which engine the bake runs: re-read whether it has Compatibility mode
         }
 
@@ -824,7 +833,7 @@ namespace H2GpuLightmapper
 
         private void BakeBtn_Click(object sender, RoutedEventArgs e)
         {
-            if (_op != null || _session != null) return;
+            if (_op != null || BakeRunning) return;
             List<string> perr;
             var o = ReadOptions(out perr);
             var errs = perr.Concat(o.Validate(_host.CustomAvailable)).Distinct().ToList();
@@ -832,6 +841,13 @@ namespace H2GpuLightmapper
             {
                 if (_g.Snapshot != null) { Log(Palette.Bad, "cannot bake yet: " + string.Join("; ", errs)); return; }   // UI test: never a dialog
                 MessageBox.Show(this, string.Join("\n", errs), "Cannot bake yet", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (o.IsMapBake)
+            {
+                try { _settings.Remember(o.Root); _settings.Save(); }
+                catch (Exception ex) { Log(Palette.Warn, "settings.json not saved: " + ex.Message); }
+                StartMapBake(o);
                 return;
             }
             if (!o.StageOnly && _g.Snapshot == null && MessageBox.Show(this, "Bake " + o.ScenarioRel + " / " + o.Bsp + "?\n\n" + o.Summary() + "\n\nThe current lightmap is backed up first; Restore previous lightmap puts it back.",
@@ -939,7 +955,7 @@ namespace H2GpuLightmapper
 
         private void CancelBtn_Click(object sender, RoutedEventArgs e)
         {
-            if (_session != null) { _session.RequestCancel(); SetStatus(Palette.Warn, "Cancelling… (a tag write in progress finishes first)"); return; }
+            if (BakeRunning) { CancelBake(); SetStatus(Palette.Warn, "Cancelling… (a tag write in progress finishes first)"); return; }
             if (_attachRunDir != null)
             {
                 try
@@ -961,12 +977,12 @@ namespace H2GpuLightmapper
                 SetStatus(Palette.Warn, "\"" + _op + "\" is writing the lightmap tags -- the window closes as soon as it has finished.");
                 return;
             }
-            if (_session == null) { DetachView(); return; }
+            if (!BakeRunning) { DetachView(); return; }
             if (MessageBox.Show(this, "A bake is running. Cancel it and close the window when it has stopped?\n(A tag write in progress always finishes first.)", "H2 GPU Lightmapper",
                                 MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
             {
                 _closeAfterBake = true;
-                _session.RequestCancel();
+                CancelBake();
             }
             e.Cancel = true;
         }
@@ -1074,7 +1090,7 @@ namespace H2GpuLightmapper
 
         private void LogsBtn_Click(object sender, RoutedEventArgs e)
         {
-            string dir = _session != null && _session.Run != null ? _session.Run.RunDir : _attachRunDir;
+            string dir = CurRun != null ? CurRun.RunDir : _attachRunDir;
             if (dir == null && _work != null && CurScenario != null && CurBsp != null)
             {
                 string runs = RunFolder.RunsDir(_work);
