@@ -162,7 +162,7 @@ namespace H2GpuLightmapper.Tests
             Assert.True(!has("x = 'SPLIT_BSP_SUPPORT = 1'\n"), "inside a string");
             Assert.True(!has(""), "empty"); Assert.True(!has(null), "null");
             // the real 0.6.4 drivers (read-only, when present) do not carry it
-            string ao = Path.Combine(C.MineWork, @"_research\ao\gpu_ao.py");
+            string ao = Path.Combine(C.MineGlw, @"_research\ao\gpu_ao.py");
             if (File.Exists(ao)) Assert.True(!has(File.ReadAllText(ao)), "production gpu_ao.py (0.6.4 base) has no marker");
         }
 
@@ -187,21 +187,21 @@ namespace H2GpuLightmapper.Tests
             Assert.True(!decl(null), "null script");
             Assert.True(!decl(Script("param(", "  [switch]$SceneryOwnPermutationOnly")), "an unterminated param block fails closed");
             // the real engines (read-only): production 0.6.3 has Responsive + ExactVertexLighting but not the new switch; the dev engine has it
-            string prod = Path.Combine(C.MineWork, @"engine_v373\gpu_bake.ps1");
+            string prod = Path.Combine(C.MineGlw, @"engine_v373\gpu_bake.ps1");
             if (File.Exists(prod))
             {
                 string t = File.ReadAllText(prod);
                 Assert.True(Core.Payload.EngineSwitches.DeclaresSwitch(t, "Responsive") && Core.Payload.EngineSwitches.DeclaresSwitch(t, "ExactVertexLighting"), "production engine_v373 declares -Responsive and -ExactVertexLighting");
                 Assert.True(decl(t), "production engine_v373 (promoted to 0.6.4 on 2026-10-21) declares -SceneryOwnPermutationOnly");
             }
-            string old063 = Path.Combine(C.MineWork, @"engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
+            string old063 = Path.Combine(C.MineGlw, @"engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
             if (File.Exists(old063))
             {
                 string t = File.ReadAllText(old063);
                 Assert.True(Core.Payload.EngineSwitches.DeclaresSwitch(t, "Responsive") && Core.Payload.EngineSwitches.DeclaresSwitch(t, "ExactVertexLighting"), "the 0.6.3 engine (pre-promotion backup) declares -Responsive and -ExactVertexLighting");
                 Assert.True(!decl(t), "the 0.6.3 engine (pre-promotion backup) does NOT declare -SceneryOwnPermutationOnly");
             }
-            string dev = Path.Combine(C.MineWork, @"_research\permself\dev_CO\gpu_bake.ps1");
+            string dev = Path.Combine(C.MineGlw, @"_research\permself\dev_CO\gpu_bake.ps1");
             if (File.Exists(dev)) Assert.True(decl(File.ReadAllText(dev)), "the dev_CO engine declares -SceneryOwnPermutationOnly");
             else if (!File.Exists(prod)) throw new TestSkip("neither the production nor the dev_CO engine is on this PC");
             // the payload gate (in-process: AppHost over the test payloads; nothing extracted, nothing started)
@@ -721,9 +721,16 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(642, GpuLimits.MaxProbePoints(4095), "~640 at -BufCapMB 4095");
             Assert.True(!GpuLimits.CheckProbes(11).Refuse && !GpuLimits.CheckProbes(11).Marginal, "11 points (triplicate) fine");
             Assert.True(!GpuLimits.CheckProbes(281).Refuse && GpuLimits.CheckProbes(281).Marginal, "281: allowed but marginal");
-            Assert.True(GpuLimits.CheckProbes(282).Refuse && GpuLimits.CheckProbes(1024).Refuse, "282 / 1,024 refused");
+            // rc069_a2: the engine bakes more than 281 points in exact batches; only Halo 2's own ceiling (1,024 per BSP) refuses
+            Assert.True(!GpuLimits.CheckProbes(282).Refuse && GpuLimits.CheckProbes(282).Batched && GpuLimits.CheckProbes(282).Batches == 2, "282: not refused, 2 batches");
+            Assert.True(!GpuLimits.CheckProbes(562).Refuse && GpuLimits.CheckProbes(562).Batches == 2 && GpuLimits.CheckProbes(563).Batches == 3, "562 = 2 x 281, 563 needs 3 batches");
+            Assert.True(!GpuLimits.CheckProbes(1024).Refuse && GpuLimits.CheckProbes(1024).Batches == 4, "1,024 (Halo 2's own limit) is allowed: 4 batches");
+            Assert.True(GpuLimits.CheckProbes(1025).Refuse && GpuLimits.CheckProbes(5000).Refuse, "1,025 / 5,000 refused (more than Halo 2 allows)");
+            Assert.True(!GpuLimits.CheckProbes(281).Batched && GpuLimits.CheckProbes(11).Batches == 1, "281 and below: one pass");
+            Assert.Contains(GpuLimits.CheckProbes(300).Message, "2 batches", "the notice names the batch count");
+            Assert.Contains(GpuLimits.CheckProbes(1025).Message, "at most 1,024", "the refusal names Halo 2's limit");
+            Assert.Contains(GpuLimits.CheckProbes(1025).Message, "--mode lightmap", "the refusal names the alternative");
             Assert.True(!GpuLimits.CheckProbes(270).Marginal && GpuLimits.CheckProbes(271).Marginal && !GpuLimits.CheckProbes(271).Refuse, "marginal band = the last 11 points (271-281)");
-            Assert.Contains(GpuLimits.CheckProbes(300).Message, "at most 281", "message names the limit");
             // ---- gpucheck JSON: the default adapter's dedicated memory (never the software adapter)
             string js = "{\"adapters\":[{\"luid\":\"0:1\",\"software\":true,\"dedicated_video_memory\":0},{\"luid\":\"0:2\",\"software\":false,\"dedicated_video_memory\":" + GB24
                         + "},{\"luid\":\"0:3\",\"software\":false,\"dedicated_video_memory\":134217728}],\"default_adapter\":{\"luid\":\"0:2\",\"name\":\"X\",\"feature_level\":\"12_1\"},\"verdict\":{\"ok\":true}}";

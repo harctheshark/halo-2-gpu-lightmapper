@@ -15,14 +15,14 @@
     "files": ["pipeline_guard.py", "derive_owner_table.py", "bp_build.py", "build_objgrids.py", "build_seam_lists_fast.py",
               "seamfast.dll", "merge_parts_seg.py", "sky_gate.py", "cullmark.py", "cull_marker_check.py", "CULLMARK_SPEC.md",
               "v014-inject-estimator/gpulm_estimator.dll",
-              "v041-fullgpu/fullgpu.exe",
+              "v041-fullgpu/fullgpu.exe", "v041-fullgpu/fullgpu_rt.exe",
               "v043-tagwriter/lm_tagwriter.py", "v043-tagwriter/lmw_atlas.py", "v043-tagwriter/lmw_charts.py",
               "v043-tagwriter/lmw_grid.py", "v043-tagwriter/lmw_install.py", "v043-tagwriter/lmw_scenery.py", "v043-tagwriter/lmw_usedset.py",
-              "v043-tagwriter/lmw_skeleton.py", "v043-tagwriter/lmw_validate.py",
+              "v043-tagwriter/lmw_skeleton.py", "v043-tagwriter/lmw_validate.py", "v043-tagwriter/lmw_native.py",
               "v043-tagwriter/lmw_vertex.py", "v043-tagwriter/lmw_gate.py", "v043-tagwriter/lmw_defs.json", "v043-tagwriter/lmw_scen_defs.json",
               "v043-tagwriter/lmw_foliage_fitted.json", "v043-tagwriter/bin/p8group.exe", "v043-tagwriter/bin/packfast.dll",
               "v043-tagwriter/dll/gpulm_estimator.dll"]},
-   {"id": "dev_AO", "from": "GLW:_research/ao/dev_AO10", "to": "_research/ao/dev_AO",
+   {"id": "dev_AO", "from": "GLW:_research/ao/dev_AO14", "to": "_research/ao/dev_AO",
     "comment": "the AO trace engine (gpu_ao trace --engine); its own fullgpu (AO kernels) and ao_merge_parts.py. W5 2026-10-22 (0.6.5): the production source is now _research/ao/dev_AO8 = the 0.6.5-promoted engine_v373 (gpu_bake cabc8449, fullgpu 939e3193: resumable photons, pacers, UMA batch sizing, sky_gate.py) + exactly dev_AO6 AO additions (tests/w5_release_065/make_dev_ao8.py + build_ao8.py; the AO kernel headers are byte-identical to dev_AO6; sky_gate.py ships beside gpu_bake.ps1 as in the engine). W3 2026-10-21 (0.6.4): the production source is now _research/ao/dev_AO6 = the 0.6.4-promoted engine_v373 (gpu_bake 7a033e06, fullgpu 4d245c4d) + exactly dev_AO5 AO additions (tests/w3_rebuild_064/make_dev_ao6.py + build_ao6.py: the AO kernel is created through CSBLOB and has two df64 compat twins, ao_cmp_cs.h / ao_plk_cmp_cs.h). W2 2026-10-20 (0.6.3): the production source is now _research/ao/dev_AO5 = the 05:38-promoted engine_v373 (gpu_bake f13328c7, fullgpu a4080e50) + exactly dev_AO4's AO additions (tests/w2_rebuild_063/make_dev_ao5.py; lmw_gate.py ships in both writer groups: gpu_bake's direct-writer pre-flight lists it). W1 2026-10-20: the production source was _research/ao/dev_AO4 = the PROMOTED engine_v373 (gpu_bake 15771590, fullgpu 48553d9e) + exactly dev_AO2's AO additions (tests/w1_rebuild_062/make_dev_ao4.py); dev_AO2 is the pre-promotion AO engine. V1 2026-10-14: the production source is _research/ao/dev_AO2 (= engine_v373 after the TIE1 promotion + exactly dev_AO's AO additions, fullgpu rebuilt on the current headers); the INST dir keeps the name _research/ao/dev_AO (the shell's InstLayout.AoEngineDir; the shell always passes gpu_ao --engine). _research/ao/dev_AO itself is the historical pre-tie engine and is no longer shipped.",
     "files": ["pipeline_guard.py", "derive_owner_table.py", "bp_build.py", "build_objgrids.py", "build_seam_lists_fast.py",
               "seamfast.dll", "merge_parts_seg.py", "sky_gate.py", "cullmark.py", "cull_marker_check.py", "CULLMARK_SPEC.md", "ao_merge_parts.py",
@@ -41,10 +41,9 @@
     "comment": "gpu_lightprobes.py (P5) comes from the patch step; the lp_* steps it runs",
     "files": ["lp_probes.py", "lp_globals.py", "lp_compose.py", "lp_nearpoint.py", "lp_sh.py", "lp_write_sh.py"]},
    {"id": "glw_code", "from": "GLW:", "to": "",
-    "comment": "the $W code references P1 moved to $WC = INST (cleanup_farm.ps1 is deliberately NOT shipped: only -Cleanup reaches it and the shell never passes -Cleanup)",
+    "comment": "the $W code references P1 moved to $WC = INST (cleanup_farm.ps1 is deliberately NOT shipped: only -Cleanup reaches it and the shell never passes -Cleanup). 0.6.8 RC: inject.exe is no longer shipped; the tool loader is the built H2GpuLightmapper.ToolLoader.exe (see built[], P16)",
     "files": ["cull_marker_check.py", "sky_gate.py", "build_surf_gpu.py", "build_sky_gpu.py", "promote_owner_table.py",
               "build_seam_lists.py", "build_vertdir.py",
-              "v014-inject-estimator/inject.exe",
               "osoyoos/H2ToolHooks.dll",
               "v041-fullgpu/re_owner.bin",
               "v043-tagwriter/lmw_defs.json"],
@@ -56,7 +55,7 @@
     "roles": {"engine_v373/gpu_bake.ps1": "patched:P1+P3+P2+F24", "_research/ao/dev_AO/gpu_bake.ps1": "patched:P1+P3+F24"},
     "tokens": {"OSOY_LAUNCH_MD5": "md5upper:osoyoos/osoy_launch.exe"}},
    {"id": "research", "file": "patches/series_research.json", "label": "S1.4",
-    "roles": {"_research/lightprobes/gpu_lightprobes.py": "patched:P5+P5b", "_research/ao/gpu_ao.py": "patched:P6+P6b+P6c"},
+    "roles": {"_research/lightprobes/gpu_lightprobes.py": "patched:P5+P5b+P5c", "_research/ao/gpu_ao.py": "patched:P6+P6b+P6c"},
     "tokens": {}},
    {"id": "tagio", "file": "patches/tagio/series_tagio.json", "label": "U2",
     "comment": "U2 2026-10-15: the three lmw_tagio.py walkers (engine_v373 + dev_AO tag writers, the GLW-root copy of the map query / lp_* scripts) read SHORT block elements as tool_fast does (the 2004 stock MP scenarios' decorators cache blocks, 52 of 60 bytes). They left the groups above; production keeps the bases (52dc580e / e8aeb703) until the user approves an upstream (series 'upstream' is ready).",
@@ -66,6 +65,15 @@
   ],
   "n4": {"manifest": "patches/N4_ao_seamfix/N4_MANIFEST.json", "label": "S1.8", "role": "patched:N4", "add_role": "new:N4"},
   "built": [
+   {"to": "engine_v373/v043-tagwriter/bin/tw_native.exe", "from": "PROJ:build/twnative/tw_native.exe", "role": "built:TW069", "label": "0.6.9 native tag-writer helper",
+    "record": "PROJ:build/twnative/build_twnative.json", "record_key": "twnative", "source": "PROJ:native/twnative/tw_native.cpp",
+    "replaces": "GLW:engine_v373/v043-tagwriter/bin/tw_native.exe",
+    "comment": "0.6.9: the tag writer's native helper (vertex-lit buckets, direction tables). Built from tw_native.cpp unchanged (dev_TW's, md5 4abcc016), x64, same /O2 /fp:strict flags, with VERSIONINFO + an asInvoker manifest and /Brepro like the tool loader; the dev build in the engine folder (no resources) is only the functional reference. lmw_native.py reaches it as bin/tw_native.exe.",
+    "rebuild": "py -I -B native/twnative/build_twnative.py (reproducible /Brepro, built twice)"},
+   {"to": "v014-inject-estimator/H2GpuLightmapper.ToolLoader.exe", "from": "PROJ:build/toolloader/H2GpuLightmapper.ToolLoader.exe", "role": "built:P16", "label": "0.6.8 tool loader",
+    "record": "PROJ:build/toolloader/build_toolloader.json", "record_key": "toolloader", "source": "PROJ:native/toolloader/inject.cpp",
+    "comment": "0.6.8 RC: replaces inject.exe (Windows Security ML-flagged the old binary). Built from inject.cpp unchanged (md5 fa4eda2a = KEEP v001-device-probe), x86, with VERSIONINFO + an asInvoker manifest; gpu_bake.ps1 reaches it by $INJ (P16). The folder keeps its name until 0.6.9.",
+    "rebuild": "py -I -B native\toolloader\build_toolloader.py (reproducible /Brepro, built twice)"},
    {"to": "osoyoos/osoy_launch.exe", "from": "PROJ:build/out/osoy_launch.exe", "role": "built:P4", "label": "S1.3",
     "replaces": "GLW:osoyoos/osoy_launch.exe",
     "expect_md5": "e2dba7afcaf6967a900ade1d59d01f5d",
@@ -80,6 +88,10 @@
   ],
   "new": [
    {"to": "standalone/sh_stage.py", "from": "PROJ:src/standalone/sh_stage.py", "role": "new:N1", "label": "S1.5"},
+   {"to": "standalone/farm_products.json", "from": "PROJ:src/standalone/farm_products.json", "role": "new:D068", "label": "0.6.8 bounded temp (the farm slim list)",
+    "comment": "the engine-owned list of a farm's phase-3/4 products the shell deletes after a bake when it keeps the capture (TempJanitor / FarmProducts); without it the shell never keeps a farm"},
+   {"to": "_research/ao/ao_existing.py", "from": "PROJ:src/standalone/ao_existing.py", "role": "new:AOX", "label": "0.6.8 xc8 (AO only)",
+    "comment": "AO only: adds the full bake's ambient occlusion to the lightmap that is already installed (no lighting is baked). Ships beside gpu_ao.py (it imports gpu_ao's apply unchanged) and uses the tag writer of the dev_AO engine group (decode / P8 / validate)."},
    {"to": "standalone/scan_scenery_bounds.py", "from": "PROJ:tools/scan_scenery_bounds.py", "role": "new:SF1", "label": "SF1 (Scenery Fix Dependencies scanner)",
     "comment": "SF1 2026-10-20: builds / extends SceneryFixDependencies.db (H2EK root) from the tags; run by 'Scan and Build Scenery Fix Dependencies' and automatically before every bake that uses the scenery fix. Its md5 is recorded in the payload MANIFEST like every file; no expect_md5 pin because the scanner is still being extended."}
   ],
@@ -88,9 +100,9 @@
     "expect_md5": "6814f29a8210aaa3871b68e8ea659c93",
     "comment": "copied into ROOT by the shell only if ROOT has none (never overwritten). W1 2026-10-20: the source is now a project copy (tools/payload/data, md5 6814f29a = the Osoyoos original, the first timestamped backup the scenery scanner made of the live file): the live H2ROOT:h2v_scenery_bounds.db is now extended by the scanner (53767e0b) and must not be what ships"}
   ],
-  "ao_engine": {"group": "dev_AO", "proof": "PROJ:tests/w5_release_065/results/AO_ENGINE_PROOF.json",
+  "ao_engine": {"group": "dev_AO", "proof": "PROJ:tests/rc069/results_a3/AO_ENGINE_PROOF_069a3.json",
    "comment": "stage_engine.check_ao_engine: features.ao is enabled only when this group's v041-fullgpu + v015-direct kernel files equal engine_v373's AND the proof (written by tests/v1_ao_engine/write_proof.py after the static check, the keyed-identical stage-only bake and the deterministic AO trace passed) names the AO fullgpu.exe, production fullgpu.exe and both gather.cpp md5s on disk now"},
-  "probes_gate": {"proof": "PROJ:tests/w7_release_067/results/T4_PROOF.json",
+  "probes_gate": {"proof": "PROJ:tests/rc069/results_a2/T4_PROOF_069a2.json",
    "comment": "V5 gate T4 (stage_engine.check_probes): features.probes (Standard on a probe BSP, Lightprobes only) is enabled only when the T4 proof (written by tests/t4/write_proof.py after Standard super on triplicate scored >= 99.53% SH light vs the CPU super cubes, the lightmap stage was md5-equal to a Lightmap Only run, sh_stage refused a corrupted non-SH byte and Lightprobes only installed into a scratch copy) names the md5 on disk now of every file below (the sources the probe path's INST copies come from; gpu_bake.ps1 / gpu_lightprobes.py are the P1-P3 / P5 bases, their patched results are pinned by the series; U1 2026-10-15: production gpu_bake.ps1 now IS the upstreamed series, so its entry is checked against the pre-upstream base that stage_series verified production was built from; U2 2026-10-15: the two lmw_tagio.py entries are the U2 bases, their patched results are pinned by series_tagio -- U2 changes nothing for equal-size elements, proven by tests/u2_stock_decorators: all 775 production-root scnr / sbsp / ltmp / lightmap bitmaps that walked before walk to identical records (10 more stock-layout scenarios now walk), and the cyclotron / headlong re-stages are byte-identical)",
    "files": {"engine_v373/gpu_bake.ps1": "GLW:engine_v373/gpu_bake.ps1",
              "engine_v373/v041-fullgpu/fullgpu.exe": "GLW:engine_v373/v041-fullgpu/fullgpu.exe",
@@ -113,7 +125,7 @@
               "_research/ao/dev_AO/v014-inject-estimator/gpulm_estimator.dll", "_research/ao/dev_AO/v043-tagwriter/dll/gpulm_estimator.dll"],
   "custom_engine": {
    "comment": "OPTIONAL engine_custom/ = engine_v373 with the N3 guarded fullgpu. Shipped ONLY with --with-custom-engine AND a LATEST.json whose gpu_identity_proof starts with PASS (gate T3a) and whose production_fullgpu_md5 is the current production fullgpu.",
-   "latest": "PROJ:build/fullgpu_guard/LATEST.json"
+   "latest": "PROJ:build/fullgpu_guard_069/LATEST.json"
   }
  },
  "rt": {
@@ -124,13 +136,13 @@
          "rebuild": "\"C:\\Program Files\\Python310\\python.exe\" -I build\\s03\\make_pybundle.py <outdir> --zip build\\s03\\out\\rt-py310-np226.zip"}
  },
  "mapbake": {
-  "comment": "milestone 2 (direct .map baking): the rt component rt/mapbake-<h8>/ = the entry point mapbake.py (this project, src/standalone/mapbake) + the SEPARATE program h2conv (Halo 2 MCC to Vista Converter, GPL-3.0-or-later; copied from its own folder at build time, never into this repository) that mapbake.py starts as a child process. Aggregation, not linking; NOTICES carries the licence text.",
+  "comment": "milestone 2 (direct .map baking): the rt component rt/mapbake-<h8>/ = the entry point mapbake.py (this project, src/standalone/mapbake) + the SEPARATE program h2conv (Halo 2 MCC to Vista Converter: GPL-3.0-or-later source files plus proprietary compiled modules; a release build takes it from the folder H2LM_H2CONV_DIR names, never from this repository) that mapbake.py starts as a child process. Aggregation, not linking; NOTICES carries the licence texts.",
   "name": "mapbake", "zip": "rt-mapbake.zip", "dirName": "mapbake-{h8}",
   "roots": {"CONV": "<folder of the h2conv converter>"},
   "entry": {"mapbake.py": "PROJ:src/standalone/mapbake/mapbake.py", "h2conv_run.py": "PROJ:src/standalone/mapbake/h2conv_run.py"},
   "h2conv_dir": "CONV:h2conv",
   "skip_dir_names": ["__pycache__", "xbox"], "skip_name_contains": [".bak"], "skip_ext": [".pyc", ".pyo"],
-  "required": ["h2conv/__init__.py", "h2conv/extract.py", "h2conv/inject.py", "h2conv/mapbake_query.py", "h2conv/mcc_writer.py", "h2conv/data/tag_defs/sky.json"],
+  "required": ["h2conv/__init__.py", "h2conv/_ra.py", "h2conv/_rc.py", "h2conv/_rp.py", "h2conv/mcc_writer.py", "h2conv/data/tag_defs/sky.json"],
   "license": "PROJ:tools/payload/licenses/h2conv-GPL-3.0.txt", "license_md5": "1ebbd3e34237af26da5dc08a4e440464"
  },
  "notices": {

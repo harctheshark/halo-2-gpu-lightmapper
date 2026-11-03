@@ -50,6 +50,13 @@ namespace H2Lm.Proc
     public sealed class JobProcess : IDisposable
     {
         private static readonly object CreateLock = new object();
+        /// <summary>Every JobProcess whose job object exists now.</summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<JobProcess, byte> LiveJobs = new System.Collections.Concurrent.ConcurrentDictionary<JobProcess, byte>();
+        public static bool IsInAnyJob(int pid)
+        {
+            foreach (var jp in LiveJobs.Keys) { try { if (jp.IsInJob(pid)) return true; } catch (Exception) { } }
+            return false;
+        }
         private IntPtr _job, _proc;
         private Thread _tOut, _tErr;
         private readonly JobProcessOptions _o;
@@ -92,6 +99,7 @@ namespace H2Lm.Proc
             // the job first: a failure here must not leave a suspended process behind
             _job = CreateJobObject(IntPtr.Zero, null);
             if (_job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject");
+            LiveJobs[this] = 0;
             var lim = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
             lim.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | (_o.NoGpFaultErrorBox ? JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION : 0);
             if (!SetInformationJobObject(_job, JobObjectExtendedLimitInformation, ref lim, Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))))
@@ -307,6 +315,7 @@ namespace H2Lm.Proc
         public void Dispose()
         {
             // closing the last job handle kills anything still in the job (KILL_ON_JOB_CLOSE)
+            byte _; LiveJobs.TryRemove(this, out _);
             if (_job != IntPtr.Zero) { CloseHandle(_job); _job = IntPtr.Zero; }
             if (_tOut != null) _tOut.Join(5000);
             if (_tErr != null) _tErr.Join(5000);

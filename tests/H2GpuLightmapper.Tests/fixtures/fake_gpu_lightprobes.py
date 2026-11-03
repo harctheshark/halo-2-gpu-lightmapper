@@ -27,8 +27,9 @@ with open(os.path.join(W, 'fake_calls.log'), 'a', encoding='utf-8') as f:
                             gpulm=sorted(k for k in os.environ if k.startswith('GPULM_')), pythonpath=os.environ.get('PYTHONPATH'))) + '\n')
 if os.path.basename(os.path.abspath(a.farm)).lower() != 'farm_w%02d' % a.worker:
     sys.exit('REFUSED: --farm is not farm_w%02d' % a.worker)
-if os.environ.get('H2LM_WORK') and os.path.normcase(os.path.dirname(os.path.abspath(a.farm))) != os.path.normcase(os.path.abspath(W)):
-    sys.exit('REFUSED: --farm is not under H2LM_WORK')
+_fv = 'H2LM_FARMS' if os.environ.get('H2LM_FARMS') else 'H2LM_WORK'          # P5c (0.6.8): gpu_bake P13 puts the farm under H2LM_FARMS
+if os.environ.get(_fv) and os.path.normcase(os.path.dirname(os.path.abspath(a.farm))) != os.path.normcase(os.path.abspath(os.environ[_fv])):
+    sys.exit('REFUSED: --farm is not under ' + _fv)
 if (a.photons is not None or a.mc_samples is not None) and a.quality != 'custom':
     sys.exit('REFUSED: --photons / --mc-samples need --quality custom')
 if os.path.exists(a.out):

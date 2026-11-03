@@ -26,6 +26,9 @@ namespace H2GpuLightmapper.Tests
             yield return T("e2e 0.6.4: the engine's silent write-back fallback becomes a visible warning in the log and the run summary (pre-flight switch to tool, writer failed + shell fallback), once per run; a clean bake says nothing", FallbackWarning);
             yield return T("e2e: Lightmap Only install = backup + stage-only gpu_bake + the shell's install (real lmw_install, [4b]'s command) + verify + capture record + history", LightmapInstall);
             yield return T("e2e: capture reuse: record -> -SkipCapture; changed tags need --yes; other quality refused", Reuse);
+            yield return T("e2e 0.6.8: farms in WORK\\Temp (safe to delete) (H2LM_FARMS): install from the KEEP stage copy, the farm slimmed to its capture, the DLL-slot alias outside Temp points at it, reuse works, no link in Temp; --cli cleanup empties Temp", TempLayoutBake);
+            yield return T("e2e 0.6.8: the user clears Temp mid-bake -> FAILED (exit 3) 'Nothing was written to your tags', the tags are unchanged, no install ran; the next bake re-creates Temp and installs", TempGoneMidBake);
+            yield return T("e2e 0.6.8 RC (F1): on an H2EK path where only the tool write-back fallback's backups do not fit, a bake that needs the fallback stops before it starts: FAILED (exit 3), nothing written, no second gpu_bake; a bake that does not need it installs", FallbackPathTooLong);
             yield return T("e2e: Lightmap Only + AO: trace / apply / stage, the shell's install; Undo last install restores", AoInstall);
             yield return T("e2e: AO on a map that fell back to the tool writer: stops (exit 3) or installs without AO on request", AoFallback);
             yield return T("e2e: Standard on triplicate: real map query (11 points), probe worker SKY_HI capture, merge, one install", StandardProbes);
@@ -33,6 +36,8 @@ namespace H2GpuLightmapper.Tests
             yield return T("e2e: cancel from another process during phase 3 -> exit 4, lock released, nothing installed", CancelPhase3);
             yield return T("e2e: cancel during the fallback's [4b] install is deferred: the install completes, is VERIFIED, DONE with the cancel noted", CancelDeferred);
             yield return T("e2e: a failing bake -> exit 3 with gpu_bake's reason; the completed capture is still recorded", FailBake);
+            yield return T("e2e 0.6.8 RC (names with spaces): a scenario 'scenarios\\multi\\space test\\space test' bakes and installs (run folder / GPU lock without spaces, gpu_bake gets the path as ONE -Scenario argument); 'map 2' (a separate number word) is refused before anything runs with the rename advice; the dry-run plan of the spaced name", SpacedScenario);
+            yield return T("e2e 0.6.8 RC (antivirus): an INST file missing / changed before a bake is re-extracted (DONE); removed AGAIN right after the re-extraction -> refused before the bake (exit 2) with the Windows Security message; still gone -> refused without extracting; restored -> DONE; removed WHILE the bake runs -> FAILED (exit 3) 'during the bake'", QuarantineRecheck);
             yield return T("e2e: W2 --responsive + --exact-vertex-lighting both reach gpu_bake (bound, in the log), the stage is written, the run folder has the short name; unticked binds neither", W2BothOptions);
             yield return T("e2e: --scenery-permutation-fix reaches gpu_bake (-SceneryOwnPermutationOnly bound, in the log header); an engine without the parameter refuses the bake before gpu_bake is ever started; captures are reusable only with the same setting", SceneryPermBake);
             yield return T("e2e: DF64 Compatibility mode: nothing is passed by default; --force-compat puts GPULM_COMPAT=1 in gpu_bake's (and the AO trace's) environment only; the log header, the engine's own line and the run summary state the precision; an engine without the mode refuses --force-compat before gpu_bake starts", Df64Bake);
@@ -107,7 +112,7 @@ namespace H2GpuLightmapper.Tests
                     Assert.Contains(log, "installed and verified", "the retry installed");
                     foreach (var n in new[] { CycPrefix + ".scenario_structure_lightmap", CycPrefix + "_bitmaps.bitmap", CycPrefix + "_truecolor_bitmaps.bitmap" })
                         Assert.Eq(Md5(Path.Combine(r.Farm(200), "tagw_stage", n)), Md5(Path.Combine(r.CycDir, n)), "the direct writer's stage is installed: " + n);
-                    Assert.Eq(Path.Combine(r.Farm(200), "tag_backup_before_writeback"), RunStatus.Load(run).InstallBackupDir, "[4b]'s backup dir recorded");
+                    Assert.Eq(Path.Combine(run, "tagbak"), RunStatus.Load(run).InstallBackupDir, "0.6.8: the run's RUN\\tagbak recorded");
                     // Undo last install restores the pre-bake set from that backup
                     var l = C.Base("restore"); l.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron", "--undo-last-install" });
                     var u = C.Run(l);
@@ -343,7 +348,8 @@ namespace H2GpuLightmapper.Tests
             Directory.CreateDirectory(runDir);
             new RunStatus { RunDir = runDir, RunTag = "20990101_000000_cyclotron_cyclotron", Worker = 200, State = RunState.Running }.Save();
             CurrentRun.Write(r.Work, runDir, "20990101_000000_cyclotron_cyclotron");
-            File.Copy(Directory.GetFiles(r.Farm(200), "writeback_in_progress.txt.done_*").First(), Path.Combine(r.Farm(200), "writeback_in_progress.txt"));   // its [4b] in progress
+            string mk = Path.Combine(r.Work, @"standalone\markers");     // 0.6.8: the shell's install marker lives in KEEP
+            File.Copy(Directory.GetFiles(mk, "install_w200.json.done_*").First(), Path.Combine(mk, "install_w200.json"));   // its install in progress
             foreach (var extra in new[] { new string[0], new[] { "--undo-last-install" } })
             {
                 var l = C.Base("restore"); l.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron" }); l.AddRange(extra);
@@ -354,11 +360,11 @@ namespace H2GpuLightmapper.Tests
             var lr = C.Base("restore"); lr.AddRange(new[] { "--h2ek", r.Root, "--recover" });
             var rec = C.Run(lr);
             Assert.Eq(2, rec.Exit, "--recover refused BEFORE it looks at the live bake's marker: " + rec);
-            Assert.True(File.Exists(Path.Combine(r.Farm(200), "writeback_in_progress.txt")), "the live bake's marker is untouched");
+            Assert.True(File.Exists(Path.Combine(mk, "install_w200.json")), "the live bake's marker is untouched");
             var scan = Core.Safety.StartupRecovery.Scan(r.Work);
             Assert.True(scan.Single(i => i.Worker == 200).InUse, "startup recovery reports the live bake's marker as in use (never offered): " + string.Join(" | ", scan));
             CurrentRun.Clear(r.Work, runDir);
-            File.Move(Path.Combine(r.Farm(200), "writeback_in_progress.txt"), Path.Combine(r.Farm(200), "writeback_in_progress.txt.test_aside"));
+            File.Move(Path.Combine(mk, "install_w200.json"), Path.Combine(mk, "install_w200.json.test_aside"));
             // a research bake holds the GPU lock
             File.WriteAllText(Path.Combine(r.Work, ".gpu_bake.lock"), "RESEARCH bake by another workflow");
             var l2 = C.Base("restore"); l2.AddRange(new[] { "--h2ek", r.Root, "--scenario", Cyc, "--bsp", "cyclotron" });
@@ -478,6 +484,102 @@ namespace H2GpuLightmapper.Tests
 
         private static string Bytes(string p) { return File.ReadAllText(p); }
 
+        // ------------------------------------------------------------------ 0.6.8 bounded temp
+
+        private static string _farmsPayload;
+        private static string FarmsPayload() { return _farmsPayload ?? (_farmsPayload = C.BuildPayload(C.Sb.Dir("payload_e2e_farms"), farmsFeature: true)); }
+
+        private static void TempLayoutBake()
+        {
+            var r = C.NewRoot();
+            string temp = Path.Combine(r.Work, "Temp (safe to delete)"), farm = Path.Combine(temp, "farm_w200");
+            var res = Ok(DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "Lightmap Only, farms in Temp");
+            string run = RunDirOf(res);
+            Assert.True(!Directory.Exists(r.Farm(200)), "no farm in WORK");
+            Assert.True(File.Exists(Path.Combine(farm, "standalone_capture.json")) && File.Exists(Path.Combine(farm, "capture_id.json")) && File.Exists(Path.Combine(farm, @"skeleton\skel.txt")),
+                        "the capture (record, capture files, cached skeleton) is kept in Temp");
+            Assert.True(!Directory.Exists(Path.Combine(farm, "tagw_stage")), "the farm was slimmed (its stage is a phase-4 product)");
+            Assert.True(!File.Exists(Path.Combine(farm, ".lock")) && !File.Exists(Path.Combine(farm, ".h2lm_run.json")), "the lease was released");
+            Assert.True(File.Exists(Path.Combine(temp, "READ ME - safe to delete.txt")), "Temp has its READ ME");
+            foreach (var n in new[] { CycPrefix + ".scenario_structure_lightmap", CycPrefix + "_bitmaps.bitmap", CycPrefix + "_truecolor_bitmaps.bitmap" })
+                Assert.Eq(Md5(Path.Combine(run, "final_stage", n)), Md5(Path.Combine(r.CycDir, n)), "installed from the KEEP copy: " + n);
+            Assert.Contains(Bytes(r.CycLtmp), "|BAKED super 200", "the baked ltmp");
+            Assert.True(Directory.Exists(Path.Combine(run, @"farm_logs\farm_w200")), "the farm's logs are in KEEP");
+            Assert.Eq(0, SafeFs.FindReparsePointsDeep(temp).Count, "no link was ever created inside Temp");
+            string log = File.ReadAllText(Path.Combine(run, "bake.log"));
+            Assert.Contains(log, "temp: farm_w200 slimmed to its capture", "bake.log says the farm was slimmed");
+            // the DLL slot alias: outside Temp, pointing at it (the sandbox WORK + Temp is longer than the 60-character slot)
+            var mj = Core.Payload.PayloadExtractor.ReadMarker(Path.Combine(r.Work, "_runtime", "0.5.0-s25ffff"));
+            Assert.True(mj != null, "the INST marker");
+            string alias = mj.Str("aliasDir");
+            Assert.True(alias != null && !SafeFs.IsUnderOrSame(alias, temp) && !SafeFs.IsUnderOrSame(alias, r.Work), "the alias exists outside Temp and WORK: " + alias);
+            string at;
+            Assert.True(DllSlots.Junction.TryGetTarget(alias, out at) && DllSlots.Junction.SamePathText(at, temp), "the alias points at Temp: " + at);
+            // reuse from the slimmed farm
+            var re = Ok(DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--reuse-capture"), "reuse of the kept capture");
+            Assert.Contains(File.ReadAllText(Path.Combine(RunDirOf(re), "bake.log")), "-SkipCapture", "the reuse bake ran -SkipCapture on the kept capture");
+            // --cli cleanup: Clean now
+            var cl = C.Base("cleanup"); cl[cl.IndexOf("--payload-dir") + 1] = FarmsPayload(); cl.AddRange(new[] { "--h2ek", r.Root });
+            var cr = C.Run(cl);
+            Assert.Eq(0, cr.Exit, "cleanup: " + cr);
+            Assert.True(!Directory.Exists(farm) && File.Exists(Path.Combine(temp, "READ ME - safe to delete.txt")), "Temp emptied, READ ME kept");
+            Assert.True(File.Exists(Path.Combine(run, "status.json")) && Directory.Exists(Path.Combine(r.Work, "_TAGBAK_ui")), "KEEP untouched by Clean now");
+        }
+
+        private static void TempGoneMidBake()
+        {
+            var r = C.NewRoot();
+            var orig = SetMd5(r.CycDir, CycPrefix);
+            Directory.CreateDirectory(r.Work);
+            File.WriteAllText(Path.Combine(r.Work, "fake_control.txt"), "gpu_bake=wipetemp\n");
+            var res = DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
+            Assert.Eq(3, res.Exit, "FAILED (exit 3): " + res);
+            Assert.Contains(res.Out, "The temporary folder was deleted during the bake. Nothing was written to your tags. Bake again.", "the plain message");
+            var now = SetMd5(r.CycDir, CycPrefix);
+            Assert.Eq(orig.Count, now.Count, "the same set files");
+            foreach (var kv in orig) Assert.Eq(kv.Value, now[kv.Key], "unchanged: " + kv.Key);
+            string run = RunDirOf(res);
+            string log = File.ReadAllText(Path.Combine(run, "bake.log"));
+            Assert.NotContains(log, "start lmw_install install", "no install ran");
+            Assert.True(!File.Exists(Path.Combine(r.Work, @"standalone\markers\install_w200.json")), "no install marker");
+            Assert.Eq(RunState.Failed, RunStatus.Load(run).State, "status FAILED");
+            // the next bake re-creates what it needs and installs
+            File.Delete(Path.Combine(r.Work, "fake_control.txt"));
+            Ok(DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "the next bake");
+            Assert.Contains(Bytes(r.CycLtmp), "|BAKED super 200", "installed by the next bake");
+        }
+
+        /// <summary>0.6.8 RC (F1): the fallback's backup paths only warn in preflight; at bake time a bake that NEEDS the fallback on such a
+        /// path fails cleanly before the fallback process starts.</summary>
+        private static void FallbackPathTooLong()
+        {
+            // the shortest sandbox root on which the fallback's backup (farms in Temp, cyclotron) reaches the limit
+            int len = 0;
+            for (int l = 60; l < 200 && len == 0; l++)
+                if (PathBudget.FallbackOver(@"C:\" + new string('x', l - 3), Cyc, "cyclotron", true) != null) len = l;
+            Assert.True(len > 0, "a root length exists");
+            var r = C.NewRoot(rootLength: len);
+            Assert.Eq(len, r.Root.Length, "the sandbox root has the chosen length");
+            Assert.True(PathBudget.FallbackOver(r.Root, Cyc, "cyclotron", true) != null, "the fallback's backup does not fit here");
+            Assert.True(PathBudget.LongestRequired(PathBudget.Estimate(r.Root, null, 0, Cyc, "cyclotron", true)).Length < PathBudget.Limit, "every required path fits here");
+            var orig = SetMd5(r.CycDir, CycPrefix);
+            Directory.CreateDirectory(r.Work);
+            File.WriteAllText(Path.Combine(r.Work, "fake_control.txt"), "gpu_bake=nostage_once\n");
+            var res = DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
+            Assert.Eq(3, res.Exit, "FAILED (exit 3): " + res);
+            Assert.Contains(res.Out, "needs the tool write-back fallback", "the reason names the fallback");
+            Assert.Contains(res.Out, "Nothing was written to your tags", "the plain promise");
+            Assert.Eq(1, r.Calls("gpu_bake").Count, "the fallback (a second gpu_bake) never started");
+            var now = SetMd5(r.CycDir, CycPrefix);
+            Assert.Eq(orig.Count, now.Count, "the same set files");
+            foreach (var kv in orig) Assert.Eq(kv.Value, now[kv.Key], "unchanged: " + kv.Key);
+            Assert.True(!File.Exists(Path.Combine(r.Work, @"standalone\markers\toolwb_w200.json")), "no tool write-back marker");
+            // the same path without the fallback: the shell's own install works (0.6.7's tolerance)
+            File.Delete(Path.Combine(r.Work, "fake_control.txt"));
+            Ok(DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "a normal bake on the same long path");
+            Assert.Contains(Bytes(r.CycLtmp), "|BAKED super 200", "installed");
+        }
+
         private static void LightmapInstall()
         {
             var r = C.NewRoot();
@@ -519,9 +621,10 @@ namespace H2GpuLightmapper.Tests
                 Assert.Contains(log, s, "bake.log");
             Assert.NotContains(log, "[4b] INSTALL", "no install inside gpu_bake (U3)");
             var startIns = log.Split('\n').FirstOrDefault(x => x.Contains("start lmw_install install"));
-            Assert.True(startIns != null && startIns.Contains(Path.Combine(farm, "tag_backup_before_writeback")) && startIns.Contains(Path.Combine(r.Work, "_TAGBAK_auto"))
-                        && startIns.Contains(Path.Combine(farm, "writeback_in_progress.txt")) && startIns.Contains(@"engine_v373\v043-tagwriter\lmw_install.py"),
-                        "[4b]'s lmw_install arguments: " + startIns);
+            string markers = Path.Combine(r.Work, @"standalone\markers");
+            Assert.True(startIns != null && startIns.Contains(Path.Combine(run, "tagbak")) && !startIns.Contains("_TAGBAK_auto") && startIns.Contains(Path.Combine(run, "final_stage"))
+                        && startIns.Contains(Path.Combine(markers, "install_w200.json")) && startIns.Contains(@"engine_v373\v043-tagwriter\lmw_install.py"),
+                        "0.6.8 lmw_install arguments (KEEP stage copy, RUN\\tagbak, KEEP marker, no _TAGBAK_auto): " + startIns);
             // the child really ran with the shell's environment (from scratch)
             var call = r.Calls("gpu_bake").Single();
             Assert.Eq(0, call.Arr("gpulm").Count, "no GPULM_* leaked into gpu_bake: " + string.Join(",", call.Arr("gpulm")));
@@ -529,10 +632,12 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(true, call.Bool("secret_inherited"), "other inherited variables still reach the child unchanged");
             Assert.NotContains(log, Ctx.SecretValue, "bake.log never holds an inherited variable's value (finding 18)");
             Assert.Eq(true, st.Extra.Bool("installed"), "status.json: installed");
-            Assert.Eq(Path.Combine(farm, "tag_backup_before_writeback"), st.InstallBackupDir, "the install backup is recorded (the shell's install ran, [4b]'s backup dir)");
-            Assert.True(File.Exists(Path.Combine(farm, @"tag_backup_before_writeback\_install_manifest.json")), "lmw_install's manifest in [4b]'s backup dir");
-            Assert.Eq(1, Directory.GetFiles(farm, "writeback_in_progress.txt.done_*").Length, "the marker went through OUT and was set aside .done_ (as [4b])");
-            Assert.Eq(1, Directory.GetDirectories(Path.Combine(r.Work, "_TAGBAK_auto")).Length, "the auto backup (WORK\\_TAGBAK_auto, as [4b])");
+            Assert.Eq(Path.Combine(run, "tagbak"), st.InstallBackupDir, "the install backup is recorded (RUN\\tagbak)");
+            Assert.True(File.Exists(Path.Combine(run, @"tagbak\_install_manifest.json")), "lmw_install's manifest in RUN\\tagbak");
+            Assert.Eq(1, Directory.GetFiles(markers, "install_w200.json.done_*").Length, "the KEEP marker was set aside .done_");
+            Assert.True(!Directory.Exists(Path.Combine(r.Work, "_TAGBAK_auto")), "0.6.8: no _TAGBAK_auto from the shell's install");
+            foreach (var n in new[] { CycPrefix + ".scenario_structure_lightmap", CycPrefix + "_bitmaps.bitmap", CycPrefix + "_truecolor_bitmaps.bitmap" })
+                Assert.Eq(Md5(Path.Combine(run, "final_stage", n)), Md5(Path.Combine(r.CycDir, n)), "installed from the KEEP copy: " + n);
             Assert.Contains(log, "DEV RUNTIME OVERRIDE (--rt-pwsh / --rt-py): these runtimes were NOT md5-verified (versions match the pin)", "the run header was checked against the pin, loudly under the dev override (finding 20)");
             Assert.Eq(null, call.Str("pythonpath"), "PYTHONPATH stripped");
             Assert.Eq(Path.Combine(C.PyDir, "py.exe"), call.Str("py"), "& py = the bundle");
@@ -1173,6 +1278,102 @@ namespace H2GpuLightmapper.Tests
             Assert.True(!File.Exists(Path.Combine(r.Work, ".gpu_bake.lock")), "lock released");
         }
 
+        /// <summary>0.6.8 RC: a .map whose scenario is "bounce progression test" failed with "runTag must be one word" (the run folder kept the spaces and
+        /// the GPU lock refuses them). The run label now turns whitespace into '_'; gpu_bake quotes the name on the tool's command line (P17).</summary>
+        private static void SpacedScenario()
+        {
+            var r = C.NewRoot();
+            string dir = Path.Combine(r.Tags, @"scenarios\multi\space test");
+            Directory.CreateDirectory(dir);
+            foreach (var f in Directory.GetFiles(r.CycDir))
+            {
+                string n = Path.GetFileName(f).Replace("cyclotron_cyclotron", "space test_cyclotron").Replace("cyclotron.scenario", "space test.scenario");
+                if (n.EndsWith(".scenario_structure_bsp", StringComparison.OrdinalIgnoreCase)) n = "cyclotron.scenario_structure_bsp";
+                File.Copy(f, Path.Combine(dir, n));
+            }
+            const string scen = @"scenarios\multi\space test\space test";
+            string ltmp = Path.Combine(dir, "space test_cyclotron_lightmap.scenario_structure_lightmap");
+            Assert.True(File.Exists(ltmp), "the spaced copy has its lightmap tag");
+            // the dry-run plan: the run folder / tag has no space; gpu_bake gets the spaced scenario as ONE argument
+            var dj = C.DryJson(r, "--scenario", scen, "--bsp", "cyclotron", "--mode", "lightmap");
+            Assert.Eq(0, dj.Exit, "dry run: " + dj);
+            var plan = dj.Json();
+            string runDir = plan.Str("runDir") ?? plan.Str("runDirPredicted") ?? "";
+            Assert.True(runDir.Length > 0 && Path.GetFileName(runDir).IndexOf(' ') < 0 && Path.GetFileName(runDir).EndsWith("_space_test_cyclotron", StringComparison.Ordinal), "run folder without spaces: " + runDir);
+            var args = plan.Arr("steps").OfType<JObj>().First(s => s.Str("id") == "gpu-bake").Arr("args").Cast<string>().ToList();
+            Assert.Eq(scen, args[args.IndexOf("-Scenario") + 1], "-Scenario is the spaced path as ONE argument");
+            // the bake itself (fake engine): DONE, installed, the lock and the run tag carried no space
+            var res = C.Bake(r, "--scenario", scen, "--bsp", "cyclotron", "--mode", "lightmap");
+            Ok(res, "the spaced scenario bakes");
+            Assert.Contains(Bytes(ltmp), "|BAKED super 200", "installed into the spaced folder");
+            string run = RunDirOf(res);
+            Assert.True(Path.GetFileName(run).IndexOf(' ') < 0, "run folder without spaces: " + run);
+            Assert.NotContains(res.Out, "runTag must be one word", "the lock took the tag");
+            Assert.True(r.Calls("gpu_bake").Last().Arr("bound").Cast<string>().Contains("Scenario=" + scen), "gpu_bake bound -Scenario to the spaced path");
+            // a separate number word: refused up front, nothing ran
+            string d2 = Path.Combine(r.Tags, @"scenarios\multi\map 2");
+            Directory.CreateDirectory(d2);
+            File.Copy(Path.Combine(r.CycDir, "cyclotron.scenario"), Path.Combine(d2, "map 2.scenario"));
+            File.Copy(Path.Combine(r.CycDir, "cyclotron.scenario_structure_bsp"), Path.Combine(d2, "cyclotron.scenario_structure_bsp"));
+            int calls = r.Calls("gpu_bake").Count;
+            var rf = C.Bake(r, "--scenario", @"scenarios\multi\map 2\map 2", "--bsp", "cyclotron", "--mode", "lightmap");
+            Assert.Eq(2, rf.Exit, "refused: " + rf);
+            Assert.Contains(rf.Out + rf.Err, "Halo 2's tool cannot bake a scenario or BSP whose name has a separate number word ('2'", "the plain reason");
+            Assert.Contains(rf.Out + rf.Err, "scenarios\\multi\\map_2\\map_2", "the rename advice");
+            Assert.Eq(calls, r.Calls("gpu_bake").Count, "nothing ran");
+        }
+
+        private static string InstOf(TestRoot r)
+        {
+            return Directory.GetDirectories(Path.Combine(r.Work, "_runtime")).Single(x => File.Exists(Path.Combine(x, ".complete")));
+        }
+
+        /// <summary>0.6.8 RC: Windows Security removed INST's tool loader (then inject.exe) in the middle of a bake (2026-10-29). SIMULATED here: a deleted / changed
+        /// INST file, --dev-simulate-quarantine (the file is deleted again right after its re-extraction), and the fake engine's quarantine_mid knob.</summary>
+        private static void QuarantineRecheck()
+        {
+            var r = C.NewRoot();
+            var orig = SetMd5(r.CycDir, CycPrefix);
+            string[] bake = { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--no-install" };
+            Ok(C.Bake(r, bake), "the first bake extracts INST");
+            string inst = InstOf(r);
+            const string rel = "engine_v373/v041-fullgpu/fullgpu.exe";
+            string fg = Path.Combine(inst, rel.Replace('/', '\\'));
+            string gb = Path.Combine(inst, @"engine_v373\gpu_bake.ps1");
+            string fgMd5 = Md5(fg), gbMd5 = Md5(gb);
+            byte[] fgBytes = File.ReadAllBytes(fg);
+            // 1. missing + changed -> re-extracted before the bake
+            File.Delete(fg);
+            File.AppendAllText(gb, "\n# changed\n");
+            Ok(C.Bake(r, bake), "re-extracted, DONE");
+            Assert.Eq(fgMd5, Md5(fg), "fullgpu.exe re-extracted");
+            Assert.Eq(gbMd5, Md5(gb), "gpu_bake.ps1 re-extracted");
+            // 2. removed again right after its re-extraction -> refused BEFORE the bake
+            File.Delete(fg);
+            int calls = r.Calls("gpu_bake").Count;
+            var q = C.Bake(r, bake.Concat(new[] { "--dev-simulate-quarantine", rel }).ToArray());
+            Assert.Eq(2, q.Exit, "refused: " + q);
+            Assert.Contains(q.Out, "Windows Security (Defender) removed " + fg + ". It is part of the H2 GPU Lightmapper", "the message names the file");
+            Assert.Contains(q.Out, "Restore it from Windows Security > Protection history, or allow it, then run the bake again. Nothing was written.", "what to do");
+            Assert.Eq(calls, r.Calls("gpu_bake").Count, "gpu_bake never started");
+            // 3. still gone at the next bake (no simulation): refused at once, not extracted a third time
+            var q2 = C.Bake(r, bake);
+            Assert.Eq(2, q2.Exit, "refused again: " + q2);
+            Assert.Contains(q2.Out, "Windows Security (Defender) removed " + fg, "the same message");
+            Assert.True(!File.Exists(fg), "not re-extracted");
+            // 4. the user restores it -> DONE (the record is cleared)
+            File.WriteAllBytes(fg, fgBytes);
+            Ok(C.Bake(r, bake), "restored: DONE");
+            Assert.True(!Directory.GetFiles(Path.Combine(r.Work, "_runtime"), "quarantine_*.txt").Any(), "the quarantine record is gone");
+            // 5. removed WHILE the bake runs -> FAILED with the message instead of the step's own
+            r.Control("gpu_bake=quarantine_mid\n");
+            var m = C.Bake(r, bake);
+            Assert.Eq(3, m.Exit, "failed: " + m);
+            Assert.Contains(m.Out, "Windows Security (Defender) removed " + fg + " during the bake.", "named as the reason");
+            Assert.Contains(m.Out, "[the step reported: ", "the step's own reason kept");
+            foreach (var kv in orig) Assert.Eq(kv.Value, Md5(Path.Combine(r.CycDir, kv.Key)), "untouched " + kv.Key);
+        }
+
         private static void RestoreRecover()
         {
             var r = C.NewRoot();
@@ -1188,9 +1389,9 @@ namespace H2GpuLightmapper.Tests
             foreach (var kv in orig) Assert.Eq(kv.Value, Md5(Path.Combine(r.CycDir, kv.Key)), "restored " + kv.Key);
             // an install that "did not finish": put the last install's marker back
             Ok(C.Bake(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "install again");
-            string farm = r.Farm(200);
-            var done = Directory.GetFiles(farm, "writeback_in_progress.txt.done_*").OrderBy(x => x).Last();
-            File.Copy(done, Path.Combine(farm, "writeback_in_progress.txt"));
+            string farm = Path.Combine(r.Work, @"standalone\markers");      // 0.6.8: the install marker lives in KEEP
+            var done = Directory.GetFiles(farm, "install_w200.json.done_*").OrderBy(x => x).Last();
+            File.Copy(done, Path.Combine(farm, "install_w200.json"));
             var refused = C.Bake(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
             Assert.Eq(2, refused.Exit, "bake refused while an install is unfinished: " + refused);
             Assert.Contains(refused.Out, "did not finish", "reason");
@@ -1198,7 +1399,7 @@ namespace H2GpuLightmapper.Tests
             var rec = C.Run(l);
             Assert.Eq(0, rec.Exit, "recover: " + rec);
             foreach (var kv in orig) Assert.Eq(kv.Value, Md5(Path.Combine(r.CycDir, kv.Key)), "recovered to the pre-install " + kv.Key);
-            Assert.True(!File.Exists(Path.Combine(farm, "writeback_in_progress.txt")), "marker handled (renamed .restored_)");
+            Assert.True(!File.Exists(Path.Combine(farm, "install_w200.json")), "marker handled (renamed .restored_)");
         }
 
         private static void LockWait()

@@ -93,6 +93,7 @@ namespace H2GpuLightmapper
             _aoAvailable = _host.AoEnabled(out _aoWhy);
             if (!_aoAvailable && AoCheck != null) { AoCheck.IsChecked = false; }
             if (Application.Current != null) Application.Current.SessionEnding += OnSessionEnding;
+            InitTempUi();          // 0.6.8 bounded temp: Advanced > Temp folder / Keep captures for reuse / Temp size cap
             _flush = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(120) };
             _flush.Tick += (s, e) => FlushLog();
             _flush.Start();
@@ -131,10 +132,12 @@ namespace H2GpuLightmapper
                         case "advanced": AdvancedExpander.IsExpanded = true; break;
                         case "probes": if (MProbes.Visibility == Visibility.Visible) MProbes.IsChecked = true; break;
                         case "lightmap": MLightmap.IsChecked = true; break;
+                        case "aoonly": MAoOnly.IsChecked = true; break;
                         case "stageonly": StageOnlyCheck.IsChecked = true; break;
                         case "responsive": ResponsiveCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "exactvertex": ExactVertexCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "sceneryperm": SceneryPermCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
+                        case "rebakehint": RebakeHintCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                     }
                 }
                 UpdateOptionUi();
@@ -247,6 +250,7 @@ namespace H2GpuLightmapper
             _work = ShellPaths.WorkOf(root);
             _rt = null; _env = null; _runtimeReady = false; _mapInfo = null; _mapQuery = null;
             WorkBox.Text = _work;
+            TempBox.Text = ShellPaths.TempOf(_work); TempSizeText.Text = "";
             ToolStatus.Text = "Checking " + root + " …";
             ToolStatus.Foreground = Palette.Dim;
             _scenarios.Clear(); _scenarioView.Refresh();
@@ -263,6 +267,7 @@ namespace H2GpuLightmapper
                 {
                     ProbeWrite = false, RunToolSmoke = false, InstDirName = inst == null ? null : inst.DirName, InstMaxPathLen = inst == null ? 0 : inst.MaxPathLen,
                     AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot, AllowDriveRoot = drvOk,
+                    FarmsInTemp = _host.HasPayload && _host.Manifest.FarmsInTemp,
                 });
                 var scen = MapQuery.Scenarios(root);
                 Dispatcher.BeginInvoke(new Action(() =>
@@ -300,6 +305,7 @@ namespace H2GpuLightmapper
                     Dispatcher.BeginInvoke(new Action(() => { if (ver == _rootVersion) SetStatus(Palette.Bad, "The runtime could not be prepared on this H2EK: " + ex.Message); }));
                 }
                 Recovery(ver, root);
+                TempSweep(ver, root);      // 0.6.8: the start-up sweep of this H2EK's temporary folder, then its size
             });
         }
 
@@ -665,11 +671,11 @@ namespace H2GpuLightmapper
                 string extra = null;
                 if (w.HasValue)
                 {
-                    v = CaptureRecord.Evaluate(BakePlanner.FarmDir(work, w.Value), CaptureIdentity.For(o, _host.Manifest, root, engineRel, probes), scen, bsp, probes, () => tags.Value);
+                    v = CaptureRecord.Evaluate(BakePlanner.FarmDir(_host.Installer.FarmRootOf(work), w.Value), CaptureIdentity.For(o, _host.Manifest, root, engineRel, probes), scen, bsp, probes, () => tags.Value);
                     if (o.Mode == BakeMode.Standard && points > 0)
                     {
                         int? m = WorkerPeek.Registered(work, scen, bsp, true);
-                        var vm = m.HasValue ? CaptureRecord.Evaluate(BakePlanner.FarmDir(work, m.Value), CaptureIdentity.For(o, _host.Manifest, root, engineRel, true), scen, bsp, true, () => tags.Value) : null;
+                        var vm = m.HasValue ? CaptureRecord.Evaluate(BakePlanner.FarmDir(_host.Installer.FarmRootOf(work), m.Value), CaptureIdentity.For(o, _host.Manifest, root, engineRel, true), scen, bsp, true, () => tags.Value) : null;
                         extra = vm != null && vm.Allowed ? "the probe capture too" : "the probe pass makes a new probe capture";
                     }
                 }
@@ -693,7 +699,7 @@ namespace H2GpuLightmapper
         {
             if (!IsInitialized) return;
             UpdateOptionUi();
-            if (!_suppress && (sender == QLow || sender == QSuper || sender == QCustom || sender == MStandard || sender == MProbes || sender == MLightmap)) RefreshReuse();
+            if (!_suppress && (sender == QLow || sender == QSuper || sender == QCustom || sender == MStandard || sender == MProbes || sender == MLightmap || sender == MAoOnly)) RefreshReuse();
         }
 
         private void Number_Changed(object sender, TextChangedEventArgs e)
@@ -727,8 +733,8 @@ namespace H2GpuLightmapper
             else if (o.Quality == Quality.Custom) { errors.Add("photons: not a whole number"); o.Photons = -1; }
             if (int.TryParse((RaysBox.Text ?? "").Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out r)) o.Rays = r;
             else if (o.Quality == Quality.Custom) { errors.Add("gather rays: not a whole number"); o.Rays = -1; }
-            o.Mode = MProbes.IsChecked == true ? BakeMode.Probes : MLightmap.IsChecked == true ? BakeMode.Lightmap : BakeMode.Standard;
-            o.Ao = AoCheck.IsChecked == true && o.Mode != BakeMode.Probes;
+            o.Mode = MProbes.IsChecked == true ? BakeMode.Probes : MLightmap.IsChecked == true ? BakeMode.Lightmap : MAoOnly.IsChecked == true && !IsMapSource ? BakeMode.AoOnly : BakeMode.Standard;
+            o.Ao = (AoCheck.IsChecked == true || o.Mode == BakeMode.AoOnly) && o.Mode != BakeMode.Probes;
             if (double.TryParse((AoStrengthBox.Text ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) o.AoStrength = d;
             else if (o.Ao) { errors.Add("AO strength: not a number"); o.AoStrength = double.NaN; }
             if (double.TryParse((AoExponentBox.Text ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) o.AoExponent = d;
@@ -738,11 +744,13 @@ namespace H2GpuLightmapper
             o.Responsive = ResponsiveCheck.IsChecked == true;        // X2
             o.ExactVertexLighting = ExactVertexCheck.IsChecked == true;        // W2 (0.6.3): "2004 Exact Vertex Lighting?" -> gpu_bake -ExactVertexLighting
             o.SceneryPermutationFix = SceneryPermCheck.IsChecked == true && SceneryPermCheck.IsEnabled;     // engine-gated: a greyed box is never passed on
+            o.RebakeHint = RebakeHintCheck.IsChecked == true;        // 0.6.8: GPULM_SKY_HINT=1, reuse bakes only (BakePlanner.ApplyRebakeHint)
             if (IsMapSource) ApplyMapOptions(o);        // milestone 2: the .map source replaces the scenario fields
             return o;
         }
 
         private bool _busy;
+        private bool _wasAoOnly, _aoBeforeAoOnly;          // 0.6.8 xc8: the AO box before "AO only" fixed it ticked
         private string _sceneryTip;
 
         private void UpdateOptionUi()
@@ -751,9 +759,15 @@ namespace H2GpuLightmapper
             bool custom = QCustom.IsChecked == true && QCustom.Visibility == Visibility.Visible;
             CustomPanel.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
             bool probesMode = MProbes.IsChecked == true;
-            AoCheck.IsEnabled = !probesMode && !_busy && _aoAvailable;
-            AoPanel.IsEnabled = AoCheck.IsChecked == true && !probesMode && !_busy && _aoAvailable;
-            AoNote.Text = !_aoAvailable ? "Not available in this build (its AO engine is out of date for the lightmap engine)." : probesMode ? "Not available in Lightprobes mode." : "An artistic layer, not CPU-faithful.";
+            bool aoOnlyMode = MAoOnly.IsChecked == true && !IsMapSource;
+            // AO only IS the AO layer: the box is ticked and fixed while the mode is on, and comes back as the user had it when the mode is left
+            if (aoOnlyMode && !_wasAoOnly) { _aoBeforeAoOnly = AoCheck.IsChecked == true; _wasAoOnly = true; }
+            if (!aoOnlyMode && _wasAoOnly) { _wasAoOnly = false; _suppress = true; AoCheck.IsChecked = _aoBeforeAoOnly; _suppress = false; }
+            if (aoOnlyMode && AoCheck.IsChecked != true) { _suppress = true; AoCheck.IsChecked = true; _suppress = false; }
+            AoCheck.IsEnabled = !probesMode && !aoOnlyMode && !_busy && _aoAvailable;
+            AoPanel.IsEnabled = (AoCheck.IsChecked == true || aoOnlyMode) && !probesMode && !_busy && _aoAvailable;
+            AoNote.Text = !_aoAvailable ? "Not available in this build (its AO engine is out of date for the lightmap engine)." : probesMode ? "Not available in Lightprobes mode."
+                        : aoOnlyMode ? "AO only: added once to the lightmap that is installed now (backed up first). An artistic layer, not CPU-faithful." : "An artistic layer, not CPU-faithful.";
             AoNote.ToolTip = !_aoAvailable ? _aoWhy : null;
             // "Scenery Multi Permutation Fix": enabled only when the engine this quality would run declares -SceneryOwnPermutationOnly
             {
@@ -796,7 +810,8 @@ namespace H2GpuLightmapper
                 var sp = _mapQuery != null && _mapQuery.Ok ? _mapQuery.SingleBspProbePoints : null;
                 pts = sp ?? 0; ptsKnown = sp.HasValue;
             }
-            if (MLightmap.IsChecked == true && pts > 0) { ModeNotice.Text = "Resets this BSP's " + pts + " light probes to zero, as `tool lightmaps` does."; ModeNotice.Visibility = Visibility.Visible; }
+            if (aoOnlyMode) { ModeNotice.Text = "AO only: no lighting is baked. The lightmap that is installed now (ours, the stock tool's or Bungie's) gets ambient occlusion added; if AO is already in it the program asks first."; ModeNotice.Visibility = Visibility.Visible; }
+            else if (MLightmap.IsChecked == true && pts > 0) { ModeNotice.Text = "Resets this BSP's " + pts + " light probes to zero, as `tool lightmaps` does."; ModeNotice.Visibility = Visibility.Visible; }
             else if (MProbes.IsChecked == true && ptsKnown && pts == 0) { ModeNotice.Text = "This BSP has no light probe points."; ModeNotice.Visibility = Visibility.Visible; }
             else if (MStandard.IsChecked == true && pts > 0 && !_host.ProbesEnabled)
             {
@@ -951,6 +966,7 @@ namespace H2GpuLightmapper
             _busy = busy;
             UpdateActionButtons();
             UpdateOptionUi();
+            if (!busy && _work != null) RefreshTempUi();      // 0.6.8: the bake's janitor changed the temporary folder
         }
 
         private void CancelBtn_Click(object sender, RoutedEventArgs e)

@@ -77,5 +77,16 @@ namespace H2GpuLightmapper.Core.Payload
         public static string InstParentOf(string work) { return Path.Combine(work, RuntimeFolderName); }
         /// <summary>WORK\standalone (workers.json, runs\, history.json, current_run.json).</summary>
         public static string StandaloneOf(string work) { return Path.Combine(work, StandaloneFolderName); }
+
+        /// <summary>0.6.8 bounded temp: the folder name of the app's temporary working root inside WORK. Short on purpose (MAX_PATH headroom
+        /// on Steam's default H2EK path); the long explanation is in <see cref="TempReadMeName"/>.</summary>
+        public const string TempFolderName = "Temp (safe to delete)";
+        public const string TempReadMeName = "READ ME - safe to delete.txt";
+        /// <summary>WORK\Temp (safe to delete): the workers (farm_wNN), the .map bake folders (m&lt;6hex&gt;) and the Vista query scratch
+        /// (q&lt;6hex&gt;). Everything in it may be deleted at any moment (even mid-bake): nothing tag safety depends on lives there, and no
+        /// junction or symbolic link is ever created inside it.</summary>
+        public static string TempOf(string work) { return Path.Combine(work, TempFolderName); }
+        /// <summary>WORK\standalone\markers: the install markers (0.6.8: KEEP side, never in Temp) and the restore markers.</summary>
+        public static string MarkersOf(string work) { return Path.Combine(StandaloneOf(work), "markers"); }
     }
 }

@@ -1,0 +1,114 @@
+# title: U2b lmw_tagio: read SHORT block elements as tool_fast does (file element = prefix, rest zero; 2004 stock decorators cache blocks 52 of 60 B) -- U2 re-authored on dev_069 (0.6.9 native tag writer) lmw_tagio.py a0326b65 (engine_v373)
+# source: engine_v373/v043-tagwriter/lmw_tagio.py
+# base-md5: a0326b65fcf81d9432690ec90931e523
+# result-md5: b069e88ded71f575550b344cbdf912bc
+--- a/engine_v373/v043-tagwriter/lmw_tagio.py
++++ b/engine_v373/v043-tagwriter/lmw_tagio.py
+@@ -15,6 +15,11 @@
+                tag_ref  -> namelen bytes + NUL
+                data     -> size bytes
+                string_id/old_string_id -> (value >> 24) bytes
++  SHORT elements (U2, 2026-10-15): a block's FILE element may be smaller than its field set (the 2004 stock MP scenarios'
++             decorators 'cache blocks': version 0, 52 bytes; the field set and every tool re-save: 60).  tool_fast (sub_622B11 /
++             sub_622E95 / sub_6231EF, 'BLM!' files) reads the file element as the PREFIX of the in-memory element, the rest zero;
++             a field at / past the file element's end is zero and owns nothing in the child stream (a struct there has no
++             header).  Walk does the same and lists such blocks in W.short; a file element LARGER than its field set is refused.
+ 
+ Also here: block and tag-reference splices (d02 / d04 semantics), the header CRC, and the lightmap bitmap writer
+ (repro tagwrite.write_bitmap, byte-exact against V362 with its pointer bases).
+@@ -321,6 +326,7 @@
+ 
+     fmode = 0            # class defaults: SubWalk (lmw_scenery) builds its own instance state
+     _root_end = 0
++    short = None    # U2: block path -> (file element size, field-set size) of every block read SHORT (see the module doc)
+ 
+     def __init__(self, data, group, D=None, keep_fields=False):
+         self.d = data
+@@ -334,6 +340,7 @@
+         self.fields = [] if keep_fields else None
+         self.fmode = 0 if not keep_fields else (2 if keep_fields == 'sparse' else 1)   # 0.6.9: 'sparse' = only the root element's fields + lighting-environment fields
+         self._root_end = 0
++        self.short = {}
+         if len(data) < 0x50 or data[0x3C:0x40] != b'!MLB':
+             raise TagIOError('not a tag file (no BLM! signature)')
+         g4 = data[0x24:0x28][::-1].decode('latin1')
+@@ -350,23 +357,33 @@
+         if sig != b'dfbt' or cnt != count:
+             raise TagIOError('%s @0x%X: bad block header %r count %d (expected %d)' % (path, pos, sig, cnt, count))
+         fv, size = self.D.fieldset(bd, ver)
++        elim = None
+         if esz != size:
+-            raise TagIOError('%s @0x%X: element size %d, field set says %d' % (path, pos, esz, size))
++            # U2: tool_fast reads a SHORT file element as the prefix of its element, the rest zero (module doc); larger: refused
++            if not 0 < esz < size:
++                raise TagIOError('%s @0x%X: element size %d, field set says %d' % (path, pos, esz, size))
++            elim = esz
+         lay, tot = self.D.layout(fv)
+-        if tot != esz:
+-            raise TagIOError('%s: layout total %d != element size %d' % (path, tot, esz))
++        if tot != size:
++            raise TagIOError('%s: layout total %d != element size %d' % (path, tot, size))
+         b = Blk(path, pos, cnt, esz, pos + 16, self.D.bd[bd]['name'], ver, fv)
+         if self.fmode == 2 and path == 'root':
+             self._root_end = pos + 16 + esz
+         self.blocks.append(b)
+         self.bpath[path] = b
++        if elim is not None:
++            if self.short is None:     # a Walk subclass that does not run Walk.__init__
++                self.short = {}
++            self.short[path] = (esz, size)
+         base = pos + 16
+         pos = base + cnt * esz
+         for k in range(cnt):
+-            pos = self._children(pos, base + k * esz, fv, '%s[%d]' % (path, k))
++            pos = self._children(pos, base + k * esz, fv, '%s[%d]' % (path, k), elim)
+         return pos
+ 
+-    def _children(self, pos, eoff, fields_va, path):
++    def _children(self, pos, eoff, fields_va, path, elim=None):
++        """elim (U2): the file size of a SHORT element (None: the whole element is in the file).  A field that does not fit in
++        the file element is zero in the tool's element: it owns nothing in the child stream and is not recorded."""
+         d = self.d
+         lay, tot = self.D.layout(fields_va)
+         fl = self.fields
+@@ -375,6 +392,11 @@
+         rend = self._root_end
+         for off, t, nm, df, ex in lay:
+             fo = eoff + off
++            if elim is not None and off + self.D.fsize(t, df, ex) > elim:
++                if off < elim and t in CHILD_TYPES:
++                    raise TagIOError('%s: a %d-byte field (type 0x%X) at +%d straddles the end of a short %d-byte element (not '
++                                     'modelled)' % (path + '.' + (nm or '?'), self.D.fsize(t, df, ex), t, off, elim))
++                continue
+             if fl is not None and t != T_STRUCT and (mode == 1 or env or fo < rend):
+                 sz = self.D.fsize(t, df, ex)
+                 if sz > 0:
+@@ -394,6 +416,9 @@
+                 fv, size = self.D.fieldset(S['bd'], ver)
+                 if sz != size or cnt != 1:
+                     raise TagIOError('%s: struct size %d / field set %d, count %d' % (fp, sz, size, cnt))
++                if elim is not None and sz != self.D.fsize(t, df, ex):
++                    raise TagIOError('%s: a %d-byte struct inside a short element whose layout has %d (not modelled)' % (
++                        fp, sz, self.D.fsize(t, df, ex)))
+                 pos = self._children(pos + 16, fo, fv, fp)
+             elif t == T_TAGREF:
+                 fp = path + '.' + (nm or '?')
+@@ -448,6 +473,9 @@
+             if nm not in L or L[nm][0] != off:
+                 raise TagIOError('%s (%s v%d): field %r expected at +%d, definition has %r' % (
+                     blk.path, blk.name, blk.ver, nm, off, L.get(nm)))
++            if self.short and blk.path in self.short and off + L[nm][2] > blk.esize:
++                raise TagIOError('%s (%s v%d): field %r at +%d lies past the end of the short %d-byte file element' % (
++                    blk.path, blk.name, blk.ver, nm, off, blk.esize))
+ 
+ 
+ _WCACHE = {}
+@@ -472,6 +500,8 @@
+     """replace the elements of a present block that owns no child stream (e.g. the section palette, N x 1024 B) and fix
+     the count in the parent element.  d02: shrink/grow round-trips byte-identical to V362.  CRC is NOT set here."""
+     b = W.block(path)
++    if W.short and b.path in W.short:
++        raise TagIOError('%s: a short (old-layout) block is not spliced' % path)
+     lay, _ = W.D.layout(b.fields_va)
+     if any(t in CHILD_TYPES for _, t, _, _, _ in lay):
+         raise TagIOError('%s: block elements own a child stream; leaf splice not valid' % path)

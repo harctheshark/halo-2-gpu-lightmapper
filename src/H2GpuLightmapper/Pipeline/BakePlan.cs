@@ -38,6 +38,10 @@ namespace H2GpuLightmapper.Pipeline
         public const string AoTrace = "ao-trace";
         public const string AoApply = "ao-apply";
         public const string AoStage = "ao-stage";
+        /// <summary>0.6.8 xc8 AO only: ao_existing.py stage = the installed lightmap + the AO trace -> OUToonly\TAG\stage (nothing installed).</summary>
+        public const string AoExisting = "ao-existing";
+        /// <summary>AO only: ao_existing.py precheck = the gates that need no capture, run BEFORE any backup or GPU time (no lightmap, AO already in it, not this BSP's).</summary>
+        public const string AoPrecheck = "ao-precheck";
         public const string CopyFinalStage = "copy-final-stage";
         public const string CopyLiveLtmp = "copy-live-ltmp";
         public const string ProbeBake = "probe-bake";
@@ -146,6 +150,7 @@ namespace H2GpuLightmapper.Pipeline
                     if (s.Id == StepIds.GpuBake)
                     {
                         if (s.FreshCapture) set.Add(StepId.Capture);
+                        if (s.Args.Contains("-CaptureOnly")) continue;       // AO only: gpu_bake stops after phase 1
                         set.Add(StepId.Derive); set.Add(StepId.GpuBake); set.Add(StepId.TagWriter);
                         if (s.Args.Contains("-WriteBack")) { set.Add(StepId.Install); set.Add(StepId.Verify); }
                     }
@@ -172,6 +177,7 @@ namespace H2GpuLightmapper.Pipeline
             if (env == null) return;
             foreach (var kv in env.Vars)
             {
+                if (kv.Key.StartsWith("H2LM_STAGE_", StringComparison.OrdinalIgnoreCase)) continue;
                 if (ChildEnvironment.IsLoggable(kv.Key)) shown.Add(kv);
                 else inherited.Add(kv.Key);
             }
@@ -203,7 +209,7 @@ namespace H2GpuLightmapper.Pipeline
             return new JObj().Add("schema", "h2lm-bake-plan/1").Add("dryRun", dryRun).Add("appVersion", AppVersion).Add("payload", PayloadSource)
                 .Add("options", new JObj().Add("root", o.Root).Add("scenario", o.ScenarioRel).Add("bsp", o.Bsp).Add("bspRel", o.BspRel).Add("quality", o.QualityToken)
                     .Add("photons", o.Quality == Quality.Custom ? (object)o.Photons : null).Add("rays", o.Quality == Quality.Custom ? (object)(long)o.Rays : null)
-                    .Add("mode", o.ModeToken).Add("ao", o.Ao).Add("aoStrength", o.AoStrength).Add("aoExponent", o.AoExponent).Add("aoTag", o.Ao ? o.AoTag : null)
+                    .Add("mode", o.ModeToken).Add("ao", o.Ao).Add("aoStrength", o.AoStrength).Add("aoExponent", o.AoExponent).Add("aoTag", o.Ao ? o.AoTag : null).Add("aoForce", o.AoForce)
                     .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting).Add("sceneryPermutationFix", o.SceneryPermutationFix).Add("forceCompat", o.ForceCompat)
                     .Add("guarded", CustomGuarded.HasValue ? (object)CustomGuarded.Value : null))
                 .Add("root", Root).Add("work", Work).Add("inst", InstDir).Add("slotBase", SlotBase).Add("runDir", RunDir).Add("runDirPredicted", RunDirPredicted)

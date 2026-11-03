@@ -61,6 +61,9 @@ namespace H2GpuLightmapper.Core.Payload
         public List<string> BadFiles = new List<string>();
         /// <summary>True when the ".complete" marker is missing or names another zip (repair cannot fix that: re-extract).</summary>
         public bool MarkerBad;
+        /// <summary>0.6.8 RC: the bad files that are MISSING, and those whose open failed with ERROR_VIRUS_INFECTED / _DELETED (antivirus).</summary>
+        public List<string> Missing = new List<string>();
+        public List<string> VirusBlocked = new List<string>();
         public void Bad(string relPath, string problem) { Problems.Add(problem); if (!BadFiles.Contains(relPath)) BadFiles.Add(relPath); }
     }
 
@@ -68,6 +71,8 @@ namespace H2GpuLightmapper.Core.Payload
     {
         public List<string> Repaired = new List<string>();
         public List<string> Failed = new List<string>();
+        /// <summary>0.6.8 RC: the files whose re-extraction failed with ERROR_VIRUS_INFECTED / _DELETED (antivirus).</summary>
+        public List<string> VirusBlocked = new List<string>();
         public bool Ok { get { return Failed.Count == 0; } }
     }
 
@@ -251,7 +256,7 @@ namespace H2GpuLightmapper.Core.Payload
                     if (include != null && !include(f)) continue;
                     string path = Path.Combine(dir, f.Path.Replace('/', '\\'));
                     v.FilesChecked++;
-                    if (!File.Exists(path)) { v.Bad(f.Path, "missing " + f.Path); continue; }
+                    if (!File.Exists(path)) { v.Bad(f.Path, "missing " + f.Path); v.Missing.Add(f.Path); continue; }
                     if (custom != null && custom.Handles(f))
                     {
                         string why;
@@ -269,7 +274,11 @@ namespace H2GpuLightmapper.Core.Payload
                             while ((r = fs.Read(buf, 0, buf.Length)) > 0) { md5.TransformBlock(buf, 0, r, null, 0); v.BytesChecked += r; }
                         }
                     }
-                    catch (IOException e) { v.Bad(f.Path, "unreadable " + f.Path + ": " + e.Message); continue; }
+                    catch (IOException e)
+                    {
+                        if (QuarantineGuard.IsVirusError(e)) v.VirusBlocked.Add(f.Path);
+                        v.Bad(f.Path, "unreadable " + f.Path + ": " + e.Message); continue;
+                    }
                     catch (UnauthorizedAccessException e) { v.Bad(f.Path, "unreadable " + f.Path + ": " + e.Message); continue; }
                     md5.TransformFinalBlock(buf, 0, 0);
                     if (!string.Equals(SafeFs.Hex(md5.Hash), f.Md5, StringComparison.OrdinalIgnoreCase)) v.Bad(f.Path, "md5 " + f.Path);
@@ -346,6 +355,7 @@ namespace H2GpuLightmapper.Core.Payload
                                 }
                                 catch (Exception ex) when (!(ex is OperationCanceledException))
                                 {
+                                    if (QuarantineGuard.IsVirusError(ex)) res.VirusBlocked.Add(rel);
                                     res.Failed.Add(rel + ": " + ex.Message);
                                 }
                             }

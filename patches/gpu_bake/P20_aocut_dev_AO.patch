@@ -1,0 +1,47 @@
+# title: P20 0.6.9 rc069_a3: the -AOOnly loop forwards the part plan's sub-chart texel cut (T0 T1 -> GPULM_PART_TEX) and gives the plan to the merge, which keeps each part's owned texels (AO engine)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: 71449c17f9130b98e5f4939b73ebb45a
+# result-md5: 0a399cda4e2f626c47844cf17d9f8422
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -1604,7 +1604,7 @@
+ # v372 FIX (review M1): GPULM_BUF_CAP_MB / GPULM_ANA_CULL come ONLY from -BufCapMB / -AnaCull (an inherited value was refused at the
+ # start); set here for the lattice pre-pass and the main pass, cleared again after the main pass.
+ Clear-Gpulm 'GPULM_BUF_CAP_MB','GPULM_ANA_CULL'
+-Clear-Gpulm 'GPULM_PART_PLAN_ONLY','GPULM_PART_RANGE','GPULM_PART_MAX_CALLS','GPULM_PART_HOST_MB','GPULM_PART_BYTES_PER_CALL'   # v372 SEG: only the switches above set them
++Clear-Gpulm 'GPULM_PART_PLAN_ONLY','GPULM_PART_RANGE','GPULM_PART_TEX','GPULM_PART_MAX_CALLS','GPULM_PART_HOST_MB','GPULM_PART_BYTES_PER_CALL'   # v372 SEG: only the switches above set them (v375: + the sub-chart cut)
+ if ($BufCapMB -gt 0) { $env:GPULM_BUF_CAP_MB = "$BufCapMB"; Note "-BufCapMB $($BufCapMB): fullgpu's per-resource buffer cap is $BufCapMB MB, not the default 1792 MB (the segment plan changes, the result must not -- an r1 A/B setting)" }
+ if ($AnaCull) { $env:GPULM_ANA_CULL = "1"; Note "-AnaCull: the v372 G2 analytic photon-radius cull is ON (CPU rule 0x4A7068, not yet A/B-validated; frustum lane section 8.5)" }
+ if (-not $NoLightWalk) { Write-Host "      v368 LIGHT WALK: ON (analytic + surface shadow rays = the CPU's layered walk)" -ForegroundColor Green }
+@@ -1865,7 +1865,8 @@
+         if ($ppHad) { [IO.File]::WriteAllBytes($ppPath, $ppBytes) } else { Remove-Item $ppPath -ErrorAction SilentlyContinue }
+         if ($plHad) { [IO.File]::WriteAllBytes($ppLog, $plBytes) } else { Remove-Item $ppLog -ErrorAction SilentlyContinue } }
+     $aoPlan = @(Get-Content "$aoRoot\part_plan.txt" | Where-Object { $_ -match '^part \d+ ' } | ForEach-Object {
+-        $f = $_ -split ' '; [pscustomobject]@{ K = [int]$f[1]; C0 = [uint32]$f[2]; C1 = [uint32]$f[3] } })
++        $f = $_ -split ' '; [pscustomobject]@{ K = [int]$f[1]; C0 = [uint32]$f[2]; C1 = [uint32]$f[3]
++        T0 = $(if ($f.Count -gt 6) { [uint32]$f[6] } else { [uint32]0 }); T1 = $(if ($f.Count -gt 7) { [uint32]$f[7] } else { [uint32]0 }) } })   # v375: T0/T1 = the sub-chart cut (0 0 = whole charts), as in the bake's own loop
+     if ($aoPlan.Count -lt 1) { throw "-AOOnly: part_plan.txt lists no part" }
+     $env:GPULM_AO_DIST = ("{0:R}" -f $AODistance); $env:GPULM_AO_RAYS = "$AORays"
+     if ($AOShadingNormal) { $env:GPULM_AO_NORMAL = "1" }
+@@ -1876,17 +1877,18 @@
+             $pdir = "$aoTr\parts\p$pk"; New-Item -ItemType Directory -Force $pdir | Out-Null
+             $env:GPULM_AO = $pdir
+             if ($aoPlan.Count -gt 1) { $env:GPULM_PART_RANGE = "$($aoPlan[$pk].C0):$($aoPlan[$pk].C1)" } else { Clear-Gpulm 'GPULM_PART_RANGE' }
+-            Write-Host ("      --- AO part {0}/{1}: charts [{2}..{3}) ---" -f ($pk + 1), $aoPlan.Count, $aoPlan[$pk].C0, $aoPlan[$pk].C1) -ForegroundColor Cyan
++            if ($aoPlan.Count -gt 1 -and ($aoPlan[$pk].T0 -or $aoPlan[$pk].T1)) { $env:GPULM_PART_TEX = "$($aoPlan[$pk].T0):$($aoPlan[$pk].T1)" } else { Clear-Gpulm 'GPULM_PART_TEX' }   # v375: a part that starts / ends inside a giant chart owns only its texel rows (the merge keeps exactly those)
++            Write-Host ("      --- AO part {0}/{1}: charts [{2}..{3}){4} ---" -f ($pk + 1), $aoPlan.Count, $aoPlan[$pk].C0, $aoPlan[$pk].C1, $(if ($aoPlan.Count -gt 1 -and ($aoPlan[$pk].T0 -or $aoPlan[$pk].T1)) { " (texel cuts $($aoPlan[$pk].T0):$($aoPlan[$pk].T1))" } else { "" })) -ForegroundColor Cyan
+             & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$pdir\gpu_ao.log" |
+                 Select-String -CaseSensitive -Pattern "^AO|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|GATE:|GATEWALK: (round|every|done)|BUFCAP: texelgen" | ForEach-Object { "      [p$pk] $_" }
+             $ax = $LASTEXITCODE
+             if ($ax -ne 0) { throw "-AOOnly: fullgpu exited $ax in part $pk -- see $pdir\gpu_ao.log" }
+             if (-not (Select-String -Path "$pdir\gpu_ao.log" -SimpleMatch -Pattern "AO: traced" -Quiet)) { throw "-AOOnly: part $pk did not report 'AO: traced' (a pre-AO fullgpu.exe?) -- see $pdir\gpu_ao.log" }
+         }
+-    } finally { Clear-Gpulm 'GPULM_AO','GPULM_AO_DIST','GPULM_AO_RAYS','GPULM_AO_NORMAL','GPULM_AO_REP','GPULM_AO_STRICT0','GPULM_PART_RANGE','GPULM_WALK_RDONE','GPULM_GATE_WALK','GPULM_GATE_WALK_ROUNDS','GPULM_NEAR0_NEG'
++    } finally { Clear-Gpulm 'GPULM_AO','GPULM_AO_DIST','GPULM_AO_RAYS','GPULM_AO_NORMAL','GPULM_AO_REP','GPULM_AO_STRICT0','GPULM_PART_RANGE','GPULM_PART_TEX','GPULM_WALK_RDONE','GPULM_GATE_WALK','GPULM_GATE_WALK_ROUNDS','GPULM_NEAR0_NEG'
+                 $env:GPULM_RE = "1" }
+     Pop-Location
+-    & py "$BIN\ao_merge_parts.py" "$aoTr" $aoPlan.Count | ForEach-Object { "      $_" }
++    & py "$BIN\ao_merge_parts.py" "$aoTr" $aoPlan.Count "$aoRoot\part_plan.txt" | ForEach-Object { "      $_" }   # v375: the plan file tells the merge which texels each part owns
+     if ($LASTEXITCODE -ne 0) { throw "-AOOnly: ao_merge_parts.py failed (exit $LASTEXITCODE) -- the parts are under $aoTr\parts" }
+     Write-Host ("AO TRACE: {0} part(s) traced into {1}  {2:n1}s -- nothing in {3} but ao\ was written" -f $aoPlan.Count, $aoTr, $swAO.Elapsed.TotalSeconds, $OUT) -ForegroundColor Green
+     exit 0

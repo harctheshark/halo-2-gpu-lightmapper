@@ -1,0 +1,71 @@
+# title: P19 0.6.9 rc069_a2: the part plan carries a sub-chart texel cut (T0 T1 -> GPULM_PART_TEX; dev_RB / engine_v375: exact giant-chart PART split); production now holds it
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 034d37ccfc0b1eae2ebecb9f8d8846e2
+# result-md5: 138e80a83f67e91e900729da77729ffe
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -1622,7 +1622,7 @@
+ # v372 FIX (review M1): GPULM_BUF_CAP_MB / GPULM_ANA_CULL come ONLY from -BufCapMB / -AnaCull (an inherited value was refused at the
+ # start); set here for the lattice pre-pass and the main pass, cleared again after the main pass.
+ Clear-Gpulm 'GPULM_BUF_CAP_MB','GPULM_ANA_CULL'
+-Clear-Gpulm 'GPULM_PART_PLAN_ONLY','GPULM_PART_RANGE','GPULM_PART_MAX_CALLS','GPULM_PART_HOST_MB','GPULM_PART_BYTES_PER_CALL'   # v372 SEG: only the switches above set them
++Clear-Gpulm 'GPULM_PART_PLAN_ONLY','GPULM_PART_RANGE','GPULM_PART_TEX','GPULM_PART_MAX_CALLS','GPULM_PART_HOST_MB','GPULM_PART_BYTES_PER_CALL'   # v372 SEG: only the switches above set them
+ if ($BufCapMB -gt 0) { $env:GPULM_BUF_CAP_MB = "$BufCapMB"; Note "-BufCapMB $($BufCapMB): fullgpu's per-resource buffer cap is $BufCapMB MB, not the default 1792 MB (the segment plan changes, the result must not -- an r1 A/B setting)" }
+ if ($AnaCull) { $env:GPULM_ANA_CULL = "1"; Note "-AnaCull: the v372 G2 analytic photon-radius cull is ON (CPU rule 0x4A7068, not yet A/B-validated; frustum lane section 8.5)" }
+ if (-not $NoLightWalk) { Write-Host "      v368 LIGHT WALK: ON (analytic + surface shadow rays = the CPU's layered walk)" -ForegroundColor Green }
+@@ -1895,7 +1895,8 @@
+     if ($px -ne 0) { throw "PHASE 3: the part planner exited $px -- see $OUT\gpu_bake_partplan.log" }
+     if (-not (Test-Path "$OUT\part_plan.txt")) { throw "PHASE 3: fullgpu wrote no part_plan.txt (a pre-SEG fullgpu.exe?) -- see $OUT\gpu_bake_partplan.log" }
+     $partPlan = @(Get-Content "$OUT\part_plan.txt" | Where-Object { $_ -match '^part \d+ ' } | ForEach-Object {
+-        $f = $_ -split ' '; [pscustomobject]@{ K = [int]$f[1]; C0 = [uint32]$f[2]; C1 = [uint32]$f[3]; Calls = [uint64]$f[4]; Slots = [uint64]$f[5] } })
++        $f = $_ -split ' '; [pscustomobject]@{ K = [int]$f[1]; C0 = [uint32]$f[2]; C1 = [uint32]$f[3]; Calls = [uint64]$f[4]; Slots = [uint64]$f[5]
++        T0 = $(if ($f.Count -gt 6) { [uint32]$f[6] } else { [uint32]0 }); T1 = $(if ($f.Count -gt 7) { [uint32]$f[7] } else { [uint32]0 }) } })   # v375: T0/T1 = the sub-chart cut (0 0 = whole charts)
+     $nParts = $partPlan.Count
+     if ($nParts -lt 1) { throw "PHASE 3: part_plan.txt lists no part" }
+     if ($nParts -gt 1) { Note ("v372 SEG: this map does not fit one pass -- baking in {0} parts (contiguous chart ranges, merged afterwards); plan {1:n1}s" -f $nParts, $swP.Elapsed.TotalSeconds) }
+@@ -1913,7 +1914,7 @@
+     $swL = [Diagnostics.Stopwatch]::StartNew()
+     try {
+         $env:GPULM_LATTICE_ONLY = "1"; $env:GPULM_SKIP_GATHER = "1"; $env:GPULM_CC_EXIT_AFTER_RE = "1"
+-        if ($nParts -gt 1) { $env:GPULM_PART_RANGE = "$($partPlan[0].C0):$($partPlan[0].C1)"; Write-Host "      v372 SEG: the lattice pre-pass runs on part 0's charts only (the cast, sun and r.e. lattice do not depend on the texel set)" }
++        if ($nParts -gt 1) { $env:GPULM_PART_RANGE = "$($partPlan[0].C0):$($partPlan[0].C1)"; if ($partPlan[0].T0 -or $partPlan[0].T1) { $env:GPULM_PART_TEX = "$($partPlan[0].T0):$($partPlan[0].T1)" }; Write-Host "      v372 SEG: the lattice pre-pass runs on part 0's charts only (the cast, sun and r.e. lattice do not depend on the texel set)" }
+         Remove-Item "$OUT\cast_cache.bin","$OUT\cast_cache.bin.tmp" -ErrorAction SilentlyContinue
+         if (-not $NoCastCache) { $env:GPULM_CAST_CACHE_OUT = "$OUT\cast_cache.bin" }   # v372M
+         if (-not $NoReWin) { $env:GPULM_RE_WIN = "1" }     # v368: the r.e. kernel runs HERE
+@@ -1925,7 +1926,7 @@
+             Select-String -CaseSensitive -Pattern "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
+         $lx = $LASTEXITCODE
+     } finally {
+-        Clear-Gpulm 'GPULM_LATTICE_ONLY','GPULM_CC_EXIT_AFTER_RE','GPULM_RE_WIN','GPULM_CAST_CACHE_OUT','GPULM_PART_RANGE'
++        Clear-Gpulm 'GPULM_LATTICE_ONLY','GPULM_CC_EXIT_AFTER_RE','GPULM_RE_WIN','GPULM_CAST_CACHE_OUT','GPULM_PART_RANGE','GPULM_PART_TEX'
+         if ($prevSkip) { $env:GPULM_SKIP_GATHER = $prevSkip } else { Clear-Gpulm 'GPULM_SKIP_GATHER' }
+     }
+     if ($lx -ne 0) { throw "PHASE 3: lattice pre-pass exited $lx$(Get-V372ExitHint $lx "$OUT\gpu_bake_lattice.log") -- see $OUT\gpu_bake_lattice.log" }
+@@ -2005,7 +2006,7 @@
+         $swD = [Diagnostics.Stopwatch]::StartNew()
+         for ($pk = 0; $pk -lt $nParts; $pk++) {
+             $pp = $partPlan[$pk]; $pdir = "$OUT\parts\p$pk"; New-Item -ItemType Directory -Force $pdir | Out-Null
+-            $env:GPULM_PART_RANGE = "$($pp.C0):$($pp.C1)"; $env:GPULM_WALK_DEPTH_ONLY = "1"
++            $env:GPULM_PART_RANGE = "$($pp.C0):$($pp.C1)"; if ($pp.T0 -or $pp.T1) { $env:GPULM_PART_TEX = "$($pp.T0):$($pp.T1)" } else { Clear-Gpulm 'GPULM_PART_TEX' }; $env:GPULM_WALK_DEPTH_ONLY = "1"
+             $dl = @(& ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$pdir\gpu_walkdepth.log" | Select-String -CaseSensitive -Pattern "WALKDEPTH|FATAL|REFUSING|DEVICE REMOVED")
+             $dx = $LASTEXITCODE; Clear-Gpulm 'GPULM_WALK_DEPTH_ONLY'
+             $dm = $dl | Where-Object { $_.Line -match 'WALKDEPTH (\d+)' } | Select-Object -First 1
+@@ -2019,7 +2020,8 @@
+     for ($pk = 0; $pk -lt $nParts; $pk++) {
+         $pp = $partPlan[$pk]; $pdir = "$OUT\parts\p$pk"; New-Item -ItemType Directory -Force $pdir | Out-Null
+         $env:GPULM_PART_RANGE = "$($pp.C0):$($pp.C1)"
+-        Write-Host ("      --- v372 SEG PART {0}/{1}: charts [{2}..{3}), <= {4:n0} call rows ---" -f ($pk + 1), $nParts, $pp.C0, $pp.C1, $pp.Calls) -ForegroundColor Cyan
++        if ($pp.T0 -or $pp.T1) { $env:GPULM_PART_TEX = "$($pp.T0):$($pp.T1)" } else { Clear-Gpulm 'GPULM_PART_TEX' }
++        Write-Host ("      --- v372 SEG PART {0}/{1}: charts [{2}..{3}){4}, <= {5:n0} call rows ---" -f ($pk + 1), $nParts, $pp.C0, $pp.C1, $(if ($pp.T0 -or $pp.T1) { " (texel cuts $($pp.T0):$($pp.T1))" } else { "" }), $pp.Calls) -ForegroundColor Cyan
+         $swPk = [Diagnostics.Stopwatch]::StartNew()
+         & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$pdir\gpu_bake.log" |
+             Select-String -CaseSensitive -Pattern $mainPat | ForEach-Object { "      [p$pk] $_" }
+@@ -2030,7 +2032,7 @@
+         if ($mx -ne 0) { break }
+     }
+   }
+-} finally { $env:GPULM_RE = "1"; Clear-Gpulm 'GPULM_CAST_CACHE_IN','GPULM_PART_RANGE','GPULM_WALK_RDONE','GPULM_WALK_DEPTH_ONLY'; Remove-Item "$OUT\cast_cache.bin" -ErrorAction SilentlyContinue; Clear-Gpulm 'GPULM_SUN_PHOTON_CULL','GPULM_SUN_CULL_REQUIRE','GPULM_SUN_CULL_MULTI','GPULM_SUN_CULL_STAT','GPULM_CULL_MGR_RADIUS','GPULM_SUN_CULL_BOX','GPULM_SUN_BOX_PASS','GPULM_SUN_CULL_FORCE_SKIP','GPULM_SUN_CULL_DUMP','GPULM_SURF_CULL','GPULM_GATHER_STREAMS','GPULM_GATHER_S1_DUMP','GPULM_SURF_QPAR','GPULM_GATE_WALK','GPULM_GATE_WALK_ROUNDS','GPULM_NEAR0_NEG','GPULM_SUN_WALK','GPULM_ANA_WALK','GPULM_SURF_WALK','GPULM_BUF_CAP_MB','GPULM_ANA_CULL','GPULM_SCN_SELF_PERM','GPULM_SCN_EMBED_FIX','GPULM_SCN_HIDDEN_FILL' }     # v373H; v372 FIX M1; v373P: + the two -BufCapMB / -AnaCull variables
++} finally { $env:GPULM_RE = "1"; Clear-Gpulm 'GPULM_CAST_CACHE_IN','GPULM_PART_RANGE','GPULM_PART_TEX','GPULM_WALK_RDONE','GPULM_WALK_DEPTH_ONLY'; Remove-Item "$OUT\cast_cache.bin" -ErrorAction SilentlyContinue; Clear-Gpulm 'GPULM_SUN_PHOTON_CULL','GPULM_SUN_CULL_REQUIRE','GPULM_SUN_CULL_MULTI','GPULM_SUN_CULL_STAT','GPULM_CULL_MGR_RADIUS','GPULM_SUN_CULL_BOX','GPULM_SUN_BOX_PASS','GPULM_SUN_CULL_FORCE_SKIP','GPULM_SUN_CULL_DUMP','GPULM_SURF_CULL','GPULM_GATHER_STREAMS','GPULM_GATHER_S1_DUMP','GPULM_SURF_QPAR','GPULM_GATE_WALK','GPULM_GATE_WALK_ROUNDS','GPULM_NEAR0_NEG','GPULM_SUN_WALK','GPULM_ANA_WALK','GPULM_SURF_WALK','GPULM_BUF_CAP_MB','GPULM_ANA_CULL','GPULM_SCN_SELF_PERM','GPULM_SCN_EMBED_FIX','GPULM_SCN_HIDDEN_FILL' }     # v373H; v372 FIX M1; v373P: + the two -BufCapMB / -AnaCull variables
+ Pop-Location
+ if ($nParts -gt 1) {
+     # v372 SEG: gpu_bake.log = the part logs in order (the checks below look for a line anywhere in it)

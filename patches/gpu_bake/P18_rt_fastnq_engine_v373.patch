@@ -1,0 +1,62 @@
+# title: P18 0.6.9: -Rt (RT mode: fullgpu_rt.exe when shipped, auto/on/off/cmp/cmp12) + GPULM_FASTNQ=1 for the skeleton run (dev_069; applies AFTER P17+P14)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: e28efd09fd8576a5dcc631024c05714b
+# result-md5: 1da2c1fffe01c67b4e16877da763255a
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -391,7 +391,10 @@
+     # targets, back to back) for A/B.  GPULM_RESPONSIVE_TARGET_MS (default 10) and GPULM_RESPONSIVE_GPU_PRIO (default -7) are read from the environment.
+     [switch]$Responsive,
+     [double]$ResponsiveDuty = 0,
+-    [switch]$ResponsiveV1
++    [switch]$ResponsiveV1,
++    # RT MODE (dev_RT): -Rt auto|on|off|cmp|cmp12 -> GPULM_RT (default auto: ray tracing on the RT cores when the bake adapter has DXR 1.1 + FP64 and a short
++    # self-timed check shows it is faster and agrees with the D3D11 tracer; otherwise the D3D11 software tracer, unchanged). off = the production fullgpu.exe.
++    [string]$Rt = ""
+ )
+ $ErrorActionPreference = "Stop"
+ 
+@@ -474,6 +477,17 @@
+ $DLL  = "$BIN\v014-inject-estimator\gpulm_estimator.dll"     # v371: $BIN (was $W)
+ $INJ  = "$WC\v014-inject-estimator\H2GpuLightmapper.ToolLoader.exe"
+ $FULLGPU = "$BIN\v041-fullgpu\fullgpu.exe"                    # v371: $BIN (was the $W copy, named inline in phase 3)
++# >>> RT MODE (dev_RT): -Rt / GPULM_RT selection. off = the untouched production host; anything else = fullgpu_rt.exe when it is shipped (it decides for itself).
++$rtPol = if ($Rt) { $Rt } elseif ($env:GPULM_RT) { $env:GPULM_RT } else { 'auto' }
++$rtPol = $rtPol.Trim().ToLowerInvariant()
++if ($rtPol -in '1','true','yes') { $rtPol = 'on' } elseif ($rtPol -in '0','false','no') { $rtPol = 'off' }
++if ($rtPol -notin 'auto','on','off','cmp','cmp12') { throw "-Rt / GPULM_RT '$rtPol' is not one of auto|on|off|cmp|cmp12" }
++$env:GPULM_RT = $rtPol
++$FULLGPU_RT = "$BIN\v041-fullgpu\fullgpu_rt.exe"
++if ($rtPol -ne 'off' -and (Test-Path $FULLGPU_RT)) { $FULLGPU = $FULLGPU_RT; Write-Host "      RT mode policy '$rtPol': fullgpu_rt.exe (D3D12 ray-tracing sidecar + the unchanged D3D11 fallback inside)" }
++elseif ($rtPol -eq 'off') { Write-Host "      RT mode policy 'off': the production D3D11 fullgpu.exe (unchanged)" }
++else { Write-Host "      RT mode: no fullgpu_rt.exe in this engine -- the production D3D11 fullgpu.exe" }
++# <<< RT MODE
+ # >>> v366 tagwriter vars
+ $TW          = "$PSScriptRoot\v043-tagwriter"   # dev_LP v372R: stage_LP's own writer copy (lighting environments pass-through)
+ $SKDLL       = "$TW\dll\gpulm_estimator.dll"          # the SKELETON-mode build of the estimator (not the production DLL)
+@@ -949,6 +963,7 @@
+         Clear-Gpulm @($snap.Keys)
+         $env:GPULM_SEVER = "3"; $env:GPULM_ENUM_INST = "1"; $env:GPULM_CHARTPROBE_LATE = "20"
+         $env:GPULM_SKELETON = "1"; $env:GPULM_SKELFILL = "0.5"; $env:GPULM_BASEDIR = "$run\"
++        $env:GPULM_FASTNQ = "1"     # dev_SK 2026-10-30: bit-exact AVX2/SSE4.1 NeuQuant in the skeleton DLL (hook 0x4BF0E1); the stock palette training was 90% of the skeleton run
+         if ($SceneryOwnPermutationOnly) { $env:GPULM_CHOSEN_PERM_ADD = "1" }     # v373V2: the skeleton builds the lightmap tag's structure -- it must enumerate the same chosen-permutation sections as the capture
+         # RELATIVE to $ROOT (2026-10-07): an absolute overlay -tags_dir overflows a fixed path buffer in the stock tool on
+         # campaign tag paths (0xC0000409 /GS while loading tags -- 07b high_10 CPU reference)
+@@ -1923,7 +1938,7 @@
+         if ($env:H2LM_DUMP_ENV) { $envLines = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GPULM_*' -or $_.Name -like 'H2*' } | ForEach-Object { "$($_.Name)=$($_.Value)" }); $envLines += "ARGS=$($args2 -join ' ')"; Set-Content -Path "$OUT\lattice_env.txt" -Value $envLines }
+         # -CaseSensitive: "OVERFLOWED" only (the benign "(0 overflowed)" census line must not echo)
+         & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake_lattice.log" |
+-            Select-String -CaseSensitive -Pattern "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
++            Select-String -CaseSensitive -Pattern "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RT MODE: |RT CMP|RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
+         $lx = $LASTEXITCODE
+     } finally {
+         Clear-Gpulm 'GPULM_LATTICE_ONLY','GPULM_CC_EXIT_AFTER_RE','GPULM_RE_WIN','GPULM_CAST_CACHE_OUT','GPULM_PART_RANGE','GPULM_PART_TEX'
+@@ -1982,7 +1997,7 @@
+ if ((-not $NoCastCache) -and (-not $UseLattice) -and (Test-Path "$OUT\cast_cache.bin")) { $env:GPULM_CAST_CACHE_IN = "$OUT\cast_cache.bin" }
+ elseif (-not $NoCastCache -and -not $UseLattice) { Write-Host "      *** v372M: the pre-pass wrote no cast_cache.bin -- the main pass casts again" -ForegroundColor Yellow }
+ if ($RescueSalt -gt 0) { $env:GPULM_WALK_RDONE = "$RescueSalt"; Write-Host "      -RescueSalt $($RescueSalt) (default since 2026-10-08, validated on high_10 / mainmenu / Needle): the gate-walk rescue's RNG salt is the constant $($RescueSalt+1) (single and part bakes alike), not the whole-run walk depth + 1 -- NOT the default's draw for the rescued texels" }
+-$mainPat = "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|GATHER: \*\*\*|SUNX: \*\*\*|SUNX: status|SKYX: \*\*\*|SKYX: all|OVERFLOWED|COMPOSE: wrote atlas_out|SEAM:|SKY: sky_gate|SKY: \*\*\*|VERTEX: \*\*\*|SUNCULL: APPLIED|SUNCULL: \*\*\*|SUNCULL: SUN|SUNCULL: BOX|SUNCULL: v372|SUNCULL: sum|SUNCULL: v373P|SURFCULL: v372H|CULLR:|SURFCULL:|SURFACE pass|GATHER2:|SURFQ:|GATEWALK:|NEAR0:|SUNWALK|SCENERY:|COMPOSE: wrote scenery_out|PLK64: (ON|off|scenery)|BUFCAP: (v372 cap|FATAL|texelgen used|v372 consolidated|\d+ calls after)|GPU CAST v372|v372 analytic census|v372 G6 ON|ANACULL: (v372|\*\*\*)"
++$mainPat = "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RT MODE: |RT CMP|RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|GATHER: \*\*\*|SUNX: \*\*\*|SUNX: status|SKYX: \*\*\*|SKYX: all|OVERFLOWED|COMPOSE: wrote atlas_out|SEAM:|SKY: sky_gate|SKY: \*\*\*|VERTEX: \*\*\*|SUNCULL: APPLIED|SUNCULL: \*\*\*|SUNCULL: SUN|SUNCULL: BOX|SUNCULL: v372|SUNCULL: sum|SUNCULL: v373P|SURFCULL: v372H|CULLR:|SURFCULL:|SURFACE pass|GATHER2:|SURFQ:|GATEWALK:|NEAR0:|SUNWALK|SCENERY:|COMPOSE: wrote scenery_out|PLK64: (ON|off|scenery)|BUFCAP: (v372 cap|FATAL|texelgen used|v372 consolidated|\d+ calls after)|GPU CAST v372|v372 analytic census|v372 G6 ON|ANACULL: (v372|\*\*\*)"
+ try {
+   if ($nParts -le 1) {
+     & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake.log" |

@@ -20,6 +20,8 @@ namespace H2GpuLightmapper.Pipeline
         public const string FullGpu = "engine_v373/v041-fullgpu/fullgpu.exe";
         public const string AoDriver = "_research/ao/gpu_ao.py";
         public const string AoEngineDir = "_research/ao/dev_AO";
+        /// <summary>0.6.8 xc8: AO only (adds ambient occlusion to the lightmap that is already installed; ships beside gpu_ao.py).</summary>
+        public const string AoExisting = "_research/ao/ao_existing.py";
         public const string AoGpuBake = "_research/ao/dev_AO/gpu_bake.ps1";
         public const string ProbeDriver = "_research/lightprobes/gpu_lightprobes.py";
         public const string ShStage = "standalone/sh_stage.py";
@@ -29,6 +31,9 @@ namespace H2GpuLightmapper.Pipeline
         public const string TagIoDir = "v043-tagwriter";
         public const string TagIo = "v043-tagwriter/lmw_tagio.py";
         public const string GpuCheckPlain = "gpucheck_plain.exe";
+        /// <summary>0.6.8: the engine-owned list of a farm's phase-3/4 products (pipeline_guard.py BAKE_PRODUCTS + what gpu_bake.ps1 deletes
+        /// before its phase 3), which the after-bake slim removes. Backslash form: joined with Path.Combine. Absent = farms are never kept.</summary>
+        public const string FarmProductsRel = "standalone\\farm_products.json";
 
         public static string Full(string instDir, string rel) { return Path.Combine(instDir, rel.Replace('/', '\\')); }
 

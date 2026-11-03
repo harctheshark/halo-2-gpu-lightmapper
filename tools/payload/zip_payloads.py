@@ -207,8 +207,9 @@ def zip_py(spec, out_dir, app_version, keep):
 # ---------------------------------------------------------------------------------------------------------------- mapbake
 MAPBAKE_README = """mapbake -- the runtime of H2 GPU Lightmapper's "bake straight from a .map" path.
 mapbake.py and h2conv_run.py belong to H2 GPU Lightmapper. The folder h2conv\\ is a SEPARATE program, "h2conv" (Halo 2 MCC to Vista Converter,
-GPL-3.0-or-later; https://github.com/harctheshark/Halo2-Map-Converter), shipped here as unmodified source files (without its xbox package, Xbox map conversion, which this program never uses): mapbake.py starts
-its command line tools as child processes and does not import or copy their code. Its licence text is LICENSE-h2conv-GPL-3.0.txt; see NOTICES.txt.
+https://github.com/harctheshark/Halo2-Map-Converter): its Python source files (*.py) are GPL-3.0-or-later, its compiled modules (*.pyd) are proprietary
+(Copyright (C) 2026 harctheshark, all rights reserved; not covered by the GPL). Its xbox package (Xbox map conversion) is not included: this program never uses it.
+mapbake.py starts its command line tools as child processes and does not import or copy their code. The GPL text is LICENSE-h2conv-GPL-3.0.txt; see NOTICES.txt.
 The app reads the map, bakes, and writes a lightmapped copy; the temporary work files of a run are deleted when the run ends.
 """
 
@@ -283,14 +284,16 @@ SECTIONS = """1. PowerShell {pwsh_version} -- Copyright (c) Microsoft Corporatio
    same MIT notice. The scanner keeps h2v_scenery_bounds.db in step, after a timestamped backup.
    File: licenses\\Osoyoos\\LICENSE.md
 
-6. h2conv (Halo 2 MCC to Vista Converter) -- GPL-3.0-or-later -- the converter that reads and writes the map of the ".map file" source
-   A SEPARATE program, shipped as its unmodified Python source files (without its xbox package, Xbox map conversion, which this program never uses) in the runtime folder mapbake-<hash>\\h2conv\\ (so its complete
-   corresponding source is the shipped files themselves; it also bundles the Assembly layout files, GPL-3.0, and the tag definitions of
-   the blam-tags project, whose definitions originate from Assembly, https://github.com/xboxchaos/assembly, GPL-3.0).
-   Source of h2conv: https://github.com/harctheshark/Halo2-Map-Converter
+6. h2conv (Halo 2 MCC to Vista Converter) -- GPL-3.0-or-later source files + proprietary compiled modules -- the converter that reads and writes the map of the ".map file" source
+   A SEPARATE program in the runtime folder mapbake-<hash>\\h2conv\\ (without its xbox package, Xbox map conversion, which this program never uses).
+   Its Python source files (*.py) are GPL-3.0-or-later; their complete corresponding source is the shipped files themselves.  Its compiled
+   modules (*.pyd) are proprietary: Copyright (C) 2026 harctheshark, all rights reserved; they are not covered by the GPL.  It also bundles,
+   unmodified and as separate data files read at runtime: the Assembly plugin layout files (https://github.com/xboxchaos/assembly, GPL-3.0),
+   and the tag definitions of the blam-tags project, which carry HABT's tag layouts (MIT; the blam-tags download itself had no licence file).
+   Source of the GPL part of h2conv: https://github.com/harctheshark/Halo2-Map-Converter
    H2 GPU Lightmapper starts the converter's command line tools as child
    processes through mapbake.py; it does not link to, import or copy their code (aggregation). Under the GPL you may copy, modify and
-   redistribute h2conv under the licence text in licenses\\h2conv\\LICENSE.txt (the GNU General Public License, version 3).
+   redistribute the GPL-licensed files under the licence text in licenses\\h2conv\\LICENSE.txt (the GNU General Public License, version 3).
    It reads a map you choose and writes a lightmapped copy of it; temporary work files are removed when the bake ends. Halo 2 content belongs to Microsoft / 343 Industries and is never shipped by this program.
    File: licenses\\h2conv\\LICENSE.txt"""
 
@@ -414,6 +417,8 @@ def main(argv=None):
                             'probes': {k: v for k, v in feats['probes'].items() if v is not None}}}
         if isinstance(feats.get('driveRoot'), dict) and isinstance(feats['driveRoot'].get('enabled'), bool):     # X1: optional (an older stage report has none)
             man['features']['driveRoot'] = {k: v for k, v in feats['driveRoot'].items() if v is not None}
+        if isinstance(feats.get('farms'), dict) and isinstance(feats['farms'].get('enabled'), bool):     # 0.6.8: optional (an older stage report has none)
+            man['features']['farms'] = {k: v for k, v in feats['farms'].items() if v is not None}
         if not feats['ao']['enabled']:
             print('  WARNING: AO is DISABLED in this payload: %s' % feats['ao'].get('reason'))
         if not feats['probes']['enabled']:

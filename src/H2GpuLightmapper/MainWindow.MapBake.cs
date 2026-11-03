@@ -78,6 +78,8 @@ namespace H2GpuLightmapper
             }
             bool free = !_busy;
             MStandard.IsEnabled = MProbes.IsEnabled = MLightmap.IsEnabled = free;
+            MAoOnly.IsEnabled = free && !map;          // AO only changes the lightmap already in the tags: not for a .map bake
+            if (map && MAoOnly.IsChecked == true) { _suppress = true; MStandard.IsChecked = true; _suppress = false; }
             if (map) { ReuseCheck.IsEnabled = false; ReuseReason.Text = "Not used when baking from a .map (every .map bake makes its own capture)."; }
             StageOnlyCheck.IsEnabled = !map && free;
             VistaOutCheck.IsEnabled = free;
@@ -250,7 +252,7 @@ namespace H2GpuLightmapper
                                                                   : "\nThis is a Vista map: it is converted to MCC form for the bake; the result stays an MCC map (not converted back).") : "")
                                     + (File.Exists(o.MapOutPath) ? "\nThe existing output is set aside as .old_<time> first." : "")
                                     + (skyLines.Count > 0 ? "\n\n" + string.Join("\n", skyLines) : "")
-                                    + "\n\nTemporary work files are written while it runs (about 35 GB of free disk space are needed) and deleted afterwards.",
+                                    + "\n\nTemporary work files are written while it runs (about 8 GB of free disk space are needed; the exact figure is checked first) and deleted afterwards.",
                                     "H2 GPU Lightmapper", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
             }
             var s = new MapBakeSession(_host, o, new SessionOptions { SkipPreflight = _g.SkipPreflight, SkipGpuCheck = _g.SkipGpuCheck });

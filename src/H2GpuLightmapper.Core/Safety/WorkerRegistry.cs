@@ -93,11 +93,18 @@ namespace H2GpuLightmapper.Core.Safety
 
         public string FarmDir(int w) { Guards.AssertWorker(w); return Path.Combine(Work, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture)); }
 
+        /// <summary>0.6.8: the worker's folder under <paramref name="farmRoot"/> (WORK\Temp (safe to delete) in the 0.6.8 layout, WORK before).</summary>
+        public static string FarmDirIn(string farmRoot, int w) { Guards.AssertWorker(w); return Path.Combine(farmRoot, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture)); }
+
+        /// <summary>A number is taken when a farm of that number exists in WORK (a 0.6.7 / research farm) OR in WORK\Temp (safe to delete),
+        /// or its skeleton overlay exists: a new key never gets a number someone else's folder uses.</summary>
         private bool FarmExists(int n)
         {
-            string f = Path.Combine(Work, "farm_w" + n.ToString("D2", CultureInfo.InvariantCulture));
+            string leaf = "farm_w" + n.ToString("D2", CultureInfo.InvariantCulture);
+            string f = Path.Combine(Work, leaf);
+            string t = Path.Combine(ShellPaths.TempOf(Work), leaf);
             string s = Path.Combine(Work, "_gpulm_skel", "w" + n.ToString("D2", CultureInfo.InvariantCulture));
-            return Directory.Exists(f) || File.Exists(f) || Directory.Exists(s);
+            return Directory.Exists(f) || File.Exists(f) || Directory.Exists(t) || File.Exists(t) || Directory.Exists(s);
         }
 
         private void Save(Dictionary<string, int> all)

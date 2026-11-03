@@ -1,6 +1,32 @@
 # Changelog
 
-## 0.6.7 (2026-10-27): pre-release
+## 0.6.9 (2026-11-03)
+
+Exe SHA-256 `8fb0a33217bcee8aaafcbbab4b239dc7de81f6c12f2f997f6c311d6fef260af3`.
+
+This is everything since 0.6.6, the last published release. 0.6.7 and 0.6.8 were never published on their own; their entries are below.
+
+- **Ray-tracing mode, automatic.** On GPUs with RT cores the final-gather rays run on them. Every bake checks the GPU and times a short self-check, and uses RT only when it is at least 1.5 times faster and agrees with the normal tracer; otherwise it bakes the old way, so a bake never fails because RT is missing. Scores against the CPU tool moved by 0.0001 points or less (cyclotron 99.9567 with RT, 99.9566 without).
+- **Faster:** whole bakes, Super, fresh capture, RTX 4090: cyclotron 230 s to 134 s, earthcity_1 591 s to 302-343 s. The skeleton step (22 s instead of 61 s on cyclotron) and the tag writer (7 s instead of 33 s) are faster with the same output.
+- **Repeatable bakes.** Re-baking an unchanged map gives the same lightmap. Every map's lightmap changes once with this update, by about the size of the old run-to-run noise.
+- **Cards with less video memory are sized automatically** (parts and largest buffers). Nothing changes on a 24 GB card.
+- **More than 281 light probes works** (up to 1,024, Halo 2's limit), in batches.
+- **A giant lightmap chart is split exactly instead of refused**; maps with no portals no longer stop with "BUFCAP: FATAL". The result is identical to the unsplit one wherever both can run.
+- **`.map` bakes copy only the tags the map needs** (about 4 GB of free disk space instead of about 14 GB for headlong; the window says about 8 GB).
+- **Windows Security (Defender):** if it removes one of the program's engine files, the bake stops before writing anything and names the file; restore it from Protection history. See the README.
+- Updated bundled map converter (h2conv).
+- Known limits: RT tested only on an RTX 4090; the photon lattice pass is not sized to video memory; small-VRAM cards and maps that really need the chart split were tested only by simulation.
+
+## 0.6.8 (never published on its own; part of 0.6.9)
+
+- **AO only mode** (`--mode ao`): adds ambient occlusion to the lightmap that is already in the tags, without baking the lighting again. It refuses, writing nothing, when the lightmap does not match the geometry or already has AO.
+- **Bounded disk use:** temporary files live in `GPU Lightmap Work\Temp (safe to delete)\`, which can be deleted at any time; old captures and backups are trimmed automatically; `--cli cleanup`; Advanced settings has Open, Clean now and "Free space from earlier versions".
+- Multi-sun and surface-light maps use the GPU's exact photon cast (no CPU cast needed).
+- Optional re-bake speedup (`--rebake-hint`).
+- `.map` bakes on a very long H2EK path stop with a clear message instead of finishing with missing textures.
+- The tool loader is now `H2GpuLightmapper.ToolLoader.exe` with file details.
+
+## 0.6.7 (2026-10-27): never published on its own; part of 0.6.9
 
 Exe SHA-256 `38f7d49c3c852f14c0804e3d7cfa1cb39240775155a488580542a7f57f147ea2`.
 
@@ -31,7 +57,7 @@ Exe SHA-256 `ecaa6e5236b9de6d5ab056f45a752b46bca331dc8c912c3530fe9c6bde3c1ef1`.
     shrinks at once after an overshoot. The one-time shader compile is taken by a warm-up dispatch.
   - Integrated / shared-memory GPUs: the exact-sun step sized its batches from the dedicated video memory only (tiny on such GPUs); it now uses a
     quarter of the local memory budget when dedicated memory is under 1 GiB.
-  - Scheduling only: the results on the RTX 4090 are unchanged (guard, AO and probe gates re-run; keyed-identical bakes), and the 1.5 s
+  - Scheduling only: the results on the RTX 4090 are unchanged (guard, AO and probe gates re-run; identical (matched by name) bakes), and the 1.5 s
     warning never appeared. **Not yet tried on the Surface / Snapdragon / Adreno PC or any slow GPU.**
 - **Maps with more than one cubemap sky are accepted** (for example `07a_highcharity` `high_0`): each sky triangle samples its own sky's cube.
   The bake ran through the exe; it was not compared with a CPU bake.
@@ -54,7 +80,7 @@ Exe SHA-256 `34f0e1a144efc157784cc86290696bb0b3b701d4a9304bbe6a606e74923d0a1b`.
   - `--force-compat` (command line, for testing) runs those kernels on a GPU that has FP64.
 - **Scenery Multi Permutation Fix (Experimental Improvement)** (Advanced settings, off by default, `--scenery-permutation-fix`).
   - For scenery that draws more than one shape from one tag (a rock whose shape changes when you move it, a lifepod placed with
-    a named variant like "crashed"). Only the shape the game actually draws casts shadows, ground hidden inside scenery is
+    a named variant like "crashed"). Only the shape the game actually draws casts shadows, ground buried inside scenery is
     filled from its surroundings, and a variant's own pieces get lit instead of rendering black.
   - It differs from the 2004 tool on purpose. Most maps never need it: giving each shape its own scenery tag avoids the problem.
   - Off is byte-identical to 0.6.3. AO and light probes do not take it (the plan says so).
@@ -80,7 +106,7 @@ Exe SHA-256 `81264a3c166c3aea392bf57d65db2643993bbc8c18df4c8c4d2687fce3fddcd5`.
 
 - **Keep PC responsive - Slower Bakes!** (Advanced settings, off by default, `--responsive`).
   - Every GPU submission is kept to about 40 ms, so the desktop, videos and games stay smooth during a bake.
-  - The lightmap is identical (keyed-identical on the tested maps).
+  - The lightmap is identical (identical (matched by name) on the tested maps).
   - Bakes take about 15% longer.
 - **2004 Exact Vertex Lighting?** (Advanced settings, off by default, `--exact-vertex-lighting`).
   - The tag writer re-runs `tool_fast`'s per-vertex visibility test (7 probes per sample) and drops the samples `tool_fast`
@@ -108,8 +134,8 @@ Exe SHA-256 `81264a3c166c3aea392bf57d65db2643993bbc8c18df4c8c4d2687fce3fddcd5`.
   Qualcomm Adreno.
 - **Fixed:** with AO and exact vertex lighting both on, the AO layer's final tag stage did not pass the option through.
 - **Checked on this build:**
-  - AO neutrality (keyed-identical to production).
-  - Custom on cyclotron (keyed-identical).
+  - AO neutrality (identical (matched by name) to production).
+  - Custom on cyclotron (identical (matched by name)).
   - Light probes on triplicate (99.533%, unchanged).
   - An exe bake with both new options on.
   - All test suites.
@@ -128,7 +154,7 @@ Exe SHA-256 `efc7dc4fa5ccdbb174adcdc2aed14e5f6bda78db8fe27bb4bb8384b9c54b4920`. 
   - **Fixed:** scenery whose data sat above 1 GB in `tool_fast`'s memory was silently left compressed. Its shadows and its
     per-vertex lighting were wrong (found on a custom lifepod model). The vertex lighting of such scenery now matches the CPU
     exactly.
-  - **Fixed:** about 40 stock scenery models shared a lookup key with a different model and were decompressed at the wrong size.
+  - **Fixed:** about 40 stock scenery models shared a lookup entry with a different model and were decompressed at the wrong size.
   - **Fixed:** 3-vertex marker sections that are not compressed were "decompressed" with an unrelated model's bounds.
 - **GPU timeout (TDR) risk reduced.**
   - The photon-lattice step is split into smaller GPU submissions with identical results. On cyclotron (RTX 4090) the worst one

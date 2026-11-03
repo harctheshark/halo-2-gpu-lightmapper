@@ -81,3 +81,24 @@ def _h2lm_fix_path0():
 
 _h2lm_fix_path0()
 del _h2lm_fix_path0
+
+
+def _h2lm_stage():
+    d = os.environ.get('H2LM_STAGE_HOME')
+    if not d or not os.path.isfile(os.path.join(d, 'stagecache.py')):
+        sys.stderr.write('H2LM: a required component of this build is missing (mapbake helper); reinstall the app (code 97)\n')
+        sys.exit(97)
+    sys.path.insert(0, d)
+    try:
+        import stagecache
+        stagecache.attach()
+    finally:
+        try:
+            sys.path.remove(d)
+        except ValueError:
+            pass
+
+
+if os.environ.get('H2LM_STAGE_CH'):
+    _h2lm_stage()
+del _h2lm_stage

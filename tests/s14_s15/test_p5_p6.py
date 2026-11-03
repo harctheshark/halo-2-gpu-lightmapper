@@ -26,6 +26,7 @@ P6 = os.path.join(PROJ, 'patches', 'P6_gpu_ao.patch')
 P6B = os.path.join(PROJ, 'patches', 'P6b_gpu_ao_exactvl.patch')       # W2 (0.6.3): gpu_ao stage --exact-vertex-lighting (the series chain is P6 -> P6b)
 P6C = os.path.join(PROJ, 'patches', 'P6c_gpu_ao_splitbsp.patch')       # 0.6.5: gpu_ao stage reads a BSP from another folder than the scenario (chain P6 -> P6b -> P6c)
 P5B = os.path.join(PROJ, 'patches', 'P5b_gpu_lightprobes_splitbsp.patch')   # 0.6.5: gpu_lightprobes marker (chain P5 -> P5b)
+P5C = os.path.join(PROJ, 'patches', 'P5c_gpu_lightprobes_farms.patch')      # 0.6.8: --farm may be under H2LM_FARMS (chain P5 -> P5b -> P5c)
 RESULTS = []
 
 
@@ -158,8 +159,13 @@ def main():
     open(p5b_path, 'wb').write(SP.apply_bytes(P5bb, open(lp_p, 'rb').read()))
     check('P6c: strict apply on the P6b result -> result-md5 %s' % PCc['result-md5'][:8], md5f(pb_path) == PCc['base-md5'] and md5f(pc_path) == PCc['result-md5'])
     check('P5b: strict apply on the P5 result -> result-md5 %s' % P5bb['result-md5'][:8], md5f(lp_p) == P5bb['base-md5'] and md5f(p5b_path) == P5bb['result-md5'])
-    check('patch_series.py apply patches/series_research.json == the strict_patch results (P5 then P5b; P6, P6b then P6c)', p.returncode == 0
-          and md5f(os.path.join(so_dir, '_research', 'lightprobes', 'gpu_lightprobes.py')) == md5f(p5b_path)
+    P5cc = SP.read_patch(P5C)
+    p5c_path = os.path.join(work, 'patched_p5c', '_research', 'lightprobes', 'gpu_lightprobes.py')
+    os.makedirs(os.path.dirname(p5c_path), exist_ok=True)
+    open(p5c_path, 'wb').write(SP.apply_bytes(P5cc, open(p5b_path, 'rb').read()))
+    check('P5c: strict apply on the P5b result -> result-md5 %s' % P5cc['result-md5'][:8], md5f(p5b_path) == P5cc['base-md5'] and md5f(p5c_path) == P5cc['result-md5'])
+    check('patch_series.py apply patches/series_research.json == the strict_patch results (P5, P5b then P5c; P6, P6b then P6c)', p.returncode == 0
+          and md5f(os.path.join(so_dir, '_research', 'lightprobes', 'gpu_lightprobes.py')) == md5f(p5c_path)
           and md5f(os.path.join(so_dir, '_research', 'ao', 'gpu_ao.py')) == md5f(pc_path), p.stdout + p.stderr)
     subs_tree = [(trees['orig'], '<TREE>'), (trees['patched'], '<TREE>')]
 

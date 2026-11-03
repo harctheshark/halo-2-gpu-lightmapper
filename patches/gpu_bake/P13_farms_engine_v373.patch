@@ -1,0 +1,30 @@
+# title: P13 H2LM_FARMS: the farm_wNN workers may live in another folder than H2LM_WORK (0.6.8 bounded temp; unset = unchanged; engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 669dcc144a4961043cbb572611d55756
+# result-md5: 9f579f95095088598304bcc4a203cd7e
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -439,6 +439,14 @@
+ $W    = if ($env:H2LM_WORK) { $env:H2LM_WORK } else { "$RP\GPU Lightmap Work" }
+ $WC   = if ($env:H2LM_CODE) { $env:H2LM_CODE } else { $W }
+ # <<< H2LM P1
++# >>> H2LM P13 (0.6.8 bounded temp, 2026-10-29): H2LM_FARMS = the folder that holds the farm_wNN workers (the standalone's
++# "GPU Lightmap Work\Temp (safe to delete)"). UNSET -- every production caller -- $FARMS = $W: $OUT is the same path as before.
++# $W keeps every other WORK use ($W\_gpulm_skel, $W\_TAGBAK_auto, the write-back gpulm.log); the DLL slot base must name $FARMS.
++$h2lmF = [Environment]::GetEnvironmentVariable('H2LM_FARMS')
++if ($null -ne $h2lmF -and -not ([IO.Path]::IsPathFullyQualified($h2lmF) -and $h2lmF -notmatch '[\\/]$' -and (Test-Path -LiteralPath $h2lmF -PathType Container))) {
++    throw "H2LM: H2LM_FARMS='$h2lmF' must be an existing absolute folder with no trailing backslash" }
++$FARMS = if ($env:H2LM_FARMS) { $env:H2LM_FARMS } else { $W }
++# <<< H2LM P13
+ # >>> H2LM P3 (standalone exe): H2LM_NOWINDOW=1 = no console window for any tool_fast run -- osoy_launch.exe gets --nowindow
+ # (CREATE_NO_WINDOW) and the three plain Start-Process launches (skeleton, capture, write-back) -WindowStyle Hidden. UNSET (every
+ # production caller) = an empty splat and no extra osoy_launch argument: the same command lines as before. Any other value is refused.
+@@ -455,7 +463,7 @@
+ # v371: the files v371 changes are resolved next to THIS script -- the staged copy (_research\scenery\stage, which mirrors the
+ # production layout) runs the staged DLL / fullgpu / guards, the production copy (after apply_v371.py) the production ones.
+ $BIN  = if ($PSScriptRoot) { $PSScriptRoot } else { $W }
+-$OUT  = "$W\farm_w{0:D2}" -f $Worker
++$OUT  = "$FARMS\farm_w{0:D2}" -f $Worker     # H2LM P13: $FARMS = $W unless H2LM_FARMS is set
+ # v361 TAG SAFETY: a write-back that never finished (the PC shuts off after 8 h; a crash) leaves this marker behind.
+ if (Test-Path "$OUT\writeback_in_progress.txt") {
+     Write-Host "*** THE LAST WRITE-BACK INTO THIS RUN DIR DID NOT FINISH -- the lightmap tag may be half-written:" -ForegroundColor Red

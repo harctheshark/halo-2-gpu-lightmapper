@@ -8,7 +8,7 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: pre-release (0.6.7).** It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 0.6.9** (everything since 0.6.6; 0.6.7 and 0.6.8 were never published on their own, see [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -20,6 +20,7 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
 - [Speed](#speed)
 - [Requirements](#requirements)
 - [Download and first start](#download-and-first-start)
+- [Windows Security (Defender)](#windows-security-defender)
 - [How to use](#how-to-use)
 - [Command line](#command-line)
 - [Safety: backups, restore, nothing touches your tags until install](#safety)
@@ -40,8 +41,12 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
 - **One exe.** The window and a command line are the same file. It carries PowerShell 7.6.6, Python 3.10.5 with numpy and the
   GPU engine inside itself and unpacks them on first start.
 - **Quality:** Low, Super (the stock CPU quality levels) and Custom (Experimental: your own photon and gather-ray counts).
+- **Ray tracing, automatic (0.6.9).** On a GPU with RT cores the final-gather rays run on them, which makes whole bakes about 1.7-2x
+  faster; the engine uses RT only when a short self-check shows it is clearly faster and agrees with the normal tracer, and otherwise bakes
+  the old way. Nothing to switch on. Tested on an RTX 4090 only.
+- **Repeatable (0.6.9).** Baking an unchanged map again gives the same lightmap.
 - **Modes:** Lightmap Standard (lightmaps, plus light probes on a BSP that has probe points), Lightmap Lightprobes (probes
-  only), Lightmap Only.
+  only), Lightmap Only, and AO only (0.6.8: adds ambient occlusion to the lightmap already in your tags).
 - **Any GPU with Direct3D 11.** NVIDIA and AMD cards bake at full FP64 precision; a GPU without FP64 (Intel, Qualcomm Adreno)
   switches to Compatibility mode (DF64) by itself (new in 0.6.4, experimental).
 - **Hard to time out.** The default path asks the GPU for small, measured pieces of work (photons that can pause and resume, tiny
@@ -53,7 +58,7 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   the scenery your scenario places and adds any model that is missing to `SceneryFixDependencies.db` in your H2EK folder (the
   log says so); **Advanced > Scan and Build Scenery Fix Dependencies** scans your whole tags folder on demand.
 - **Safe by design.** Every install is backed up and md5-verified first; Restore and Undo are built in; a crash or power loss
-  is recovered at the next start.
+  is recovered at the next start. Temporary files live in one folder you can delete at any time (0.6.8).
 
 ## Accuracy against the CPU
 
@@ -93,7 +98,14 @@ bit-for-bit reproducible, in the CPU tool either, so two GPU bakes of the same m
 | chronopolis (Super) | 7.7 min | 92 min | GPU: RTX 4090. CPU: `tool_fast` farm of 28 workers |
 | headlong (Super) | about 5-6 min | 49.7 min | GPU: RTX 4090. CPU: `tool_fast` farm of 28 workers |
 
-Other examples on the same GPU (Super): cyclotron about 4.5 minutes, mainmenu about 10 minutes. These are measurements from
+Whole-bake times through the app, Super quality, fresh capture, RTX 4090, nothing else on the GPU:
+
+| Map | 0.6.8 | 0.6.9 |
+|---|---|---|
+| cyclotron | 230 s | 134 s |
+| earthcity_1 | 591 s | 302-343 s |
+
+Other examples on the same GPU (Super, before 0.6.9): mainmenu about 10 minutes. These are measurements from
 one PC. Another GPU will be slower or faster; a card much slower than an RTX 4090 has not been tried (see
 [Known issues](#known-issues-fix-in-progress)).
 
@@ -109,7 +121,7 @@ one PC. Another GPU will be slower or faster; a card much slower than an RTX 409
     testing (on an RTX 4090 with the mode forced on), it may be slower, and it has not been run on a real Intel or Qualcomm GPU
     or on Windows on ARM.
   - On a laptop with two GPUs, the bake must run on the NVIDIA/AMD one (the app tells you how). Only an RTX 4090 with 24 GB has
-    been tested; the app sizes its work to the card's video memory but this is untested below 24 GB.
+    been tested; the app sizes its work to the card's video memory but this is untested below 24 GB (checked with a pretend smaller card only).
 - **The stock MCC Halo 2 Editing Kit (H2EK)** from Steam, with `tool_fast.exe` build 2023.06.20 (md5
   `3a889d370a7be537af47ff8035acd201`). Other builds are refused, because the GPU hooks are address-specific.
 - **The H2EK's own prerequisites** (the app checks them and names any that is missing; it never installs anything): a `data`
@@ -130,6 +142,22 @@ one PC. Another GPU will be slower or faster; a card much slower than an RTX 409
    If Smart App Control is on, Windows may block the exe outright (not tested).
 3. On the first start the app unpacks its runtimes (about 300 MB) to `%LOCALAPPDATA%\H2GpuLightmapper\rt\`. That takes a few
    seconds. Before every bake it re-checks every unpacked file and repairs any that changed.
+
+## Windows Security (Defender)
+
+Windows Security may flag one of the engine files inside the app (`fullgpu.exe`, `fullgpu_rt.exe`, the AO engine's `fullgpu.exe`,
+`tw_native.exe`, `H2GpuLightmapper.ToolLoader.exe`) as suspicious. They are small, new, unsigned programs, and the detection is a
+behaviour / heuristic one (for example `Behavior:Win32/DefenseEvasion.A!ml`), not a named virus.
+
+What you will see: the bake stops before it writes anything to your tags and says "Windows Security (Defender) removed <file> ...",
+with the path of the file. Nothing was written to your tags.
+
+What to do:
+1. Open Windows Security > Virus & threat protection > Protection history, pick the entry, and choose **Restore** (or **Allow on device**).
+2. Bake again. The app also puts back a removed runtime file once by itself before a bake; if it is removed a second time it stops with
+   the same message instead of looping.
+3. Optional: add an exclusion for `<H2EK>\GPU Lightmap Work` so it does not happen again. The app never changes Windows Security
+   settings itself.
 
 ## How to use
 
@@ -155,6 +183,9 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
    - **Lightmap Lightprobes:** probes only.
    - **Lightmap Only:** lightmaps only. On a BSP with probe points this resets its probes to zero, exactly as `tool lightmaps`
      does.
+   - **AO only** (0.6.8): adds ambient occlusion to the lightmap that is already in your tags (made by this program, the stock tool
+     or Bungie) without baking the lighting again. The layout is kept; the current lightmap is backed up first. It stops, writing
+     nothing, when the lightmap does not match the geometry or already has AO (`--force` adds it again). Not available for a `.map` bake.
 5. **Ambient Occlusion** (off by default). **Strength** (default 1.0) and **Exponent** (default 0.5). This is an artistic
    layer and is *not* CPU-faithful. The author's favourite look is strength 1.25, exponent 0.5.
 6. **Reuse existing capture** (off by default = make a new capture). Offered only when the map's last capture matches the
@@ -163,7 +194,13 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
    runtime**, **Scan and Build Scenery Fix Dependencies** (adds every render model of your tags folder to
    `SceneryFixDependencies.db` and lists the models it added; sky models are skipped; bakes already do this automatically for
    the scenery of their own scenario).
-   **Advanced settings** (all off by default):
+   **Advanced settings** (all off by default except the temp settings):
+   - **Temp folder** (0.6.8): temporary files live in `<H2EK>\GPU Lightmap Work\Temp (safe to delete)\`. You can delete it, or anything in it,
+     at any time, even during a bake: your tags are never written from it. It trims itself (newest 3 captures kept, 40 GB cap); the
+     settings show its size with **Open** and **Clean now**, and **Free space from earlier versions** removes the folders 0.6.7 and older
+     left behind.
+   - **Re-bake speedup** (0.6.8): with Reuse existing capture, the photon cast starts where the previous bake found each light. Command
+     line: `--rebake-hint`.
    - **Keep PC responsive - Slower Bakes!** Splits the GPU work into short pieces (about 10 ms) and leaves the GPU idle between
      them (busy about 60% of the time), at low priority, so your desktop, videos and games stay smooth while it bakes. The
      lightmap is identical; the bake takes longer (about 1.5-1.8x on the tested maps). Command line: `--responsive`.
@@ -174,7 +211,7 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
      `--exact-vertex-lighting`.
    - **Scenery Multi Permutation Fix (Experimental Improvement).** A fallback for scenery that draws more than one shape from
      one tag, for example a rock whose shape changes when you move it, or a lifepod placed with a named variant like "crashed".
-     Only the shape the game actually draws casts shadows, ground hidden inside scenery is filled from its surroundings, and a
+     Only the shape the game actually draws casts shadows, ground buried inside scenery is filled from its surroundings, and a
      variant's own pieces get lit instead of rendering black. It differs from the 2004 tool on purpose. Most maps never need
      it: giving each shape its own scenery tag avoids the problem. Ambient occlusion and light probes do not take it. Command
      line: `--scenery-permutation-fix`.
@@ -207,12 +244,13 @@ The same exe works from a terminal, and no window opens.
 
 ```
 "H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --scenario S --bsp B
-      [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap]
-      [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture] [--yes] [--no-install]
+      [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap|ao]
+      [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture [--rebake-hint]] [--yes] [--no-install]
 "H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --map FILE.map [--map-out OUT.map] [--bsp B]
       [--sky-cubemap SKY=BITMAP|none|auto] [--vista-out yes|no] [same quality / mode / AO options]
 "H2 GPU Lightmapper.exe" --cli restore --h2ek DIR --scenario S --bsp B [--list | --from BACKUP | --undo-last-install]
 "H2 GPU Lightmapper.exe" --cli doctor [--h2ek DIR]
+"H2 GPU Lightmapper.exe" --cli cleanup --h2ek DIR [--dry-run] [--legacy]
 "H2 GPU Lightmapper.exe" --cli help
 ```
 
@@ -244,9 +282,13 @@ was written, 3 failed, 4 cancelled.
 - **Cancel** stops the bake at once, except during a tag write, which is finished and verified first.
 - The app never deletes your files, never changes Windows settings, and never writes the radiance bitmaps.
 
-**Never delete `GPU Lightmap Work`, a `farm_w...` folder or `_gpulm_skel` with a recursive delete tool** (`rmdir /s`, Windows
-PowerShell 5.1 `Remove-Item -Recurse`, disk cleaners). The skeleton folders contain links (junctions) into your live `tags`
-folder and some tools follow them. The app has no cleanup feature for this reason.
+**Temporary files (0.6.8):** the workers, the temporary folders of `.map` bakes and map queries live in
+`<H2EK>\GPU Lightmap Work\Temp (safe to delete)\`. Delete it or anything in it whenever you like, even during a bake: a bake whose
+temporary files disappear stops with "Nothing was written to your tags. Bake again." The app creates no links inside it. Outside it,
+**never delete `GPU Lightmap Work`, a `farm_w...` folder or `_gpulm_skel` with a recursive delete tool** (`rmdir /s`, Windows
+PowerShell 5.1 `Remove-Item -Recurse`, disk cleaners): a skeleton folder of an earlier version can hold links (junctions) into your
+live `tags` folder. Use **Advanced settings > Free space from earlier versions** or `--cli cleanup --h2ek DIR --legacy` instead; they
+list exactly what this app made and remove links without following them.
 
 ## Limits
 
@@ -259,12 +301,13 @@ Measurements come from one RTX 4090 PC; anything about other hardware is extrapo
 | Geometry in a BSP | Whatever `tool_fast` can import (512 clusters, 32,767 vertices and 65,535 triangles per section, 1,024 instances...). Largest tested: 98,314 traced triangles, 620 instances. | HARD (Halo 2's) |
 | BSP width | No fixed limit since 0.6.2: past about 510 x R world units per axis (R = the photon search radius) the occlusion grid grows its cells instead of dropping walls, and the log says so. No map that wide has been baked yet. | SOFT |
 | Lightmap texels | No fixed limit; the work is split into parts automatically. Largest tested: 10.9 M covered texels (mainmenu, 11.4 min). | SOFT |
-| One chart | At Super about 1.73 M covered texels (about 1,713 x 1,713 grid); bigger is refused with a message. | HARD |
+| One chart | At Super about 1.73 M covered texels (about 1,713 x 1,713 grid); bigger is refused with a message. Since 0.6.9 a chart larger than one part is split exactly instead of refused (checked with forced splits). | HARD |
 | Photons | Low 5 M, Super 20 M, Custom 1-100 M. | HARD |
 | Gather rays | Per shading call: Low 72, Super 128, Custom 2 x MC^2 (MC 1-64). | HARD |
 | Lights | Halo 2 allows 500 lights, 500 fixtures, 32 skies per scenario. | HARD |
-| Light probes | 281 probe points per BSP at the default buffer cap. A BSP above that is refused before anything runs, with a message to use Lightmap Only. | HARD |
-| Video memory | 24 GB held every tested map. The app sizes its work parts from your card's VRAM and, since 0.6.3, from what other programs are using; on an idle 24 GB card nothing changes. | SOFT, not tested below 24 GB |
+| Light probes | Up to 1,024 probe points per BSP (Halo 2's limit). Since 0.6.9 the probe pass runs in batches of up to 281 points and joins the results exactly; above 1,024 the app refuses before anything runs, with a message to use Lightmap Only. Only 11 points were baked for real; 300 were checked in batches. | HARD (Halo 2's) |
+| Video memory | 24 GB held every tested map. Since 0.6.9 the engine reads the card's dedicated memory and sizes the bake's parts and largest buffers to fit (and, since 0.6.3, what other programs are using); on a 24 GB card nothing changes. Checked with a pretend smaller card, not on a real 6, 8 or 12 GB card. The photon lattice pass (6-14 GB on big maps) is not sized. | SOFT, not tested below 24 GB |
+| Ray tracing | Used automatically on GPUs with RT cores (0.6.9); tested only on an RTX 4090. Other GPUs bake the old way. No setting turns it off. | SOFT |
 | Bake time | Super: 22 s to 17.4 min on the tested maps (RTX 4090). | SOFT |
 | GPU timeout (TDR) | Every long GPU step is paced by measured time and starts with a tiny submission. Since 0.6.5 the photons of the sky chain, the exact sun and the photon cast are resumable (the smallest unit is one trace, not one photon), the photon lattice is resumable (0.6.4), and the exact-sun batch size no longer reads only the dedicated memory of an integrated GPU. None of the tested bakes on the RTX 4090 printed the 1.5 s warning. A GPU much slower than an RTX 4090, or one with shared memory, has not been tried. | SOFT |
 
@@ -279,13 +322,15 @@ These are open problems in this build.
    been run on that PC or on any GPU other than an RTX 4090**, where nothing changes in the output and the 1.5 s warning never appeared.
    A GPU much slower than a 4090, or a map much denser than the tested ones, has not been tried. If a bake fails with a GPU reset, the
    app says so in plain words; "Keep PC responsive" helps.
-2. **VRAM sizing is untested below 24 GB.** The app sizes its work parts from your card's memory (and what other programs
-   use), but this has only been checked by calculation, not on a 12 or 16 GB card, and the photon-lattice step is not sized by it.
-   On a 4 GB card a big map may not fit.
+2. **VRAM sizing is untested below 24 GB, and the photon lattice is not sized.** The app sizes its work parts and largest buffers
+   from your card's memory, but this was checked only with a pretend smaller card on the RTX 4090, not on a real 6, 8 or 12 GB
+   card. The photon-lattice step (the first step of a bake, 6-14 GB on big maps) runs as its own process and is not sized by it: on
+   a card where it does not fit, a bake can still stop there (the app prints a notice for cards under 14 GB).
 3. **Compatibility mode (DF64) is new and experimental.** GPUs without FP64 now run the engine's FP32 kernels instead of being
    refused. They matched full precision in testing, but only on an RTX 4090 with the mode forced on: **no real Intel or
    Qualcomm GPU and no Windows on ARM PC has run it**, and it may be slower. Please report what you see.
-4. **Light probes need 281 points or fewer per BSP.** A BSP with more is refused up front (use Lightmap Only).
+4. **Light probes: up to 1,024 points per BSP** (Halo 2's limit), baked in batches of 281. No real BSP with more than 281 points
+   has been baked end to end yet; a BSP with more than 1,024 is refused up front (use Lightmap Only).
 5. **Drive-root H2EK folders** (for example `D:\`) are accepted but no real bake has been run from one yet.
 6. **Per-vertex lighting differs a little from `tool_fast`'s own write-back by default.** About 14-15% of the vertex-lit
    records include samples that `tool_fast` drops (its visibility test is not reproduced by default). The lightmap bitmaps are
@@ -295,6 +340,10 @@ These are open problems in this build.
    triplicate). 0.6.6 fills such texels from their covered neighbours and logs a warning instead of refusing the bake.
 8. **0.6.4 and 0.6.5: a refused stage could still be accepted.** In those versions a Lightmap Only bake could end DONE, and an install
    without light probes could install a lightmap, even when the final check had refused it. 0.6.6 fixes this; update if you use those modes.
+9. **Ray tracing was run only on an RTX 4090.** The fall-back to the normal tracer on GPUs without RT cores is proven by forcing it on
+   that card, not on a real GeForce 10 series or AMD card. There is no setting to turn RT off. The giant-chart split and the AO trace split
+   were checked with forced splits, not on a map that really needs them.
+10. **Windows Security** may flag an engine file; see [Windows Security (Defender)](#windows-security-defender).
 
 Maps with several cubemap skies (for example 07a_highcharity high_0) are accepted since 0.6.5; that bake was not compared with a CPU bake.
 
@@ -314,7 +363,7 @@ chronopolis the per-texel correlation is 0.9997.
 **Does AO change accuracy?** Yes, on purpose. AO darkens occluded corners using a GPU ray trace, something the CPU lightmapper
 never does, so an AO lightmap no longer matches the CPU result. Leave AO off if you want the CPU-faithful lightmap.
 
-**Why does Windows warn me?** The exe is unsigned. See [Download and first start](#download-and-first-start).
+**Why does Windows warn me?** The exe is unsigned. See [Download and first start](#download-and-first-start). If Windows Security removes an engine file, see [Windows Security (Defender)](#windows-security-defender).
 
 **Does it work with Halo 2 Vista?** No. It targets the MCC Halo 2 H2EK `tool_fast` build named above.
 
@@ -334,7 +383,9 @@ part of this snapshot. See [docs/BUILDING.md](docs/BUILDING.md) for what is need
   that goes with it). Their license is reproduced in [THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES.txt).
 - **h2conv** ([Halo2-Map-Converter](https://github.com/harctheshark/Halo2-Map-Converter), GPL-3.0-or-later), the converter that
   reads and writes `.map` files for the .map source. It is bundled in the exe's runtime as a separate program; this repository
-  holds none of its code. Its tag definitions come from [Assembly](https://github.com/xboxchaos/assembly) (GPL-3.0).
+  holds none of its code. It reads tag layouts at runtime from separate data files: the
+  [Assembly](https://github.com/xboxchaos/assembly) plugin layouts (GPL-3.0) and the blam-tags project's definitions (HABT's
+  layouts, MIT).
 - **Unreal Engine Lightmass** (Epic Games) for the ambient-occlusion formula that the AO layer follows.
 - **PowerShell** (Microsoft, MIT), **CPython** (Python Software Foundation) and **numpy** (the NumPy developers), which are
   bundled inside the exe under their own licenses.

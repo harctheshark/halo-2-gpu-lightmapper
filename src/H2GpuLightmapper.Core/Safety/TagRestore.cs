@@ -281,6 +281,8 @@ namespace H2GpuLightmapper.Core.Safety
             }
             try { SafeFs.MoveNoReplace(markerPath, markerPath + ".done_" + ts); } catch (IOException) { }
             try { res.ClearedMarkers = StartupRecovery.ClearMarkersFor(work, set, now, null, ownLockContent); } catch (Exception) { }
+            // 0.6.8: _TAGBAK_ui stays bounded: the original + the newest 5 backups of this set (the before_restore copy just made included)
+            try { TempJanitor.PruneUiBackups(work, set.Prefix); } catch (Exception) { }
             // the files went back through .gpulm_new + MoveFileEx: an open Sapien gets no change event for that; signal it
             string ping = null;
             try { ping = SapienReloadPing.Touch(set.TagDir, res.Restored).Note; } catch (Exception) { }

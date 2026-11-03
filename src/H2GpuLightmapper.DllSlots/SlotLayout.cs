@@ -139,7 +139,17 @@ namespace H2GpuLightmapper.DllSlots
             new[] { new SlotSpec("kBaseDir", 428436, 61, ".rdata"), new SlotSpec("g_dirBuf", 674304, 300, ".data") },
             SlotLayoutSource.Known);
 
-        public static IReadOnlyList<SlotLayout> All { get; } = new[] { Production, ProductionV062, ProductionV064, Skeleton, SkeletonV064 };
+        /// <summary>
+        /// 0.6.9: engine_v374\v043-tagwriter\dll\gpulm_estimator.dll (the skeleton-mode build with the int-exact AVX2 / SSE4.1 NeuQuant, GPULM_FASTNQ=1; 56b774df).
+        /// The AO engine keeps the 0.6.4 skeleton DLL. Offsets = the two NUL-terminated copies of the pristine path that <see cref="DllSlotPatcher.DiscoverLayout"/>
+        /// finds (test "promoted 0.6.9 skeleton layout"), the same rule as 0.6.4's 428436 / 674304.
+        /// </summary>
+        public static readonly SlotLayout SkeletonV069 = new SlotLayout(
+            "gpulm_estimator (skeleton, 0.6.9)", "56b774df2fce703a9a63da793aab7c8c", 716800,
+            new[] { new SlotSpec("kBaseDir", 444772, 61, ".rdata"), new SlotSpec("g_dirBuf", 692736, 300, ".data") },
+            SlotLayoutSource.Known);
+
+        public static IReadOnlyList<SlotLayout> All { get; } = new[] { Production, ProductionV062, ProductionV064, Skeleton, SkeletonV064, SkeletonV069 };
 
         public static SlotLayout ByPristineMd5(string md5)
         {

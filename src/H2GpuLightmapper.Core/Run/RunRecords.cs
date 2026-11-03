@@ -228,10 +228,13 @@ namespace H2GpuLightmapper.Core.Run
             return i < 0 ? s : s.Substring(i + 1);
         }
 
+        /// <summary>0.6.8 RC: whitespace becomes '_' too -- the run folder's name is the run tag, which the GPU lock (and its content line) takes as
+        /// ONE word; a scenario named "bounce progression test" failed with "runTag must be one word". (Older run folders with a space cannot
+        /// exist: such a bake always failed at that lock, so no older run of a spaced name is lost to NameMatches.)</summary>
         private static string Sanitize(string s)
         {
             var sb = new StringBuilder();
-            foreach (char c in s) sb.Append(System.IO.Path.GetInvalidFileNameChars() is char[] bad && Array.IndexOf(bad, c) >= 0 ? '_' : c);
+            foreach (char c in s) sb.Append((System.IO.Path.GetInvalidFileNameChars() is char[] bad && Array.IndexOf(bad, c) >= 0) || char.IsWhiteSpace(c) ? '_' : c);
             return sb.ToString();
         }
     }

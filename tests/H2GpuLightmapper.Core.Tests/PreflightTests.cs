@@ -414,11 +414,11 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.True(!reads("$myenv:GPULM_COMPAT = 1"), "not another provider / variable ending in env");
             Assert.True(!reads(""), "empty script"); Assert.True(!reads(null), "null script");
             // the production engine of this PC (read only): promoted to 0.6.4 on 2026-10-21 it HAS the marker; the 0.6.3 script (kept as the promotion's backup) has none
-            string prod = Path.Combine(C.MineRoot, @"GPU Lightmap Work\engine_v373\gpu_bake.ps1");
+            string prod = Path.Combine(C.MineGlw, @"engine_v373\gpu_bake.ps1");
             if (File.Exists(prod)) Assert.True(reads(File.ReadAllText(prod)), "production engine_v373 (0.6.4) validates GPULM_COMPAT");
-            string old063 = Path.Combine(C.MineRoot, @"GPU Lightmap Work\engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
+            string old063 = Path.Combine(C.MineGlw, @"engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
             if (File.Exists(old063)) Assert.True(!reads(File.ReadAllText(old063)), "engine_v373 as of 0.6.3 (the pre-promotion backup) has no Compatibility mode");
-            string dev = Path.Combine(C.MineRoot, @"GPU Lightmap Work\_research\df64\dev_DF\gpu_bake.ps1");
+            string dev = Path.Combine(C.MineGlw, @"_research\df64\dev_DF\gpu_bake.ps1");
             if (File.Exists(dev)) Assert.True(reads(File.ReadAllText(dev)), "dev_DF (engine 0.6.4 candidate) validates GPULM_COMPAT");
         }
 

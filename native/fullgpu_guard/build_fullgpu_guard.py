@@ -223,6 +223,21 @@ def cl_line_from(bat):
     return None
 
 
+def cl_lines_from(bat):
+    """0.6.8 (XC host recipe): EVERY cl line of a bat (the scast object compile + the gather.cpp link), redirections stripped"""
+    out = []
+    for line in Path(bat).read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if s.lower().startswith("cl "):
+            out.append(re.sub(r"\s*>.*$", "", s).strip())
+    return out
+
+
+def xc_obj_sources(obj_line):
+    """the .cpp files the XC object compile names (relative to v041-fullgpu)"""
+    return [t for t in obj_line.split()[1:] if t.lower().endswith(".cpp")]
+
+
 def section_strings(data, names=(".rdata", ".data"), n=8):
     """Printable ASCII runs (>= n) inside the data sections only (code bytes would add noise), lambda hashes masked."""
     info = pe_util.parse(data)
@@ -257,17 +272,29 @@ def norm_warnings(lines):
 
 
 # ----------------------------------------------------------------------------------------------------- build helpers
-def compile_host(cwd, cl_line, env, out_dir, log_path):
-    """The production cl line, run in `cwd` (gather.cpp relative, as the bat does) with /Fo and /Fe redirected to out_dir."""
+def compile_host(cwd, cl_line, env, out_dir, log_path, obj_line=None):
+    """The production cl line, run in `cwd` (gather.cpp relative, as the bat does) with /Fo and /Fe redirected to out_dir.
+    0.6.8 (XC host recipe, build_host_xc.bat): obj_line = the scast object compile; it runs first in the same cwd with /Fo -> out_dir\\_obj\\,
+    and the gather.cpp line links those objects (its _obj\\X.obj tokens point there). Nothing is written in cwd."""
     toks = cl_line.split()
     assert toks[0].lower() == "cl" and "gather.cpp" in toks
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     exe, obj = out_dir / "fullgpu.exe", out_dir / "gather.obj"
+    odir = out_dir / "_obj"
+    if obj_line:
+        odir.mkdir(exist_ok=True)
+        oargs = [("/Fo" + str(odir) + "\\") if t.lower().startswith("/fo") else t for t in obj_line.split()[1:]]
+        rc, so, se = run(["cl.exe"] + oargs, env=env, cwd=str(cwd))
+        Path(str(log_path) + ".objs.log").write_text(so + se, encoding="utf-8")
+        if rc != 0:
+            raise RuntimeError("cl (scast objects) failed (exit %s) in %s:\n%s" % (rc, cwd, (so + se)[-4000:]))
     args = []
     for t in toks[1:]:
         if t.lower().startswith("/fe"):
             args.append("/Fe:" + str(exe))
+        elif obj_line and t.lower().startswith("_obj\\") and t.lower().endswith(".obj"):
+            args.append(str(odir / t.split("\\", 1)[1]))
         else:
             args.append(t)
     i = args.index("gather.cpp")
@@ -450,6 +477,17 @@ def main():
     R["production"] = dict(path=str(prod_exe), **pe_summary(prod))
     closure, used_by, missing = include_closure(src_dir / "gather.cpp")
     files = [src_dir / "gather.cpp"] + closure
+    xc_bat = src_dir / "build_host_xc.bat"
+    xc_lines = cl_lines_from(xc_bat) if xc_bat.exists() else []
+    xc_obj = [l for l in xc_lines if " /c " in " " + l + " "]
+    xc_main = [l for l in xc_lines if "gather.cpp" in l.split()]
+    if xc_bat.exists():
+        # 0.6.8: the dev_XC host links the stage-S0 scast objects (compiled /fp:strict): their sources are part of the build
+        for cpp in (xc_obj_sources(xc_obj[0]) if len(xc_obj) == 1 else []):
+            p = (src_dir / cpp).resolve()
+            extra = [p] + include_closure(p)[0]
+            files += [f for f in extra if f not in files]
+        files.append(xc_bat)
     man = read_manifest(engine)
     sources, header_blob_index = [], {}
     for f in files:
@@ -505,15 +543,24 @@ def main():
                   build_fullgpu_bat=cl_full, build_host_only_bat=cl_host)
     checks["A3_cl_line_from_production_bat"]["cl_line"] = cl_full
     R["cl_line"] = cl_full
+    R["cl_obj_line"] = None
+    if xc_bat.exists():
+        ok_a3 = check("A3x_cl_lines_from_build_host_xc_bat", len(xc_obj) == 1 and len(xc_main) == 1, build_host_xc_bat=xc_lines)
+        if ok_a3:
+            cl_full, R["cl_line"], R["cl_obj_line"] = xc_main[0], xc_main[0], xc_obj[0]
+            checks["A3x_cl_lines_from_build_host_xc_bat"].update(cl_line=xc_main[0], cl_obj_line=xc_obj[0])
     env = msvc_env(a.vcvars)
     rc, so, se = run(["cl.exe"], env=env)
     mver = re.search(r"Compiler Version (\d+)\.(\d+)\.(\d+)", so + se)
     cl_build = int(mver.group(3)) if mver else None
-    prod_cc = sorted(set(e["build"] for e in R["production"]["rich"] if e["prodid"] in (259, 260, 261) and e["count"] == 1))
+    # the compiler that built production's OWN objects: a Rich C/C++ entry whose count = the objects the bat compiles (1 = gather.cpp; 0.6.8 XC
+    # host recipe: gather.cpp + the scast objects, all from one cl), which tells them apart from the CRT/STL library objects of other builds
+    n_objs = 1 + (len(xc_obj_sources(R["cl_obj_line"])) if R.get("cl_obj_line") else 0)
+    prod_cc = sorted(set(e["build"] for e in R["production"]["rich"] if e["prodid"] in (259, 260, 261) and e["count"] == n_objs))
     R["toolchain"] = {"VCToolsVersion": env.get("VCToolsVersion"), "WindowsSDKVersion": env.get("WindowsSDKVersion", "").strip("\\"),
                       "cl_version": mver.group(0) if mver else None, "production_rich_compiler_builds": prod_cc}
     ok_a4 = check("A4_toolchain_matches_production_rich", cl_build is not None and cl_build in prod_cc,
-                  local=cl_build, production_rich=prod_cc)
+                  local=cl_build, production_rich=prod_cc, objects=n_objs)
     if not (ok_a1 and ok_a2 and ok_a3):
         return finish(R, out, out_root, False, "stage A refused: production headers / manifest / cl line")
 
@@ -540,7 +587,7 @@ def main():
                 continue
             before = dir_listing(d)
             try:
-                exe, warn, argv = compile_host(d, cl_full, env, out / ("repro%d" % i), out / ("repro%d" % i) / "cl.log")
+                exe, warn, argv = compile_host(d, cl_full, env, out / ("repro%d" % i), out / ("repro%d" % i) / "cl.log", R["cl_obj_line"])
             except RuntimeError as e:
                 att["error"] = str(e)[:1500]
                 continue
@@ -572,7 +619,7 @@ def main():
         if md5f(dst) != s["md5"]:
             raise RuntimeError("copy of %s does not match the engine" % s["rel"])
     wdir = work / os.path.relpath(src_dir, engine)
-    unmod_exe, unmod_warn, unmod_argv = compile_host(wdir, cl_full, env, out / "unmod", out / "unmod" / "cl.log")
+    unmod_exe, unmod_warn, unmod_argv = compile_host(wdir, cl_full, env, out / "unmod", out / "unmod" / "cl.log", R["cl_obj_line"])
     unmod = unmod_exe.read_bytes()
     R["unmod"] = dict(path=str(unmod_exe), argv=unmod_argv, warnings=unmod_warn, **pe_summary(unmod))
     cu = compare(prod, unmod, "unmod-copy vs production")
@@ -598,7 +645,7 @@ def main():
     R["guard_edits"] = {"report": edit_report, "gather_cpp_md5_before": md5b(pristine),
                         "gather_cpp_md5_after": md5b(patched), "guard_header_md5": md5f(wdir / n3_guard_edits.GUARD_HEADER),
                         "edits_module_md5": md5f(HERE / "n3_guard_edits.py"), "diff": str(out / "N3_gather.cpp.diff")}
-    guard_exe, guard_warn, guard_argv = compile_host(wdir, cl_full, env, out / "guard", out / "guard" / "cl.log")
+    guard_exe, guard_warn, guard_argv = compile_host(wdir, cl_full, env, out / "guard", out / "guard" / "cl.log", R["cl_obj_line"])
     guard = guard_exe.read_bytes()
     R["guard"] = dict(path=str(guard_exe), argv=guard_argv, warnings=guard_warn, **pe_summary(guard))
     cg = compare(prod, guard, "guard vs production")

@@ -1,0 +1,15 @@
+# title: P14 comment only: the shipped comment no longer names the author's test map (0.6.8 public-text rule; no code change)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: 1231fb773f236ea021819d5c0fa9b5ef
+# result-md5: 8b0e2904bdd593e0bc11f1d76fdf8587
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -944,7 +944,7 @@
+             # process's UCRT stdout/stderr onto CONOUT$ (SetStdHandle): the tool's own output then goes to its console window, so
+             # tool_stdout.txt / tool_stderr.txt stay EMPTY on this run (no script reads them; gpulm.log + skel_manifest.bin are unaffected)
+             # v373V2: with -SceneryOwnPermutationOnly the skeleton DLL is injected while the tool is still HELD (v373M), so process_scenery_object's descriptor hook is in
+-            # before the first placement (a 3 s late injection missed placement 0 on a small test map). Without the switch: the unchanged launch + late injection below.
++            # before the first placement (a 3 s late injection missed placement 0 on a small test map). Without the switch: the unchanged launch + late injection below.
+             if ($SceneryOwnPermutationOnly) { $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt" -earlyDll $SKDLL -readyLog "$run\gpulm.log" }
+             else { $p = Start-OsoyTool $a "skeleton" $run "$run\tool_stdout.txt" "$run\tool_stderr.txt" }
+         } else {

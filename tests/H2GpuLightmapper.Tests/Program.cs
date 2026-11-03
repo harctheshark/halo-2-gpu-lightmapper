@@ -51,6 +51,7 @@ namespace H2GpuLightmapper.Tests
             tests.AddRange(UiAndRulesTests.All());
             tests.AddRange(SceneryFixTests.All());
             tests.AddRange(MapBakeTests.All());
+            tests.AddRange(AoOnlyTests.All());          // 0.6.8 xc8: AO only (--mode ao)
 
             int pass = 0, fail = 0, skip = 0;
             var sw = Stopwatch.StartNew();

@@ -162,12 +162,16 @@ namespace H2GpuLightmapper.Core.Tests
             Environment.SetEnvironmentVariable("DEVP_SB_PAD", "3");
             Environment.SetEnvironmentVariable("DEVP_PROF_EXIT", "1");
             Environment.SetEnvironmentVariable("V370_KEYF", @"C:\bogus\keyf.json");
+            Environment.SetEnvironmentVariable("PY_PYTHON3", "3.13");          // 0.6.8: the py launcher's version pick never reaches a child
+            Environment.SetEnvironmentVariable("PY_PYTHON", "3.13");
             try
             {
                 // review fix (findings 19 + 18): fullgpu's research knobs never reach a child; the plan logs names only for the rest
                 var benv = BakeEnv.Build(Rt);
                 var leaked = benv.Vars.Select(kv => kv.Key).Where(k => k.StartsWith("DEVP_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("V370_", StringComparison.OrdinalIgnoreCase)).ToList();
                 Assert.Eq(0, leaked.Count, "DEVP_* / V370_* stripped: " + string.Join(", ", leaked));
+                var pyl = benv.Vars.Select(kv => kv.Key).Where(k => k.StartsWith("PY_PYTHON", StringComparison.OrdinalIgnoreCase)).ToList();
+                Assert.Eq(0, pyl.Count, "PY_PYTHON* (py launcher) stripped: " + string.Join(", ", pyl));
                 Assert.True(H2Lm.Proc.ChildEnvironment.IsLoggable("H2LM_ROOT") && H2Lm.Proc.ChildEnvironment.IsLoggable("PATH") && H2Lm.Proc.ChildEnvironment.IsLoggable("PYTHONIOENCODING")
                             && !H2Lm.Proc.ChildEnvironment.IsLoggable("CLAUDE_CODE_MESSAGING_TOKEN") && !H2Lm.Proc.ChildEnvironment.IsLoggable("USERPROFILE"), "loggable = only the shell's own variables");
                 var run = NewRun("envbsp");
@@ -200,7 +204,7 @@ namespace H2GpuLightmapper.Core.Tests
             }
             finally
             {
-                foreach (var n in new[] { "GPULM_S2_TEST", "OSOYOOS_S2_TEST", "PYTHONPATH", "H2LM_ROOT", "DEVP_SB_PAD", "DEVP_PROF_EXIT", "V370_KEYF" }) Environment.SetEnvironmentVariable(n, null);
+                foreach (var n in new[] { "GPULM_S2_TEST", "OSOYOOS_S2_TEST", "PYTHONPATH", "H2LM_ROOT", "DEVP_SB_PAD", "DEVP_PROF_EXIT", "V370_KEYF", "PY_PYTHON3", "PY_PYTHON" }) Environment.SetEnvironmentVariable(n, null);
             }
         }
 

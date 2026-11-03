@@ -64,6 +64,16 @@ namespace H2GpuLightmapper.Core.Payload
             return f.Enabled;
         }
 
+        /// <summary>
+        /// 0.6.8 bounded temp: may the workers (farm_wNN) live in WORK\Temp (safe to delete)? Only when the builder saw that every gpu_bake.ps1
+        /// it ships carries P13 (H2LM_FARMS) and the light-probe driver P5c (features.farms.enabled). Fails CLOSED to the old layout: a payload
+        /// without the record keeps the farms in WORK and the shell never sets H2LM_FARMS (an engine without P13 would ignore it).
+        /// </summary>
+        public bool FarmsInTemp
+        {
+            get { var f = Features == null ? null : Features.Farms; return f != null && f.Enabled; }
+        }
+
         public static PayloadManifest Load(Stream s)
         {
             var ser = new DataContractJsonSerializer(typeof(PayloadManifest),
@@ -153,6 +163,8 @@ namespace H2GpuLightmapper.Core.Payload
         [DataMember(Name = "probes", Order = 1, IsRequired = false, EmitDefaultValue = false)] public PayloadFeature Probes { get; set; }
         /// <summary>X1: the shipped gpu_bake.ps1 handles H2LM_ROOT at a drive root (P1b: $RP). Absent = an older engine: drive roots stay refused.</summary>
         [DataMember(Name = "driveRoot", Order = 2, IsRequired = false, EmitDefaultValue = false)] public PayloadFeature DriveRoot { get; set; }
+        /// <summary>0.6.8: every shipped gpu_bake.ps1 takes H2LM_FARMS (P13) and the probe driver follows it (P5c). Absent = the farms stay in WORK.</summary>
+        [DataMember(Name = "farms", Order = 3, IsRequired = false, EmitDefaultValue = false)] public PayloadFeature Farms { get; set; }
     }
 
     [DataContract]

@@ -11,6 +11,8 @@
     nostage_once_slow4b  the same, the [4b] takes 5 s (a cancel during it is deferred)
     nodirect           U3: gpu_bake's pre-flight "-WriteBackMode direct cannot run": stage-only THROWS before any phase; with
                        -WriteBack it notes it, switches to tool mode and the tool write-back [4] writes the set
+    wipetemp           0.6.8: after the stage-only [4a] stage, delete every file under H2LM_FARMS that can be deleted (the user clearing
+                       "Temp (safe to delete)" mid-bake: a held .lock stays), then exit 0 as if nothing happened
     gpu_bake_wait      U3: after a stage-only [4a] stage, write $W\fake_gpu_bake_waiting.flag and wait (<= 120 s) for
                        $W\fake_gpu_bake_go.flag (the test holds a file before the shell's install)
 #>
@@ -28,6 +30,7 @@ param(
     [switch]$ToolOverlay,                     # engine 0.6.4 cross-folder BSP (dev_S). FAKE_CROSSBSP_ENGINE
     [switch]$Responsive,                      # X2: the engine's "Keep PC responsive" switch (the fake only records that it was bound)
     [switch]$ExactVertexLighting,             # W2 (0.6.3): the engine's "2004 Exact Vertex Lighting?" switch (recorded only)
+    [switch]$CaptureOnly,                     # 0.6.8 xc8 AO only: stop after phase 1 (the capture)
     [switch]$SceneryOwnPermutationOnly,       # engine 0.6.4: "Scenery Multi Permutation Fix (Experimental Improvement)" (recorded only). Ctx.BuildPayload drops THIS line to make an older engine.
     [ValidateRange(1000000,100000000)][int]$Photons = 0,
     [ValidateRange(1,64)][int]$MCSamples = 0
@@ -43,7 +46,8 @@ foreach ($v in "H2LM_ROOT", "H2LM_WORK", "H2LM_CODE") {
     if (-not $x -or -not (Test-Path -LiteralPath $x -PathType Container)) { throw "H2LM: $v is not an existing folder ('$x')" } }
 if ($env:H2LM_NOWINDOW -ne "1") { throw "H2LM: H2LM_NOWINDOW is '$($env:H2LM_NOWINDOW)', the shell always sets 1" }
 $ROOT = $env:H2LM_ROOT; $W = $env:H2LM_WORK; $WC = $env:H2LM_CODE
-$OUT = Join-Path $W ("farm_w{0:D2}" -f $Worker)
+$FARMS = if ($env:H2LM_FARMS) { if (-not (Test-Path -LiteralPath $env:H2LM_FARMS -PathType Container)) { throw "H2LM: H2LM_FARMS='$($env:H2LM_FARMS)' must be an existing folder" }; $env:H2LM_FARMS } else { $W }   # P13 (0.6.8)
+$OUT = Join-Path $FARMS ("farm_w{0:D2}" -f $Worker)
 $TW = Join-Path $PSScriptRoot "v043-tagwriter"
 $scenRel = Split-Path $Scenario
 $scenLeaf = Split-Path $Scenario -Leaf
@@ -55,6 +59,7 @@ elseif ($Photons -or $MCSamples) { throw "-Photons / -MCSamples are only valid w
 $mode = "ok"
 $waitGo = $false
 $ctl = Join-Path $W "fake_control.txt"
+# 0.6.8 RC knob gpu_bake=quarantine_mid: an antivirus removes INST's v041-fullgpu\fullgpu.exe while the bake runs (the bake then fails on it)
 if (Test-Path -LiteralPath $ctl) { foreach ($l in Get-Content -LiteralPath $ctl) { if ($l -match '^gpu_bake=(\S+)') { $mode = $Matches[1] }; if ($l -match '^gpu_bake_wait\s*$') { $waitGo = $true } } }
 $gp = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GPULM_*' } | ForEach-Object { "$($_.Name)=$($_.Value)" })
 $dv = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'DEVP_*' -or $_.Name -like 'V370_*' } | ForEach-Object { $_.Name })   # review fix 19: must be empty
@@ -85,11 +90,13 @@ if (-not $SkipCapture) {
     if (-not (Test-Path -LiteralPath (Join-Path $OUT "capture_id.json"))) { throw "PHASE 1: -SkipCapture but $OUT has no capture" }
     Note "reusing the capture in $OUT (-SkipCapture)"
 }
+if ($CaptureOnly) { Write-Host ""; Write-Host "CAPTURE ONLY - stopped after phase 1.  0.1s   sever=3"; return }
 Phase 2 "DERIVE - fake derive"
 Phase 3 "GPU BAKE - fake bake"
 if ($env:GPULM_COMPAT -eq '1' -or $mode -eq 'nofp64') { Write-Host "      Compatibility mode (no FP64): fake -- the FP32-only double-single kernels" } else { Write-Host "      Compatibility mode: off (native FP64 kernels; fake)" }   # FAKE_COMPAT_ENGINE
 if ($env:GPULM_PROBES) { Write-Host ("      PROBE: traced {0}" -f $env:GPULM_PROBES); Set-Content -LiteralPath (Join-Path $OUT "vertex_out.bin") -Value "v" }
 if ($mode -eq "fail_bake") { throw "PHASE 3: the fake bake failed on purpose" }
+if ($mode -eq "quarantine_mid") { $qf = Join-Path $WC "engine_v373/v041-fullgpu/fullgpu.exe"; Remove-Item -LiteralPath $qf -Force; throw "PHASE 3: MISSING $qf" }   # 0.6.8 RC
 if ($mode -eq "fail_tdr") {      # X2: the engine's device-loss lines, then the throw (stdout like the real DIRECT: lines)
     Write-Host "DIRECT: *** GPU CAST DEVICE REMOVED (DXGI_ERROR_DEVICE_HUNG) -- the GPU device was RESET by Windows (TDR); nothing was written"
     throw "PHASE 3: fullgpu exited 3 after the device was lost" }
@@ -115,6 +122,11 @@ if ($WriteBackMode -ne "tool") {
         $report = [ordered]@{ writer = "fake"; status = "written"; outputs = $outs }
         Set-Content -LiteralPath (Join-Path $stage "tagw_report.json") -Value ($report | ConvertTo-Json -Depth 5)
         Write-Host "      stage written + validated: $stage"
+        if ($mode -eq "wipetemp" -and $env:H2LM_FARMS) {
+            $gone = 0
+            foreach ($d in @(Get-ChildItem -LiteralPath $env:H2LM_FARMS -Directory -Attributes !ReparsePoint)) {
+                foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -File)) { try { Remove-Item -LiteralPath $f.FullName -ErrorAction Stop; $gone++ } catch { } } }
+            Write-Host "      (fake) the temporary folder was cleared: $gone file(s) deleted" }
         if ($waitGo -and -not $WriteBack) {
             Set-Content -LiteralPath (Join-Path $W "fake_gpu_bake_waiting.flag") -Value "waiting"
             $sw = [Diagnostics.Stopwatch]::StartNew()

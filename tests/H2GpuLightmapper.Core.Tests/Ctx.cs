@@ -13,7 +13,7 @@ namespace H2GpuLightmapper.Core.Tests
     internal sealed class Ctx : IDisposable
     {
         public const string ProdDllMd5 = "d6147fce6e3979a37178d2e14d092227";      // W3 2026-10-21: the 0.6.4-promoted engine_v373 DLL (W1: b2370477, was aaf10a0f)
-        public const string SkelDllMd5 = "5c6aeea9d1ffbaaaa6351d7ba5e77360";      // W3 2026-10-21: the 0.6.4-promoted skeleton-mode DLL (was f0fb73ac)
+        public const string SkelDllMd5 = "56b774df2fce703a9a63da793aab7c8c";      // 0.6.9: engine_v374 skeleton-mode DLL with the fast NeuQuant (was 5c6aeea9 in 0.6.4-0.6.8)
         public const string LmwInstallMd5 = "4608af880327453b6e07844d6e7e95b9";
 
         public string Project, SandboxParent, ShortParent, PwshDir, PyDir, MineRoot, FixturesDir;
@@ -22,6 +22,23 @@ namespace H2GpuLightmapper.Core.Tests
         public string FxProdDll, FxSkelDll, FxLmwInstall, FxBoundsDb, FxGpuCheck, FxGpuCheckJson;
 
         public string MineWork { get { return Path.Combine(MineRoot, "GPU Lightmap Work"); } }
+        /// <summary>0.6.8 (2026-10-29): the folder that holds the production engine files the tests COPY (engine_v373\, v043-tagwriter\, _research\):
+        /// H2LM_TEST_MINE_GLW when set (a read-only mirror of those files), else MineWork itself when it holds engine_v373 (the old dev layout),
+        /// else the one subfolder of MineWork that does (the dev layout of 2026-10-29: GPU Lightmap Work\H2GPULM (Max Size - 100GBs)\engine_v373).
+        /// Only read.</summary>
+        public string MineGlw
+        {
+            get
+            {
+                string env = Environment.GetEnvironmentVariable("H2LM_TEST_MINE_GLW");
+                if (!string.IsNullOrEmpty(env)) return env;
+                if (Directory.Exists(Path.Combine(MineWork, "engine_v373"))) return MineWork;
+                if (Directory.Exists(MineWork))
+                    foreach (var d in Directory.GetDirectories(MineWork))
+                        if (Directory.Exists(Path.Combine(d, "engine_v373"))) return d;
+                return MineWork;
+            }
+        }
         public string PwshExe { get { return Path.Combine(PwshDir, "pwsh.exe"); } }
         public string PyExe { get { return Path.Combine(PyDir, "py.exe"); } }
 
@@ -45,7 +62,7 @@ namespace H2GpuLightmapper.Core.Tests
             Short = new Sandbox(ShortParent, Guid.NewGuid().ToString("N").Substring(0, 2)) { Keep = Keep };
 
             // fixtures: COPIES of production files, md5-checked (production is only read)
-            string engine = Path.Combine(MineWork, "engine_v373");
+            string engine = Path.Combine(MineGlw, "engine_v373");
             FxProdDll = CopyChecked(Path.Combine(engine, @"v014-inject-estimator\gpulm_estimator.dll"), "fx_prod.dll", ProdDllMd5);
             FxSkelDll = CopyChecked(Path.Combine(engine, @"v043-tagwriter\dll\gpulm_estimator.dll"), "fx_skel.dll", SkelDllMd5);
             FxLmwInstall = CopyChecked(Path.Combine(engine, @"v043-tagwriter\lmw_install.py"), "lmw_install.py", LmwInstallMd5);

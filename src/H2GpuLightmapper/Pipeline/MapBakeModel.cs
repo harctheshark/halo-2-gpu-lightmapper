@@ -98,7 +98,7 @@ namespace H2GpuLightmapper.Pipeline
         public bool AutoInMap, AutoInKit;
     }
 
-    /// <summary>What <c>mapbake query</c> (h2conv.mapbake_query) says about a map.</summary>
+    /// <summary>What <c>mapbake query</c> (h2conv) says about a map.</summary>
     public sealed class MapQueryResult
     {
         public bool Ok;

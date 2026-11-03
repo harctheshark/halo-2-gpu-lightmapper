@@ -1,0 +1,42 @@
+# title: P17 0.6.8: the four tool command lines quote the scenario and the BSP (AO engine)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: ff8de832ccace002566a197ccf860af5
+# result-md5: 1231fb773f236ea021819d5c0fa9b5ef
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -938,7 +938,7 @@
+         # campaign tag paths (0xC0000409 /GS while loading tags -- 07b high_10 CPU reference)
+         $tagsRel = [IO.Path]::GetRelativePath($ROOT, $o.Tags)
+         if ($tagsRel.StartsWith('..') -or [IO.Path]::IsPathRooted($tagsRel)) { throw "skeleton overlay $($o.Tags) is not under $ROOT" }
+-        $a = "lightmaps $($o.ScenArg) $Bsp low -tags_dir `"$tagsRel`" -data_dir data -game_root_dir ."
++        $a = "lightmaps `"$($o.ScenArg)`" `"$Bsp`" low -tags_dir `"$tagsRel`" -data_dir data -game_root_dir ."
+         if ($osoyOn) {
+             # v370: same command, H2ToolHooks.dll loaded before the first instruction. NOTE its DllMain (attach_to_console) freopens the
+             # process's UCRT stdout/stderr onto CONOUT$ (SetStdHandle): the tool's own output then goes to its console window, so
+@@ -1116,7 +1116,7 @@
+     # Default stays "low" so nothing silently changes; -CaptureQuality super runs the A/B.
+     $capQ = if ($CaptureQuality) { $CaptureQuality } else { $Quality }
+     Write-Host "      CPU capture quality: '$capQ' (follows -Quality unless -CaptureQuality is given)"
+-    $a = "lightmaps-farm-worker $Scenario $Bsp $capQ $Worker $($Worker+1) -tags_dir tags -data_dir data -game_root_dir ."
++    $a = "lightmaps-farm-worker `"$Scenario`" `"$Bsp`" $capQ $Worker $($Worker+1) -tags_dir tags -data_dir data -game_root_dir ."
+     # ***** dev_XC (2026-10-27): NO CPU CAST IN THE BAKE PATH. 0.6.7 launched the CPU's own photon cast here (the v372W castcpu process, GPULM_CASTONLY) beside
+     # the capture for every multi-sun map. That is gone: the GPU reproduces the CPU's cast by itself (fullgpu's exact sky chain over the surface / omni / half-life
+     # lights, GPULM_EXACT_*; -NoExactCast restores the 0.6.7 chain WITHOUT the CPU helper = the statistical GPU lottery for the suns behind the first non-sky light).
+@@ -2318,7 +2318,7 @@
+         $tagDir = $ovo.SkDir; $tagPfx = $ovo.Prefix
+         $tagsRelT = [IO.Path]::GetRelativePath($ROOT, $ovo.Tags)
+         if ($tagsRelT.StartsWith('..') -or [IO.Path]::IsPathRooted($tagsRelT)) { throw "-ToolOverlay: overlay $($ovo.Tags) is not under $ROOT" }
+-        $aFullOverride = "lightmaps $($ovo.ScenArg) $Bsp low -tags_dir `"$tagsRelT`" -data_dir data -game_root_dir ."
++        $aFullOverride = "lightmaps `"$($ovo.ScenArg)`" `"$Bsp`" low -tags_dir `"$tagsRelT`" -data_dir data -game_root_dir ."
+         $wbBase = "$SKW\wbrun"; New-Item -ItemType Directory -Force -Path $wbBase | Out-Null
+         $env:GPULM_BASEDIR = "$wbBase\"
+         Note "dev_S -ToolOverlay: the tool write-back runs in the skeleton overlay $($ovo.SkDir), NOT in the live tags; logs in $wbBase"
+@@ -2333,7 +2333,7 @@
+         Write-Host ("      tag backup: {0} file(s) of {1}\{2}* -> {3}" -f $tagFiles.Count, $tagDir, $tagPfx, $tagBak)
+     } else { Write-Host "      no existing lightmap tag to back up ($tagDir\$tagPfx*) -- first bake of this BSP" }
+     Set-Content "$OUT\writeback_in_progress.txt" ("started {0}; previous tags: {1} ({2} files from {3}\{4}*). Copy them back if the new tag is broken." -f (Get-Date), $tagBak, $tagFiles.Count, $tagDir, $tagPfx)
+-    $aFull = "lightmaps $Scenario $Bsp low -tags_dir tags -data_dir data -game_root_dir ."
++    $aFull = "lightmaps `"$Scenario`" `"$Bsp`" low -tags_dir tags -data_dir data -game_root_dir ."
+     if ($aFullOverride) { $aFull = $aFullOverride }
+     if ($osoyOn) { $p = Start-OsoyTool $aFull "writeback" $OUT -earlyDll $DLL -readyLog "$wbBase\gpulm.log" }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven; v373M: and our DLL
+     else {

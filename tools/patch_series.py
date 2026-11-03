@@ -28,7 +28,9 @@ Series JSON ("h2lm-patch-series/1"):
                 "base_md5": "<production md5>",
                 "patches": ["P1_....patch", "P3_....patch"],    # relative to the series file, applied in this order
                 "tokens": ["NAME"],
-                "upstream": {"md5": "<production md5 after U1>", "base_file": "../base/<path>"}}]}   # optional (U1)
+                "upstream": {"md5": "<production md5 after U1>", "base_file": "../base/<path>"},   # optional (U1)
+                "post_upstream": ["P13_....patch"]}]}   # optional (0.6.8): applied to the verified production copy (first one pinned
+                                                        # to production's md5); the payload ships the result, production is not written
 Exit codes: 0 ok, 2 refused (nothing written), 1 usage."""
 import argparse
 import hashlib
@@ -199,6 +201,36 @@ def build_target(series, sdir, t, src_root, sets, stages_out=None, check_only=Fa
     rec["out_md5"] = md5(cur)
     if prod is not None and cur != prod:      # cannot happen after _token_values; kept as the byte-level proof of the no-op
         raise Refused("%s: production (upstream %s) != the chain result %s of the pinned base" % (rel, md5(prod), md5(cur)))
+    # 0.6.8 (2026-10-29): "post_upstream" = reviewed patches applied AFTER the verified upstream (production verbatim, tokens filled):
+    # the first one is pinned to production's own md5, each next one to the previous result. Production itself is never written;
+    # the payload gets the patched copy (stage_engine stages it as kind 'patched'). Only an upstreamed target may have them.
+    post = t.get("post_upstream") or []
+    if post and prod is None:
+        raise Refused("%s: post_upstream patches need production to hold the upstream md5 (production is at the base: re-review)" % rel)
+    if post:
+        rec["post_patches"] = []
+        for pf in post:
+            pp = os.path.join(sdir, pf)
+            try:
+                praw = open(pp, "rb").read()
+                P = SP.read_patch(praw)
+            except OSError as e:
+                raise Refused("%s: cannot read %s: %s" % (rel, pf, e))
+            except SP.PatchError as e:
+                raise Refused("%s: %s: %s" % (rel, pf, e))
+            if P["source"] != rel:
+                raise Refused("%s: %s names '# source: %s'" % (rel, pf, P["source"]))
+            if P["base-md5"] != md5(cur):
+                raise Refused("%s: post_upstream %s is pinned to base %s but production (tokens filled) is %s" % (rel, pf, P["base-md5"], md5(cur)))
+            try:
+                cur = SP.apply_bytes(P, cur)
+            except SP.PatchError as e:
+                raise Refused("%s: %s: %s" % (rel, pf, e))
+            if b"%%H2LM:" in cur:
+                raise Refused("%s: post_upstream %s adds a %%%%H2LM: token" % (rel, pf))
+            rec["post_patches"].append({"file": pf, "patch_md5": md5(praw), "title": P.get("title", ""), "hunks": len(P["hunks"]),
+                                        "result_md5": md5(cur)})
+        rec["out_md5"] = md5(cur)
     return cur, rec
 
 
@@ -253,7 +285,9 @@ def run(a, write):
                                               rec["out_md5"][:8] if (write or rec.get("upstreamed")) else "tokens not filled",
                                               " + ".join("%s/%dh" % (os.path.splitext(p["file"])[0], p["hunks"]) for p in rec["patches"]),
                                               ("  UPSTREAMED: production %s == the chain of the pinned base %s (verified no-op; tokens %s)"
-                                               % (rec["production_md5"][:8], rec["base_file"], rec["production_tokens"])) if rec.get("upstreamed") else ""))
+                                               % (rec["production_md5"][:8], rec["base_file"], rec["production_tokens"])) if rec.get("upstreamed") else "")
+              + ("  + POST-UPSTREAM %s -> %s" % (" + ".join("%s/%dh" % (os.path.splitext(p["file"])[0], p["hunks"]) for p in rec["post_patches"]), rec["out_md5"][:8])
+                 if rec.get("post_patches") else ""))
     return 0
 
 

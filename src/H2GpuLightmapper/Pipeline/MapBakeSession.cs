@@ -9,7 +9,7 @@
 //                scenery databases; the live tags are snapshotted before, and after every tool / bake step (any change aborts the run).
 //   4. bake      the normal GPU bake (stage only) through the ordinary BakeSession: only the root it reads (H2LM_ROOT / H2LM_WORK) is the overlay; the runtime, the worker's farm
 //                folder, the GPU lock and the run folder are the real ones. The bake's first phase is tool_fast loading that tree: a failure there is reported as such.
-//   5. inject    ONLY the lightmap and its bitmap go into a COPY of the map (h2conv.inject --scnr-clusters keep --shift-align 0, with the map's bsp), validated, published as
+//   5. inject    ONLY the lightmap and its bitmap go into a COPY of the map (h2conv --scnr-clusters keep --shift-align 0, with the map's bsp), validated, published as
 //                <name>_gpulm.map next to the input (or the chosen path; never over the input). A Vista map: the MCC result is converted back to Vista (--vista-out yes).
 //   6. cleanup   the temporary folder (the map's files + overlay) is deleted, junctions unlinked first; the logs stay.
 //
@@ -40,13 +40,13 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>The steps of the .map path in order (plan text, log header, tests).</summary>
         public static readonly string[] StepTitles =
         {
-            "read the map (h2conv, a separate program): container, scenario, bsps, skies, cube maps; stock / compressed maps are refused; a Vista map is first converted to its MCC form",
+            "read the map (h2conv, a separate program): map format, scenario, bsps, skies, cube maps; stock / compressed maps are refused; a Vista map is first converted to its MCC form",
             "snapshot the live tags (the guard: any change during the run aborts it)",
             "read ONLY the lightmapper's dependency subset of the map into a temporary folder under the work folder (removed after the run)",
             "build the real-copy overlay root: kit tags copied (never linked) + the tags read from the map on top, tool_fast.exe, the scenery databases",
             "load check: the bake's first phase is tool_fast loading that tree (a failure there refuses the map in plain words)",
             "the normal GPU bake of the overlay (stage only; production engine; the worker's farm folder is the real one)",
-            "inject ONLY the lightmap and its bitmap (the lightmap alone for Lightprobes only) into a COPY of the map (h2conv.inject --scnr-clusters keep --shift-align 0); a Vista map with the conversion back to Vista chosen is converted back (h2conv.inject --to-vista)",
+            "inject ONLY the lightmap and its bitmap (the lightmap alone for Lightprobes only) into a COPY of the map (h2conv --scnr-clusters keep --shift-align 0); a Vista map with the conversion back to Vista chosen is converted back (h2conv --to-vista)",
             "validate the copy (h2conv validators; the Vista validators for a Vista result), then publish it as the output map (the input is never touched)",
             "check the live tags again, then delete the temp folder (junctions unlinked first; the logs stay)",
         };
@@ -70,6 +70,17 @@ namespace H2GpuLightmapper.Pipeline
         private string _h2work;
         private StreamWriter _sessionLog;
         private readonly List<string> _pre = new List<string>();
+        // the per-run channel of the helper processes, the run folder's lock (a stale folder is one whose lock can be taken), the worker farm folders to clean
+        private StageChannel _chan;
+        private FileStream _runLock;
+        private readonly List<string> _farms = new List<string>();
+        // 0.6.8 bounded temp: the run folder is WORK\Temp (safe to delete)\m<6hex> (its .lock + sentinel held by this lease) and the overlay root is
+        // "r"; the farms live beside it in Temp and are found by the engine through H2LM_FARMS, so no link ever leaves the run folder. A payload
+        // without features.farms keeps the 0.6.7 / WIP layout (_mapbake\m<time>\root, the farm junction).
+        private TempLease _runLease;
+        private bool Layout068 { get { return _host.Manifest != null && _host.Manifest.FarmsInTemp; } }
+        private string OverlayRootName { get { return Layout068 ? "r" : "root"; } }
+        private bool _runOk;
 
         public MapBakeSession(AppHost host, BakeOptions o, SessionOptions so = null)
         {
@@ -139,6 +150,14 @@ namespace H2GpuLightmapper.Pipeline
             catch (SafetyException e) { Reason = e.Message; Say("REFUSED: " + e.Message); return ExitCode = 2; }
             catch (OperationCanceledException e) { Reason = e.Message; Say("CANCELLED: " + e.Message); return ExitCode = 4; }
             catch (Exception e) { Reason = e.GetType().Name + ": " + e.Message; Say("FAILED: " + Reason); Say("  (internal) " + e); return ExitCode = 3; }
+            finally
+            {
+                try { if (_runLease != null) { _runLease.Dispose(); _runLease = null; } } catch (Exception) { }
+                if (_chan != null)
+                {
+                    _chan.Dispose(); _chan = null;
+                }
+            }
         }
 
         // ================================================================== prepare (static checks; a dry run stops here)
@@ -180,6 +199,7 @@ namespace H2GpuLightmapper.Pipeline
             if (string.Equals(_mapPath, _outPath, StringComparison.OrdinalIgnoreCase)) Refuse("the output map would overwrite the input map: choose another output file");
             if (_outPath.StartsWith(Path.Combine(_root, "tags") + "\\", StringComparison.OrdinalIgnoreCase)) Refuse("the output map must not be inside the editing kit's tags folder");
             if (_outPath.StartsWith(Path.Combine(_realWork, TempFolder) + "\\", StringComparison.OrdinalIgnoreCase)) Refuse("the output map must not be inside the temporary folder (" + Path.Combine(_realWork, TempFolder) + "): its contents are deleted");
+            if (_outPath.StartsWith(ShellPaths.TempOf(_realWork) + "\\", StringComparison.OrdinalIgnoreCase)) Refuse("the output map must not be inside the temporary folder (" + ShellPaths.TempOf(_realWork) + "): its contents may be deleted at any time");
             string outDir = Path.GetDirectoryName(_outPath);
             if (!Directory.Exists(outDir)) Refuse("the output folder does not exist: " + outDir);
             Say("H2 GPU Lightmapper " + _host.AppVersion + (dry ? "   DRY RUN" : "") + "   " + _o.Summary());
@@ -237,9 +257,11 @@ namespace H2GpuLightmapper.Pipeline
             Say("  runtime: extract / verify ...");
             try
             {
+                _host.Installer.RefuseIfRemovedAgain(_root);      // 0.6.8 RC: a runtime file the antivirus removed again (see BakeSession)
                 var q = _host.Installer.StartupEnsure(_root);
                 if (!q.Ok) Refuse("the runtime could not be prepared: " + q);
             }
+            catch (DefenderRemovedException e) { Refuse(e.Message); }
             catch (SlotAliasRefusedException e) { Refuse("no DLL slot base fits this H2EK path: " + e.Message); }
             catch (Exception e) when (e is IOException || e is InvalidDataException || e is UnauthorizedAccessException || e is PathTooLongException || e is TimeoutException)
             { Refuse("the runtime payload could not be extracted / verified: " + e.Message); }
@@ -247,6 +269,11 @@ namespace H2GpuLightmapper.Pipeline
             if (_rt.MapbakePy == null || !File.Exists(_rt.MapbakePy)) Refuse("the mapbake runtime is missing from this payload (" + _rt.MapbakePy + ")");
             _env = BakeEnv.Build(_rt);
             Directory.CreateDirectory(_realWork);
+            if (!_so.NoStage && !StageChannel.Off)
+            {
+                _chan = StageChannel.Start();
+                _chan.Home = Path.GetDirectoryName(_rt.MapbakePy);
+            }
 
             // ---- another bake on this H2EK? (the ordinary bake checks this too; here it is before anything is written)
             CurrentRun curRun;
@@ -255,11 +282,41 @@ namespace H2GpuLightmapper.Pipeline
                 Refuse("another bake is running on this H2EK (run " + (curRun == null ? "?" : curRun.RunTag) + "); wait for it or cancel it first");
 
             // ---- the temporary per-run folder
-            string id = "m" + (_so.Now ?? DateTime.Now).ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-            string parent = Path.Combine(_realWork, TempFolder);
-            _runDir = Path.Combine(parent, id);
-            Directory.CreateDirectory(Path.Combine(_runDir, "logs"));
-            try { File.SetAttributes(parent, File.GetAttributes(parent) | FileAttributes.Hidden); File.SetAttributes(_runDir, File.GetAttributes(_runDir) | FileAttributes.Hidden); } catch (Exception) { }
+            string parent;
+            if (Layout068)
+            {
+                // 0.6.8: the start-up sweep's rules (orphans whose .lock opens, lock-less leftovers, the capture cache, the cap) run here too
+                try
+                {
+                    var sw = TempJanitor.Sweep(_realWork, TempSettings.From(_host.LoadSettings()));
+                    foreach (var l in sw.Lines) Say("  temp: " + l);
+                }
+                catch (Exception e) { Say("  note: the temporary folder check failed: " + e.Message); }
+                _runDir = TempJanitor.NewRunDir(_realWork, 'm');
+                parent = ShellPaths.TempOf(_realWork);
+                try { _runLease = TempLease.Acquire(_runDir, Path.GetFileName(_runDir)); }
+                catch (SafetyException e) { Refuse(e.Message); }
+                Directory.CreateDirectory(Path.Combine(_runDir, "logs"));
+            }
+            else
+            {
+                string id = "m" + (_so.Now ?? DateTime.Now).ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                parent = Path.Combine(_realWork, TempFolder);
+                _runDir = Path.Combine(parent, id);
+                WipeStaleRuns(parent);
+                Directory.CreateDirectory(Path.Combine(_runDir, "logs"));
+                try { _runLock = new FileStream(Path.Combine(_runDir, ".lock"), FileMode.Create, FileAccess.ReadWrite, FileShare.None); } catch (IOException) { }
+            }
+            if (_chan != null)
+            {
+                var stageDirs = new[] { Path.Combine(_runDir, "tags_x"), Path.Combine(_runDir, "h2work"), Path.Combine(_runDir, "inject_tags") };
+                var toolDirs = new[] { Path.Combine(_runDir, OverlayRootName, "w", "_gpulm_skel") };
+                AssertDirSpelling(stageDirs.Concat(toolDirs));
+                _chan.SetDirs(stageDirs);
+                _chan.SetToolDirs(toolDirs);
+                StageChannel.Apply(_env);
+            }
+            if (!Layout068) { try { File.SetAttributes(parent, File.GetAttributes(parent) | FileAttributes.Hidden); File.SetAttributes(_runDir, File.GetAttributes(_runDir) | FileAttributes.Hidden); } catch (Exception) { } }
             _sessionLog = new StreamWriter(Path.Combine(_runDir, "session.log"), true, new UTF8Encoding(false));
             foreach (var l in _pre) _sessionLog.WriteLine(l);
             _sessionLog.Flush();
@@ -278,9 +335,15 @@ namespace H2GpuLightmapper.Pipeline
             catch (Exception e) { code = 3; reason = e.GetType().Name + ": " + e.Message; Say("FAILED: " + reason); Say("  (internal) " + e); }
             finally
             {
-                if (_so.KeepMapTemp) Say("temp folder KEPT (dev flag --dev-keep-mapbake-temp): " + _runDir);
-                else cleaned = CleanupTemp();
+                if (Layout068) cleaned = CleanupTemp068(code == 0);
+                else
+                {
+                    if (_so.KeepMapTemp) Say("temp folder KEPT (dev flag --dev-keep-mapbake-temp): " + _runDir);
+                    else cleaned = CleanupTemp();
+                    try { if (_runLock != null) { _runLock.Dispose(); _runLock = null; File.Delete(Path.Combine(_runDir, ".lock")); } } catch (Exception) { }
+                }
                 try { if (_sessionLog != null) { _sessionLog.Dispose(); _sessionLog = null; } } catch (Exception) { }
+                try { if (_runLease != null) { _runLease.Dispose(); _runLease = null; } } catch (Exception) { }
             }
             Reason = reason;
             if (!cleaned && !_so.KeepMapTemp) Reason = (Reason != null ? Reason + "; " : "") + "WARNING: the temporary folder could not be deleted: " + _runDir;
@@ -293,14 +356,138 @@ namespace H2GpuLightmapper.Pipeline
             try
             {
                 Phased("Deleting the temporary work files and overlay ...");
-                var r = RunMapbake("cleanup", new[] { "--run", _runDir, "--keep", "logs", "--keep", "session.log" }, CleanupTimeoutMs);
+                var r = RunMapbake("cleanup", new[] { "--run", _runDir, "--keep", "logs", "--keep", "session.log", "--keep", ".lock" }, CleanupTimeoutMs);
                 if (r.ExitCode != 0) { Say("WARNING: cleanup failed (exit " + r.ExitCode + "): " + (LastMapbakeLine(r) ?? "")); return false; }
+                WipeFarms(_runOk);
                 bool gone = !Directory.Exists(Path.Combine(_runDir, "root")) && !Directory.Exists(Path.Combine(_runDir, "tags_x"));
                 if (!gone) Say("WARNING: the temporary folders are still there: " + _runDir);
                 return gone;
             }
             catch (Exception e) { Say("WARNING: cleanup failed: " + e.Message); return false; }
             finally { _ignoreCancel = false; }
+        }
+
+        /// <summary>Every temp path must be its own Path.GetFullPath (no 8.3 / relative / alias spelling) and no existing component of it may be a link (a junction or the DLL-slot alias).</summary>
+        public static void AssertDirSpelling(IEnumerable<string> paths)
+        {
+            foreach (var p in paths)
+            {
+                string full = Path.GetFullPath(p);
+                if (!string.Equals(full, p, StringComparison.Ordinal)) throw new SafetyException("temp path " + p + " is not its full path " + full);
+                for (string d = full; !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d))
+                    if ((Directory.Exists(d) || File.Exists(d)) && SafeFs.IsReparsePoint(d)) throw new SafetyException("temp path " + p + " passes through the link " + d);
+            }
+        }
+
+        /// <summary>
+        /// 0.6.8: the end of a .map run in the Temp layout. The logs (logs\ + session.log; the 5 MB live-tag snapshots only for a failed run) are copied into
+        /// KEEP (the inner bake's run folder, else a run folder of their own), the lock is released and the whole m&lt;id&gt; is deleted with the link-aware
+        /// remover: only links that point inside m&lt;id&gt; itself (the skeleton overlay's) are unlinked; any other link refuses the delete (a tripwire).
+        /// A successful run's KEEP copy of the final stage (the map's lightmap) is deleted too; a failed run keeps it (capped with the run bundles).
+        /// --dev-keep-mapbake-temp keeps the folder.
+        /// </summary>
+        private bool CleanupTemp068(bool ok)
+        {
+            _ignoreCancel = true;
+            try
+            {
+                Phased("Deleting the temporary work files and overlay ...");
+                string keepDir = null;
+                try
+                {
+                    var ir = Inner == null ? null : Inner.Run;
+                    keepDir = ir != null && Directory.Exists(ir.RunDir) ? Path.Combine(ir.RunDir, "mapbake")
+                            : Path.Combine(RunFolder.RunsDir(_realWork), (_so.Now ?? DateTime.Now).ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + "_" + RunFolder.Label("map", Path.GetFileNameWithoutExtension(_mapPath)), "mapbake");
+                    Say("  the .map run's logs are kept in " + keepDir);
+                    try { if (_sessionLog != null) { _sessionLog.Dispose(); _sessionLog = null; } } catch (Exception) { }
+                    Directory.CreateDirectory(keepDir);
+                    string logs = Path.Combine(_runDir, "logs");
+                    if (Directory.Exists(logs))
+                        foreach (var f in Directory.GetFiles(logs))
+                        {
+                            string n = Path.GetFileName(f);
+                            if (ok && n.StartsWith("live_", StringComparison.OrdinalIgnoreCase)) continue;       // 4.9 MB each: kept only for a failed run
+                            if (SafeFs.IsReparsePoint(f)) continue;
+                            try { File.Copy(f, Path.Combine(keepDir, n), true); } catch (Exception) { }
+                        }
+                    string sl = Path.Combine(_runDir, "session.log");
+                    if (File.Exists(sl)) { try { File.Copy(sl, Path.Combine(keepDir, "session.log"), true); } catch (Exception) { } }
+                }
+                catch (Exception e) { Say("WARNING: the .map run's logs could not be copied to " + (keepDir ?? "KEEP") + ": " + e.Message); }
+                if (ok && Plan != null && !string.IsNullOrEmpty(Plan.FinalStage) && Inner != null && Inner.Run != null)
+                {
+                    try
+                    {
+                        string fs = Plan.FinalStage;
+                        if (Directory.Exists(fs) && SafeFs.IsUnderOrSame(fs, Inner.Run.RunDir)) SafeFs.RemoveTree(fs, Path.GetDirectoryName(fs), false);
+                    }
+                    catch (Exception e) { Say("note: the run's copy of the injected lightmap stays in " + Plan.FinalStage + " (" + e.Message + ")"); }
+                }
+                if (_so.KeepMapTemp) { Say("temp folder KEPT (dev flag --dev-keep-mapbake-temp): " + _runDir); return true; }
+                try { if (_runLease != null) { _runLease.Dispose(); _runLease = null; } } catch (Exception) { }
+                var rep = new JanitorReport();
+                var it = new TempItem { Path = _runDir, Name = Path.GetFileName(_runDir), Kind = TempItemKind.MapRun };
+                bool gone = !Directory.Exists(_runDir) || TempJanitor.RemoveItem(_realWork, it, rep, "the .map run ended");
+                foreach (var l in rep.Lines) Say("  temp: " + l);
+                if (!gone) Say("WARNING: the temporary folder is still there: " + _runDir + " (the next start removes it)");
+                return gone;
+            }
+            catch (Exception e) { Say("WARNING: cleanup failed: " + e.Message); return false; }
+            finally { _ignoreCancel = false; }
+        }
+
+        /// <summary>0.6.8: a .map bake's farm in Temp starts empty: a folder an earlier (crashed) run left is deleted whole (a live one refuses the run).</summary>
+        private void FreshMapFarm(string farm)
+        {
+            if (!Directory.Exists(farm)) return;
+            if (TempJanitor.IsLive(farm)) Refuse("the worker folder " + farm + " is in use by another bake");
+            var rep = new JanitorReport();
+            TempJanitor.RemoveItem(_realWork, new TempItem { Path = farm, Name = Path.GetFileName(farm), Kind = TempItemKind.Farm }, rep, "a .map bake's farm starts empty");
+            foreach (var l in rep.Lines) Say("  temp: " + l);
+            if (Directory.Exists(farm)) throw new StepFailedException("the worker folder " + farm + " could not be emptied: " + string.Join("; ", rep.Problems));
+        }
+
+        /// <summary>A run folder left behind by a crash or a power cut (its lock can be taken) is wiped at the next start; so is a throw-away Vista query folder older than an hour.</summary>
+        private void WipeStaleRuns(string parent)
+        {
+            try
+            {
+                if (!Directory.Exists(parent)) return;
+                foreach (var d in Directory.GetDirectories(parent, "m*"))
+                {
+                    if (string.Equals(d, _runDir, StringComparison.OrdinalIgnoreCase)) continue;
+                    bool content = new[] { "tags_x", "root", "h2work", "inject_tags", "out" }.Any(n => Directory.Exists(Path.Combine(d, n)));
+                    if (!content) continue;
+                    string lk = Path.Combine(d, ".lock");
+                    if (File.Exists(lk))
+                    {
+                        try { using (new FileStream(lk, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { } }
+                        catch (IOException) { continue; }                           // a live run of another window / process
+                    }
+                    else if ((DateTime.Now - Directory.GetLastWriteTime(d)).TotalHours < 24) continue;
+                    Say("  stale temp folder from an earlier run (crash / power cut): wiping " + d);
+                    RunMapbake("cleanup", new[] { "--run", d, "--keep", "logs", "--keep", "session.log", "--keep", ".lock" }, CleanupTimeoutMs);
+                }
+                foreach (var d in Directory.GetDirectories(parent, "q*"))
+                    if ((DateTime.Now - Directory.GetLastWriteTime(d)).TotalHours >= 1) MapBakeProcs.DeleteThrowAway(d);
+            }
+            catch (Exception e) { Say("  note: the stale temp folder check failed: " + e.Message); }
+        }
+
+        /// <summary>The derived geometry / texture products the bake left in the worker's farm folder (the lightmapper's own copy of what was read from the map) are deleted; the logs stay.</summary>
+        private void WipeFarms(bool ok)
+        {
+            foreach (var f in _farms)
+            {
+                try
+                {
+                    var args = new List<string> { "--farm", f };
+                    if (!ok) args.Add("--keep-stage");                              // a failed run keeps its stage (the lightmap it baked) for a look
+                    var r = RunMapbake("wipefarm", args, CleanupTimeoutMs);
+                    if (r.ExitCode != 0) Say("WARNING: could not wipe the worker's farm folder " + f + " (exit " + r.ExitCode + ")");
+                }
+                catch (Exception e) { Say("WARNING: could not wipe the worker's farm folder " + f + ": " + e.Message); }
+            }
         }
 
         private int RunSteps(out string reason)
@@ -345,8 +532,9 @@ namespace H2GpuLightmapper.Pipeline
             Phased("Snapshotting the live tags ...");
             var sa = RunMapbake("snap", new[] { "--tags", tagsDir, "--out", snapA }, SnapTimeoutMs);
             if (sa.ExitCode != 0) throw new StepFailedException("the live-tag snapshot failed: " + (LastMapbakeLine(sa) ?? "exit " + sa.ExitCode));
-            Phased("Reading the map's dependency subset and building the overlay (this copies the kit tags: about a minute) ...");
+            Phased("Reading the map's dependency subset and building the overlay (this copies only the kit tags this map uses: usually about 15 seconds) ...");
             var pa = new List<string> { "--map", _mapPath, "--kit", tagsDir, "--tool-root", _root, "--run", _runDir, "--report", Path.Combine(logs, "prepare_report.json") };
+            if (Layout068) { pa.Add("--root-name"); pa.Add(OverlayRootName); }
             foreach (var c in _skies) { pa.Add("--sky-cubemap"); pa.Add(c.Sky + "=" + c.Selected.Value); }
             var pr = RunMapbake("prepare", pa, PrepareTimeoutMs);
             if (pr.ExitCode != 0)
@@ -359,16 +547,28 @@ namespace H2GpuLightmapper.Pipeline
             var prep = Json.ReadObjFile(Path.Combine(logs, "prepare_report.json"));
             if (prep == null || prep.Str("scenario") == null) throw new StepFailedException("the map-read report is missing");
             _scenarioRel = prep.Str("scenario");
-            string overlayRoot = Path.Combine(_runDir, "root");
+            string overlayRoot = Path.Combine(_runDir, OverlayRootName);
             string overlayWork = Path.Combine(overlayRoot, "w");
             Directory.CreateDirectory(overlayWork);
             string farm = null;
             if (lmWorker)
             {
-                farm = BakePlanner.FarmDir(_realWork, _worker);
-                Directory.CreateDirectory(farm);
-                var jr = RunMapbake("junction", new[] { "--link", Path.Combine(overlayWork, Path.GetFileName(farm)), "--target", farm }, SnapTimeoutMs);
-                if (jr.ExitCode != 0) throw new StepFailedException("could not link the worker's farm folder into the overlay: " + (LastMapbakeLine(jr) ?? ""));
+                if (Layout068)
+                {
+                    // 0.6.8: the farm is WORK\Temp (safe to delete)\farm_wNN (H2LM_FARMS); a map farm is never kept, so whatever an earlier (crashed) run left goes
+                    // first, and the inner bake takes its .lock; no link is made
+                    farm = BakePlanner.FarmDir(_rt.Farms, _worker);
+                    FreshMapFarm(farm);
+                }
+                else
+                {
+                    farm = BakePlanner.FarmDir(_realWork, _worker);
+                    Directory.CreateDirectory(farm);
+                    _farms.Add(farm);
+                    if (_chan != null) RunMapbake("wipefarm", new[] { "--farm", farm }, CleanupTimeoutMs);       // products of an earlier run (a crash may have left them) go first
+                    var jr = RunMapbake("junction", new[] { "--link", Path.Combine(overlayWork, Path.GetFileName(farm)), "--target", farm }, SnapTimeoutMs);
+                    if (jr.ExitCode != 0) throw new StepFailedException("could not link the worker's farm folder into the overlay: " + (LastMapbakeLine(jr) ?? ""));
+                }
             }
 
             // ---- light probes: the scenario's probe points (read from the map's scenario); Standard bakes them when there are any, Lightprobes only needs them,
@@ -392,10 +592,16 @@ namespace H2GpuLightmapper.Pipeline
                 Guards.AssertWorker(_pworker);
                 if (lmWorker && _pworker == _worker) Refuse("the probe worker must differ from the lightmap worker");
                 Say("  probe worker farm_w" + _pworker.ToString("D2", CultureInfo.InvariantCulture) + (_o.ProbeWorker.HasValue ? " (--probe-worker)" : " (registry key mapbake\\" + _scenarioRel + ", probes)"));
-                string pfarm = BakePlanner.FarmDir(_realWork, _pworker);
-                Directory.CreateDirectory(pfarm);
-                var jp = RunMapbake("junction", new[] { "--link", Path.Combine(overlayWork, Path.GetFileName(pfarm)), "--target", pfarm }, SnapTimeoutMs);
-                if (jp.ExitCode != 0) throw new StepFailedException("could not link the probe worker's farm folder into the overlay: " + (LastMapbakeLine(jp) ?? ""));
+                if (Layout068) FreshMapFarm(BakePlanner.FarmDir(_rt.Farms, _pworker));
+                else
+                {
+                    string pfarm = BakePlanner.FarmDir(_realWork, _pworker);
+                    Directory.CreateDirectory(pfarm);
+                    _farms.Add(pfarm);
+                    if (_chan != null) RunMapbake("wipefarm", new[] { "--farm", pfarm }, CleanupTimeoutMs);
+                    var jp = RunMapbake("junction", new[] { "--link", Path.Combine(overlayWork, Path.GetFileName(pfarm)), "--target", pfarm }, SnapTimeoutMs);
+                    if (jp.ExitCode != 0) throw new StepFailedException("could not link the probe worker's farm folder into the overlay: " + (LastMapbakeLine(jp) ?? ""));
+                }
             }
 
             // ---- 3. the ordinary GPU bake of the overlay (stage only)
@@ -406,17 +612,20 @@ namespace H2GpuLightmapper.Pipeline
             var ctx = new OverlayContext { RealRoot = _root, RealWork = _realWork, OverlayRoot = overlayRoot, OverlayWork = overlayWork };
             ctx.PreLines.Add("  source map " + _mapPath + "   (read only)");
             ctx.PreLines.Add("  output map " + _outPath + "   (a COPY of the map with only the lightmap and its bitmap replaced" + (_o.Mode == BakeMode.Probes ? " -- Lightprobes only: the lightmap tag alone" : "") + "; set aside as .old_<time> if it exists)");
-            if (_vista) ctx.PreLines.Add("  Vista map: converted to its MCC form with h2conv; " + (_o.VistaOut ? "the injected MCC result is converted back to a Vista map (h2conv.inject --to-vista)" : "the result stays an MCC map (not converted back)"));
+            if (_vista) ctx.PreLines.Add("  Vista map: converted to its MCC form with h2conv; " + (_o.VistaOut ? "the injected MCC result is converted back to a Vista map (h2conv --to-vista)" : "the result stays an MCC map (not converted back)"));
             ctx.PreLines.Add("  .map path: read the dependency subset -> real-copy overlay root -> this stage-only bake -> inject the lightmap -> validate -> delete the temp folder " + _runDir);
             foreach (var l in CubemapModel.Describe(_skies)) ctx.PreLines.Add("  " + l);
-            ctx.PreLines.Add("  overlay root " + overlayRoot + " (H2LM_ROOT); its work folder " + overlayWork + " (H2LM_WORK) holds " + (lmWorker ? "farm_w" + _worker.ToString("D2", CultureInfo.InvariantCulture) : "") + (lmWorker && probeWorker ? " and " : "")
-                           + (probeWorker ? "farm_w" + _pworker.ToString("D2", CultureInfo.InvariantCulture) : "") + " as junction(s) to the real farm folder(s)");
+            if (Layout068)
+                ctx.PreLines.Add("  overlay root " + overlayRoot + " (H2LM_ROOT); its work folder " + overlayWork + " (H2LM_WORK); the worker farm(s) are in " + _rt.Farms + " (H2LM_FARMS): no link leaves the run folder");
+            else
+                ctx.PreLines.Add("  overlay root " + overlayRoot + " (H2LM_ROOT); its work folder " + overlayWork + " (H2LM_WORK) holds " + (lmWorker ? "farm_w" + _worker.ToString("D2", CultureInfo.InvariantCulture) : "") + (lmWorker && probeWorker ? " and " : "")
+                               + (probeWorker ? "farm_w" + _pworker.ToString("D2", CultureInfo.InvariantCulture) : "") + " as junction(s) to the real farm folder(s)");
             ctx.PlanNotes.Add(".map bake of " + _mapPath + " -> " + _outPath + ": this is the bake step of the .map path (stage only); the shell then injects ONLY the lightmap and its bitmap into a copy of the map");
             ctx.PlanNotes.AddRange(CubemapModel.Describe(_skies));
             var nso = new SessionOptions
             {
                 DryRun = false, SkipPreflight = _so.SkipPreflight, SkipGpuCheck = _so.SkipGpuCheck, LockWait = _so.LockWait, LockPoll = _so.LockPoll,
-                CancelFile = _so.CancelFile, Now = _so.Now, Overlay = ctx,
+                CancelFile = _so.CancelFile, Now = _so.Now, Overlay = ctx, DevMaxCalls = _so.DevMaxCalls, DevSimulateQuarantine = _so.DevSimulateQuarantine,
             };
             var inner = new BakeSession(_host, no, nso);
             inner.Info += m => Say(m);
@@ -433,8 +642,11 @@ namespace H2GpuLightmapper.Pipeline
                 string ir = inner.Reason ?? "exit " + ic;
                 if (ic == 4) throw new OperationCanceledException("cancelled");
                 if (ic == 2) Refuse(ir);
-                if (step == null || step == StepId.Preflight.ToString() || step == StepId.Capture.ToString())
-                    throw new StepFailedException("tool_fast could not load / capture the tags read from this map (the bake stopped in its " + (step ?? "first") + " step), so nothing was injected: " + ir);
+                // 0.6.8 RC: only a failure IN the capture is the tool's; anything earlier (preflight, the GPU lock, the runtime) is reported as itself
+                if (step == StepId.Capture.ToString())
+                    throw new StepFailedException("tool_fast could not load / capture the tags read from this map (the bake stopped in its Capture step), so nothing was injected: " + ir);
+                if (step == null || step == StepId.Preflight.ToString())
+                    throw new StepFailedException("the bake stopped before it started (" + (step ?? "setup") + "), so nothing was injected: " + ir);
                 throw new StepFailedException("the bake failed in its " + step + " step: " + ir);
             }
             GuardLive(snapA, "after_bake");
@@ -457,6 +669,7 @@ namespace H2GpuLightmapper.Pipeline
             }
             GuardLive(snapA, "after_inject");
             reason = "baked from the map: " + _outPath;
+            _runOk = true;
             Say("RESULT map baked: " + _outPath);
             return 0;
         }
@@ -475,6 +688,8 @@ namespace H2GpuLightmapper.Pipeline
             if (hits.Count > 1) Refuse("the map has " + hits.Count + " structure bsps named '" + want + "'");
             _bspRel = hits[0];
             _bsp = _bspRel.Substring(_bspRel.LastIndexOf('\\') + 1);
+            string bnp = BakeOptions.ToolNameProblem(null, _bsp);
+            if (bnp != null) Refuse(bnp);
             string scen = _query.Scenario ?? "";
             if (!string.Equals(BakeOptions.BspFolder(_bspRel), BakeOptions.BspFolder(scen), StringComparison.OrdinalIgnoreCase))
                 Refuse("this map's BSP '" + _bsp + "' lives in another folder than its scenario (" + BakeOptions.BspFolder(_bspRel) + "); that layout is not supported for a .map bake yet");
@@ -492,6 +707,8 @@ namespace H2GpuLightmapper.Pipeline
         {
             string s = _query.Scenario ?? "";
             if (s.Length == 0 || !BakeOptions.IsPlainTagRel(s)) Refuse("the map's scenario name is not a plain tag path: '" + s + "'");
+            string np = BakeOptions.ToolNameProblem(s, null);
+            if (np != null) Refuse(np);
             _scenarioRel = s;
         }
 
@@ -513,13 +730,15 @@ namespace H2GpuLightmapper.Pipeline
                                                     + (_o.Ao ? " + ambient occlusion (strength " + _o.AoStrength.ToString(CultureInfo.InvariantCulture) + ", exponent " + _o.AoExponent.ToString(CultureInfo.InvariantCulture) + "; run by the same gpu_ao steps as for a scenario)" : "")));
             if (_vista)
                 sb.AppendLine("  vista       the input is a Halo 2 Vista map: h2conv converts it to its MCC form (kept in the temp folder), the bake and the injection run on that, and "
-                              + (_o.VistaOut ? "the MCC result is converted back to a Vista map (h2conv.inject --to-vista) = the output" : "the MCC result is the output (not converted back)"));
+                              + (_o.VistaOut ? "the MCC result is converted back to a Vista map (h2conv --to-vista) = the output" : "the MCC result is the output (not converted back)"));
             if (_o.SkyCubemaps.Count > 0)
                 foreach (var kv in _o.SkyCubemaps) sb.AppendLine("  sky cubemap " + kv.Key + " = " + kv.Value + "   (checked against the map's skies and the kit's cube-map bitmaps by a real run)");
             else
                 sb.AppendLine("  sky cubemap for every sky with cube map power scale > 0 and no cube map reference (compiled maps lose it): the automatic match (the kit's sky with the same sky model), "
                               + "else LEFT EMPTY with a warning (the bake then lacks the sky's ambient fill, about 30% darker on headlong); override with --sky-cubemap <sky>=<bitmap tag path | none>");
-            sb.AppendLine("  temp folder " + Path.Combine(_realWork, TempFolder) + "\\m<time>" + "   (the map's files + overlay; deleted at the end, the logs stay)");
+            sb.AppendLine("  temp folder " + (Layout068 ? ShellPaths.TempOf(_realWork) + "\\m<6 hex>   (the map's files + overlay; deleted at the end, the logs are kept in the run folder; safe to delete at any time)"
+                                                    : Path.Combine(_realWork, TempFolder) + "\\m<time>" + "   (the map's files + overlay; deleted at the end, the logs stay)"));
+            sb.AppendLine("  cleanup     the worker's derived geometry / texture files are deleted at the end, a crashed run's leftovers at the next start");
             sb.AppendLine("  engine      the normal bake: stage only, nothing is written to the editing kit's tags; the dry run does not query the map, so the bake's own argv is printed by a real run's log header");
             for (int i = 0; i < StepTitles.Length; i++) sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "STEP {0,2}  {1}", i + 1, StepTitles[i]));
             return sb.ToString();
@@ -542,12 +761,11 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>Deletes the throw-away folder of a Vista query (its files, then its folders deepest first; no recursive delete, no links followed: it only ever holds the temporary MCC map).</summary>
         internal static void DeleteThrowAway(string dir)
         {
+            // 0.6.8: through the link-refusing remover (a query folder never holds a link; one that does is left alone, never followed)
             try
             {
                 if (!Directory.Exists(dir)) return;
-                foreach (var f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories)) { try { File.Delete(f); } catch (Exception) { } }
-                foreach (var d in Directory.GetDirectories(dir, "*", SearchOption.AllDirectories).OrderByDescending(x => x.Length)) { try { Directory.Delete(d); } catch (Exception) { } }
-                Directory.Delete(dir);
+                SafeFs.RemoveTree(dir, Path.GetDirectoryName(SafeFs.Norm(dir)), false);
             }
             catch (Exception) { }
         }
@@ -573,11 +791,26 @@ namespace H2GpuLightmapper.Pipeline
             try
             {
                 var hi = MapHeaderInfo.Read(map);
-                if (hi.IsVista) { vwork = Path.Combine(rt.Work, MapBakeSession.TempFolder, "q" + Guid.NewGuid().ToString("N").Substring(0, 8)); Directory.CreateDirectory(vwork); qargs.Add("--work-dir"); qargs.Add(vwork); }
+                if (hi.IsVista)
+                {
+                    // 0.6.8: WORK\Temp (safe to delete)\q<6 hex> (the start-up sweep removes a leftover after an hour); before: WORK\_mapbake\q<8 hex>
+                    vwork = rt.FarmsInTemp ? TempJanitor.NewRunDir(rt.Work, 'q') : Path.Combine(rt.Work, MapBakeSession.TempFolder, "q" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                    Directory.CreateDirectory(vwork); qargs.Add("--work-dir"); qargs.Add(vwork);
+                }
             }
             catch (Exception) { vwork = null; }
+            StageChannel own = null;
             try
             {
+                if (vwork != null && StageChannel.Current == null && !StageChannel.Off && env != null)
+                {
+                    own = StageChannel.Start();
+                    own.Home = Path.GetDirectoryName(rt.MapbakePy);
+                    own.SetDirs(new[] { vwork });
+                    var e2 = ChildEnvironment.Empty();
+                    foreach (var kv in env.Vars) e2.Set(kv.Key, kv.Value);
+                    env = StageChannel.Apply(e2);
+                }
                 var r = ProcessRunner.RunCapture(rt.PyExe, Args(rt, devH2convHome, "query", qargs), rt.Work, env, MapBakeSession.QueryTimeoutMs);
                 if (r.TimedOut) return new MapQueryResult { Error = "reading the map took too long" };
                 if (!File.Exists(o)) return new MapQueryResult { Error = "the map reader gave no answer (exit " + r.ExitCode + ")" };
@@ -586,6 +819,7 @@ namespace H2GpuLightmapper.Pipeline
             finally
             {
                 if (temp) { try { File.Delete(o); } catch (IOException) { } }
+                if (own != null) own.Dispose();
                 if (vwork != null) DeleteThrowAway(vwork);
             }
         }

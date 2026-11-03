@@ -9,5 +9,5 @@ It does NOT carry the Halo 2 Editing Kit (tool_fast.exe, tags, libfbxsdk.dll): t
 
 {COMPONENTS}
 
-The GPU lightmapper engine itself (gpu_bake.ps1, the Python pipeline, gpulm_estimator.dll, fullgpu.exe, inject.exe,
+The GPU lightmapper engine itself (gpu_bake.ps1, the Python pipeline, gpulm_estimator.dll, fullgpu.exe, H2GpuLightmapper.ToolLoader.exe,
 the tag writer and the drivers) and the shell are the H2 GPU Lightmapper project's own code.

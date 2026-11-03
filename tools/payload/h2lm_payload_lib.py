@@ -67,7 +67,24 @@ def load_spec(path=SPEC):
     s = json.load(open(path, 'r', encoding='utf-8'))
     if s.get('format') != 'h2lm-payload-spec/1':
         raise Refused('spec %s: format %r' % (path, s.get('format')))
+    if isinstance(s.get('roots'), dict) and s['roots'].get('GLW'):
+        s['roots']['GLW'] = resolve_glw(s['roots']['GLW'])
     return s
+
+
+def resolve_glw(glw):
+    # 0.6.8 (2026-10-29): the production code tree ("GLW") no longer has to sit directly in GPU Lightmap Work. H2LM_GLW overrides the
+    # spec; else the spec's folder when it holds engine_v373; else the ONE direct subfolder of it that does (the dev layout of 2026-10-29:
+    # GPU Lightmap Work\H2GPULM (Max Size - 100GBs)\engine_v373). Two candidates refuse (ambiguous). Read only.
+    env = os.environ.get('H2LM_GLW')
+    if env:
+        return os.path.abspath(env)
+    if os.path.isdir(os.path.join(glw, 'engine_v373')) or not os.path.isdir(glw):
+        return glw
+    hits = [os.path.join(glw, d) for d in sorted(os.listdir(glw)) if os.path.isdir(os.path.join(glw, d, 'engine_v373'))]
+    if len(hits) > 1:
+        raise Refused('GLW %s: several subfolders hold engine_v373 (%s) -- set H2LM_GLW' % (glw, ', '.join(hits)))
+    return hits[0] if hits else glw
 
 
 def resolve(ref, roots):

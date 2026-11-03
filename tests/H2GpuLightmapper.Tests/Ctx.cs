@@ -48,7 +48,7 @@ namespace H2GpuLightmapper.Tests
         public const string LmwInstallMd5 = "4608af880327453b6e07844d6e7e95b9";
         public const string TagIoMd5 = "e8aeb703b786b8c995297834abdc73f6";
         public const string ProdDllMd5 = "d6147fce6e3979a37178d2e14d092227";      // W3 2026-10-21: the 0.6.4-promoted engine_v373 DLL (W1: b2370477, was aaf10a0f)
-        public const string SkelDllMd5 = "5c6aeea9d1ffbaaaa6351d7ba5e77360";      // W3 2026-10-21: the 0.6.4-promoted skeleton-mode DLL (was f0fb73ac)
+        public const string SkelDllMd5 = "56b774df2fce703a9a63da793aab7c8c";      // 0.6.9: engine_v374 skeleton-mode DLL with the fast NeuQuant (was 5c6aeea9 in 0.6.4-0.6.8)
 
         public string Project, Exe, PwshDir, PyDir, MineRoot, FixturesDir, SandboxParent, ShortParent;
         public bool Keep;
@@ -60,6 +60,23 @@ namespace H2GpuLightmapper.Tests
         public string PwshExe { get { return Path.Combine(PwshDir, "pwsh.exe"); } }
         public string PyExe { get { return Path.Combine(PyDir, "py.exe"); } }
         public string MineWork { get { return Path.Combine(MineRoot, "GPU Lightmap Work"); } }
+        /// <summary>0.6.8 (2026-10-29): the folder that holds the production engine files the tests COPY (engine_v373\, v043-tagwriter\, _research\):
+        /// H2LM_TEST_MINE_GLW when set (a read-only mirror of those files), else MineWork itself when it holds engine_v373 (the old dev layout),
+        /// else the one subfolder of MineWork that does (the dev layout of 2026-10-29: GPU Lightmap Work\H2GPULM (Max Size - 100GBs)\engine_v373).
+        /// Only read.</summary>
+        public string MineGlw
+        {
+            get
+            {
+                string env = Environment.GetEnvironmentVariable("H2LM_TEST_MINE_GLW");
+                if (!string.IsNullOrEmpty(env)) return env;
+                if (Directory.Exists(Path.Combine(MineWork, "engine_v373"))) return MineWork;
+                if (Directory.Exists(MineWork))
+                    foreach (var d in Directory.GetDirectories(MineWork))
+                        if (Directory.Exists(Path.Combine(d, "engine_v373"))) return d;
+                return MineWork;
+            }
+        }
 
         public void Init()
         {
@@ -83,7 +100,7 @@ namespace H2GpuLightmapper.Tests
             Vol = Short.Dir("vol");
 
             // fixtures: COPIES of production files (md5-checked where the version matters); production is only read
-            string glw = MineWork;
+            string glw = MineGlw;
             FxLmwInstall = CopyChecked(Path.Combine(glw, @"engine_v373\v043-tagwriter\lmw_install.py"), "lmw_install.py", LmwInstallMd5);
             FxTagIo = CopyChecked(Path.Combine(glw, @"v043-tagwriter\lmw_tagio.py"), "lmw_tagio.py", TagIoMd5);
             FxTagDefs = CopyChecked(Path.Combine(glw, @"v043-tagwriter\lmw_defs.json"), "lmw_defs.json", null);
@@ -128,7 +145,7 @@ namespace H2GpuLightmapper.Tests
         /// 1 = gpu_ao.py (+ the AO engine copy's gpu_bake.ps1 declares -WriterOnly / -ToolOverlay), 2 = gpu_lightprobes.py, 3 = both; 0 = a 0.6.4 payload. Use with crossBspEngine.</param>
         public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null,
                                    bool sceneryEngine = true, bool customSceneryEngine = true, bool compatEngine = false, bool? customCompatEngine = null, bool? aoCompatEngine = null,
-                                   bool crossBspEngine = false, int splitBspDrivers = 0, bool mapbakeComponent = false)
+                                   bool crossBspEngine = false, int splitBspDrivers = 0, bool mapbakeComponent = false, bool? farmsFeature = null)
         {
             bool custCompat = customCompatEngine ?? compatEngine, aoCompat = aoCompatEngine ?? compatEngine;
             // another file set needs another extraction dir name (same length: the DLL slot / path budget must not change)
@@ -149,6 +166,8 @@ namespace H2GpuLightmapper.Tests
                 // 0.6.5 variants: another file set, another dir name of the same length (13): "0.5.0-s25y" + driver flags + engine kind + scenery
                 instDirName = "0.5.0-s25y" + splitBspDrivers.ToString() + (customEngine ? 'c' : 'e') + (sceneryEngine && customSceneryEngine ? 's' : 'o');
             }
+            // 0.6.8 bounded temp: the farms in WORK\Temp (safe to delete) (MANIFEST features.farms) + the engine-owned slim list: another file set, another dir name (13)
+            if (farmsFeature == true) instDirName = "0.5.0-s25ffff";
             Func<byte[], bool, byte[]> mark = (b, on) => on ? b.Concat(new UTF8Encoding(false).GetBytes("\nSPLIT_BSP_SUPPORT = 1\n")).ToArray() : b;
             Func<bool, bool, byte[]> fakeBake = (withScenery, withCompat) =>
             {
@@ -181,6 +200,7 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "engine_v373/v043-tagwriter/dll/gpulm_estimator.dll", Data = File.ReadAllBytes(FxSkelDll), Role = "dllslot" },
                     new F { Path = "engine_v373/v041-fullgpu/fullgpu.exe", Data = blob(4000) },
                     new F { Path = "_research/ao/gpu_ao.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_ao.py")), (splitBspDrivers & 1) != 0) },
+                    new F { Path = "_research/ao/ao_existing.py", Data = File.ReadAllBytes(Fixture("fake_ao_existing.py")) },      // 0.6.8 xc8: AO only
                     new F { Path = "_research/ao/dev_AO/gpu_bake.ps1", Data = txt(((splitBspDrivers & 1) != 0 ? "param([switch]$WriterOnly, [switch]$ToolOverlay)\n" : "") + (aoCompat ? "if (Test-Path Env:GPULM_COMPAT) { }   # the AO engine copy of an engine with Compatibility mode (DF64)\n" : "") + "throw 'the test dev_AO gpu_bake is never run directly'\n") },
                     new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")), (splitBspDrivers & 2) != 0) },
                     new F { Path = "standalone/sh_stage.py", Data = File.ReadAllBytes(Fixture("fake_sh_stage.py")) },
@@ -190,6 +210,7 @@ namespace H2GpuLightmapper.Tests
                 }),
             };
             if (customEngine) comps[2].Item4.Add(new F { Path = "engine_custom/gpu_bake.ps1", Data = fakeBake(customSceneryEngine, custCompat) });
+            if (farmsFeature == true) comps[2].Item4.Add(new F { Path = "standalone/farm_products.json", Data = File.ReadAllBytes(Path.Combine(Project, @"src\standalone\farm_products.json")) });
             // milestone 2: the rt component with the mapbake entry point (stubs: the dry-run tests never start it)
             if (mapbakeComponent)
                 comps.Add(Tuple.Create("rt-mapbake-test", "mapbake-test-s25dddd", "rt", new List<F>
@@ -222,12 +243,13 @@ namespace H2GpuLightmapper.Tests
                     .Add("totalBytes", files.Sum(f => (long)f.Data.Length)).Add("maxPathLen", (long)files.Max(f => f.Path.Length)).Add("files", fl));
             }
             var man = new JObj().Add("format", 1L).Add("appVersion", "0.5.0-test").Add("components", carr);
-            if (aoFeature.HasValue || probesFeature.HasValue || driveRootFeature.HasValue)
+            if (aoFeature.HasValue || probesFeature.HasValue || driveRootFeature.HasValue || farmsFeature.HasValue)
             {
                 var feats = new JObj();
                 if (aoFeature.HasValue) feats.Add("ao", new JObj().Add("enabled", aoFeature.Value).Add("reason", aoFeature.Value ? null : "the test payload's AO engine is out of sync"));
                 if (probesFeature.HasValue) feats.Add("probes", new JObj().Add("enabled", probesFeature.Value).Add("reason", probesFeature.Value ? null : "the test payload's T4 proof does not cover its engine"));
                 if (driveRootFeature.HasValue) feats.Add("driveRoot", new JObj().Add("enabled", driveRootFeature.Value).Add("reason", driveRootFeature.Value ? null : "the test payload's gpu_bake has no P1b"));
+                if (farmsFeature.HasValue) feats.Add("farms", new JObj().Add("enabled", farmsFeature.Value).Add("reason", farmsFeature.Value ? null : "the test payload's gpu_bake has no P13"));
                 man.Add("features", feats);
             }
             File.WriteAllText(Path.Combine(dir, "MANIFEST.json"), Core.Util.Json.Write(man, true), new UTF8Encoding(false));
@@ -261,9 +283,11 @@ namespace H2GpuLightmapper.Tests
 
         /// <summary>A fresh sandbox H2EK: cyclotron (real scenario, no probe points; fake BSP / lightmap set incl. a radiance
         /// bitmap) and triplicate (real scenario + real lightmap: 11 points, 11 environments; fake BSP / bitmaps), + other tags.</summary>
-        public TestRoot NewRoot(bool withLightmaps = true, bool withTool = true)
+        public TestRoot NewRoot(bool withLightmaps = true, bool withTool = true, int rootLength = 0)
         {
             string leaf = "R" + (_roots++).ToString("x");
+            // 0.6.8 RC (F1): a root of an exact length (padded leaf), for the path-budget tests
+            if (rootLength > 0) { int pad = rootLength - (Short.Root.Length + 1 + leaf.Length + 1); if (pad > 0) leaf += "_" + new string('p', pad); }
             string root = Short.Dir(leaf);
             var r = new TestRoot { Root = root, Work = Path.Combine(root, "GPU Lightmap Work") };
             if (withTool && !CreateHardLink(Path.Combine(root, "tool_fast.exe"), ToolCopy, IntPtr.Zero)) File.Copy(ToolCopy, Path.Combine(root, "tool_fast.exe"));

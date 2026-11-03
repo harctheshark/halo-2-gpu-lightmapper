@@ -6,7 +6,7 @@ using Microsoft.Win32;
 namespace H2GpuLightmapper.DllSlots
 {
     /// <summary>
-    /// The ANSI code page that tool_fast.exe / inject.exe / gpulm_estimator.dll (all "A" API users) will run under.
+    /// The ANSI code page that tool_fast.exe / H2GpuLightmapper.ToolLoader.exe (was inject.exe) / gpulm_estimator.dll (all "A" API users) will run under.
     /// That is the SYSTEM ACP (HKLM\...\Nls\CodePage\ACP), which can differ from this process's GetACP() if the shell's
     /// manifest ever opts into activeCodePage=UTF-8. Every ANSI check in this library takes the code page explicitly so
     /// tests can exercise cp1252 / cp932 / cp65001 on any machine.

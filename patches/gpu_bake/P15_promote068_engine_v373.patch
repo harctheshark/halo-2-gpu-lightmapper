@@ -1,0 +1,155 @@
+# title: P15 promotion 0.6.8 (dev_XC): the GPU computes the exact photon cast itself (no CPU-cast process); -NoExactCast / -FastCast research switches; P13 H2LM_FARMS becomes production (engine_v373)
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 960727e8be3181b5f485ac7a0b92f342
+# result-md5: b27fd245ce28fbe5a1d4bd2622946656
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -264,6 +264,8 @@
+     [switch]$NoSkyChainFrustum,
+     [switch]$SkyChainSunBox,      # accepted for old callers; the exact sun boxes are the DEFAULT now
+     [switch]$NoSkyChainSunBox,    # 2026-10-06: the pre-default box-only-pass sun boxes (A/B)
++    [switch]$FastCast,            # dev_XC ADVANCED opt-in (research): NO RNG-exact cast at all - the GPU's statistical per-photon cast for every light incl. the suns (GPULM_SUN_EXACT=0, GPULM_SKY_CHAIN=0). Seconds instead of minutes; the look differs from the CPU.
++    [switch]$NoExactCast,         # dev_XC: do NOT chain the surface / omni / half-life lights (the 0.6.6 chain without the CPU-cast helper) -- suns behind them are the GPU's statistical lottery (A/B)
+     # v368o the CPU's cell-limited packet for INSTANCED geometry in the RNG-exact sky chain (0x4B2DD4 -> sub_4B4941), default ON;
+     # -NoSkyCellPkt = the v367 chain kernel behaviour (A/B only).
+     [switch]$NoSkyCellPkt,
+@@ -439,6 +441,14 @@
+ $W    = if ($env:H2LM_WORK) { $env:H2LM_WORK } else { "$RP\GPU Lightmap Work" }
+ $WC   = if ($env:H2LM_CODE) { $env:H2LM_CODE } else { $W }
+ # <<< H2LM P1
++# >>> H2LM P13 (0.6.8 bounded temp, 2026-10-29): H2LM_FARMS = the folder that holds the farm_wNN workers (the standalone's
++# "GPU Lightmap Work\Temp (safe to delete)"). UNSET -- every production caller -- $FARMS = $W: $OUT is the same path as before.
++# $W keeps every other WORK use ($W\_gpulm_skel, $W\_TAGBAK_auto, the write-back gpulm.log); the DLL slot base must name $FARMS.
++$h2lmF = [Environment]::GetEnvironmentVariable('H2LM_FARMS')
++if ($null -ne $h2lmF -and -not ([IO.Path]::IsPathFullyQualified($h2lmF) -and $h2lmF -notmatch '[\\/]$' -and (Test-Path -LiteralPath $h2lmF -PathType Container))) {
++    throw "H2LM: H2LM_FARMS='$h2lmF' must be an existing absolute folder with no trailing backslash" }
++$FARMS = if ($env:H2LM_FARMS) { $env:H2LM_FARMS } else { $W }
++# <<< H2LM P13
+ # >>> H2LM P3 (standalone exe): H2LM_NOWINDOW=1 = no console window for any tool_fast run -- osoy_launch.exe gets --nowindow
+ # (CREATE_NO_WINDOW) and the three plain Start-Process launches (skeleton, capture, write-back) -WindowStyle Hidden. UNSET (every
+ # production caller) = an empty splat and no extra osoy_launch argument: the same command lines as before. Any other value is refused.
+@@ -455,7 +465,7 @@
+ # v371: the files v371 changes are resolved next to THIS script -- the staged copy (_research\scenery\stage, which mirrors the
+ # production layout) runs the staged DLL / fullgpu / guards, the production copy (after apply_v371.py) the production ones.
+ $BIN  = if ($PSScriptRoot) { $PSScriptRoot } else { $W }
+-$OUT  = "$W\farm_w{0:D2}" -f $Worker
++$OUT  = "$FARMS\farm_w{0:D2}" -f $Worker     # H2LM P13: $FARMS = $W unless H2LM_FARMS is set
+ # v361 TAG SAFETY: a write-back that never finished (the PC shuts off after 8 h; a crash) leaves this marker behind.
+ if (Test-Path "$OUT\writeback_in_progress.txt") {
+     Write-Host "*** THE LAST WRITE-BACK INTO THIS RUN DIR DID NOT FINISH -- the lightmap tag may be half-written:" -ForegroundColor Red
+@@ -1123,58 +1133,11 @@
+     $capQ = if ($CaptureQuality) { $CaptureQuality } elseif ($Quality -eq "custom") { "cuban" } else { $Quality }     # H2LM P2: custom captures on the rewritten 'cuban' row
+     Write-Host "      CPU capture quality: '$capQ' (follows -Quality unless -CaptureQuality is given)"
+     $a = "lightmaps-farm-worker $Scenario $Bsp $capQ $Worker $($Worker+1) -tags_dir tags -data_dir data -game_root_dir ."
+-    # ***** v372W CAST-ONLY PROCESS (user 2026-10-07: "look at how the cpu does multi skies"). build_one_light_emitter 0x4B1E62 makes one
+-    # directional-sky emitter per entry of the structure sky table that maps to a sky, so a multi-sky BSP carries many suns (07b high_10:
+-    # 17); every sun past the RNG-exact chain gets its photon mask and reach box from the GPU's statistical cast -- a different lottery
+-    # than the CPU's. A second tool process, launched NOW beside the capture, runs the CPU's own photon cast with only the census hook
+-    # (GPULM_CASTONLY=1, no other GPULM_* variable) and dumps the CPU's tagged first-bounce cloud + every sun's post-cast box into
+-    # $OUT\castcpu\; fullgpu verifies it on the exact suns and uses it for the statistical ones. Killed unused on a single-sun map.
++    # ***** dev_XC (2026-10-27): NO CPU CAST IN THE BAKE PATH. 0.6.7 launched the CPU's own photon cast here (the v372W castcpu process, GPULM_CASTONLY) beside
++    # the capture for every multi-sun map. That is gone: the GPU reproduces the CPU's cast by itself (fullgpu's exact sky chain over the surface / omni / half-life
++    # lights, GPULM_EXACT_*; -NoExactCast restores the 0.6.7 chain WITHOUT the CPU helper = the statistical GPU lottery for the suns behind the first non-sky light).
++    # The CPU cast stays available as a RESEARCH instrument only (_research\exactcast\tools\run_castcpu.sh), never started from here.
+     $castProc = $null
+-    if ($env:GPULM_RESEARCH_NO_CASTCPU -eq '1') { Write-Host "      *** RESEARCH A/B: GPULM_RESEARCH_NO_CASTCPU=1 -- no CPU-cast process" -ForegroundColor Yellow }
+-    elseif ($osoyOn) {
+-        # boxlevel 2026-10-26: the CPU-cast process WITH the Osoyoos hooks. The CPU reference of a plucker/scenery-fixed bake casts its photons
+-        # through the patched ray code, so the cast-only process must run under the SAME H2ToolHooks (held + proven, then our DLL injected while
+-        # held, resumed only when the DLL logged its CAST-ONLY census marker). GPULM_* is cleared for the launch and put back; GPULM_CASTONLY is
+-        # in ONLY this tool's environment (Remove-Item Env:, never SetEnvironmentVariable($null)).
+-        $aCast = "lightmaps-farm-worker $Scenario $Bsp $capQ $Worker $($Worker+2) -tags_dir tags -data_dir data -game_root_dir ."
+-        $savedGp = @{}
+-        foreach ($ev in @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GPULM_*' })) { $savedGp[$ev.Name] = $ev.Value; Remove-Item "Env:$($ev.Name)" }
+-        $env:GPULM_CASTONLY = '1'
+-        try {
+-            New-Item -ItemType Directory -Force -Path "$OUT\castcpu" | Out-Null
+-            Remove-Item "$OUT\castcpu\gpulm.log" -ErrorAction SilentlyContinue
+-            $castProc = Start-OsoyTool $aCast "castcpu" $OUT -earlyDll $DLL -readyLog "$OUT\castcpu\gpulm.log" -readyMark "[GPULM v372W] CAST-ONLY: census hook installed"
+-            try { $castProc.PriorityClass = 'BelowNormal' } catch { }
+-            Write-Host "      v372W: CPU-cast process pid $($castProc.Id) started beside the capture UNDER the Osoyoos hooks (the CPU's own photon cast -> castcpu\)"
+-        } catch {
+-            Write-Host "      *** v372W: the hooked CPU-cast process could not start ($_) -- statistical suns keep the GPU lottery" -ForegroundColor Red
+-            $castProc = $null
+-        } finally {
+-            Remove-Item Env:GPULM_CASTONLY -ErrorAction SilentlyContinue
+-            foreach ($k in $savedGp.Keys) { Set-Item "Env:$k" $savedGp[$k] } } }
+-    elseif ($Quality -eq "custom") { Write-Host "      v372W: -Quality custom -- the CPU-cast process is not run (a plain launch has no --quality-row: it would cast the stock 'cuban' row); statistical suns keep the GPU lottery" -ForegroundColor Yellow }     # H2LM P2
+-    else {
+-        # the SAME worker index (its farm_wNN dir) but a different farm COUNT: two tools with an identical (index, count) collide -- the
+-        # second exits 127 at "building table" (measured 2026-10-07). The count only partitions the texels; the cast is the same, and
+-        # fullgpu proves it (the exact suns' boxes + photons must come out IDENTICAL)
+-        $aCast = "lightmaps-farm-worker $Scenario $Bsp $capQ $Worker $($Worker+2) -tags_dir tags -data_dir data -game_root_dir ."
+-        $psi = [Diagnostics.ProcessStartInfo]::new($TOOL, $aCast)
+-        $psi.WorkingDirectory = $ROOT; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+-        foreach ($k in @($psi.Environment.Keys)) { if ($k -like 'GPULM_*') { $psi.Environment.Remove($k) | Out-Null } }
+-        $psi.Environment['GPULM_CASTONLY'] = '1'
+-        $castProc = [Diagnostics.Process]::Start($psi)
+-        try { $castProc.PriorityClass = 'BelowNormal' } catch { }
+-        $castInj = $false
+-        Start-Sleep -Seconds 3
+-        for ($i=0; $i -lt 80; $i++) {
+-            $io = & $INJ $castProc.Id $DLL 2>&1
+-            if ("$io" -match "injected" -or $LASTEXITCODE -eq 0) { $castInj = $true; break }
+-            if ($castProc.HasExited) { break }
+-            Start-Sleep -Milliseconds 250 }
+-        # an un-injected tool would run the whole CPU bake: never leave it running
+-        if (-not $castInj) { if (-not $castProc.HasExited) { $castProc.Kill() }; $castProc = $null
+-                             Write-Host "      *** v372W: CPU-cast process injection FAILED -- statistical suns keep the GPU lottery" -ForegroundColor Red }
+-        else { Write-Host "      v372W: CPU-cast process pid $($castProc.Id) started beside the capture (the CPU's own photon cast -> castcpu\)" } }
+     if ($osoyLaunch) { $p = Start-OsoyTool $a "capture" $OUT -earlyDll $DLL -readyLog "$OUT\gpulm.log" }      # v370: H2ToolHooks.dll in BEFORE the first instruction, proven (H2LM P2: $osoyLaunch); v373M: and our DLL
+     else {
+     $p = Start-Process -FilePath $TOOL -ArgumentList $a -WorkingDirectory $ROOT -PassThru @h2lmHide     # H2LM P3
+@@ -1201,23 +1164,7 @@
+     if (-not $injected) { if (-not $p.HasExited) { $p.Kill() }; if ($castProc -and -not $castProc.HasExited) { $castProc.Kill() }; throw "PHASE 1: injection FAILED -- aborted" }
+     $p.WaitForExit(3000000) | Out-Null
+     if (-not $p.HasExited) { $p.Kill(); if ($castProc -and -not $castProc.HasExited) { $castProc.Kill() }; throw "capture timed out" }
+-    # v372W: the CPU-cast process. One sun (or none) -> nothing is statistical: kill it unused. Otherwise wait for its census exit.
+-    if ($castProc) {
+-        $nSunCap = 0
+-        $sl = Select-String -Path "$OUT\gpulm.log" -Pattern "lights\.bin: (\d+) SUN" -ErrorAction SilentlyContinue | Select-Object -Last 1
+-        if ($sl) { $nSunCap = [int]$sl.Matches[0].Groups[1].Value }
+-        if ($nSunCap -le 1) {
+-            if (-not $castProc.HasExited) { $castProc.Kill(); $castProc.WaitForExit(10000) | Out-Null }
+-            if (Test-Path "$OUT\castcpu") { Get-ChildItem "$OUT\castcpu" -File | Remove-Item -Force; Remove-Item "$OUT\castcpu" -Force }
+-            Write-Host "      v372W: $nSunCap sun(s) -- no statistical sun possible; the CPU-cast process was stopped unused" }
+-        else {
+-            $twCast = [Diagnostics.Stopwatch]::StartNew()   # was $tw: PowerShell vars are case-insensitive, it overwrote $TW (the tagwriter dir) -> lmw_skeleton.py path broken
+-            if (-not $castProc.WaitForExit(1800000)) { $castProc.Kill(); Write-Host "      *** v372W: the CPU-cast process did not finish in 30 min -- killed; statistical suns keep the GPU lottery" -ForegroundColor Red }
+-            else {
+-                $cl = Select-String -Path "$OUT\castcpu\gpulm.log" -Pattern "CAST-ONLY done|photon_cull\.bin: \d+ tagged|sun_box_cpu\.bin: \d+" -ErrorAction SilentlyContinue | ForEach-Object { ($_.Line -replace '^\[\s*[0-9.]+s\]\s*', '').Trim() }
+-                $ok = ($castProc.ExitCode -eq 0) -and (Test-Path "$OUT\castcpu\photon_cull.bin") -and (Test-Path "$OUT\castcpu\sun_box_cpu.bin")
+-                Write-Host ("      v372W: $nSunCap suns -- CPU-cast process exit {0} after {1:n1}s more ({2})" -f $castProc.ExitCode, $twCast.Elapsed.TotalSeconds, $(if ($ok) { 'castcpu\ ready' } else { '*** INCOMPLETE -- statistical suns keep the GPU lottery' })) -ForegroundColor $(if ($ok) { 'Gray' } else { 'Red' })
+-                $cl | ForEach-Object { Write-Host "        $_" } } } }
++    # dev_XC: no CPU-cast process to wait for (see above).
+     Assert-NoHookCollision "$OUT\gpulm.log" "capture"     # v370 (a no-op with the switches off)
+     if ($Quality -eq "custom") { Assert-CustomCapture $OUT }     # H2LM P2
+     $soup = (Select-String -Path "$OUT\gpulm.log" -Pattern "wrote soup: (\d+) charts, (\d+)" | Select-Object -Last 1)
+@@ -1620,7 +1567,8 @@
+ # deposits byte-identical, lattice L1 0.0023 vs the CPU's) with speculative walkers stitched by LCG offset, in ~1.6 s.
+ # It replaces the regular cast's manager 0; managers 1-4 stay stochastic. Worth +0.48 pp (V356 99.198 -> 99.676).
+ # int_v359: it runs BEFORE the regular cast, which then skips the sun's candidates (gSkipLightP1).
+-$env:GPULM_SUN_EXACT="1"
++if ($FastCast) { $AllowStochasticSun = [System.Management.Automation.SwitchParameter]::new($true) }
++if ($FastCast) { $env:GPULM_SUN_EXACT="0"; Note "-FastCast: statistical GPU cast (no RNG-exact sun / sky chain) - look differs from the CPU" } else { $env:GPULM_SUN_EXACT="1" }
+ # EXACTSUN review: S_cast comes from lcg_cast.bin; the operator override is only ever set from -SunScast.
+ if ($SunScast) {
+     if ($SunScast -notmatch '^(0x)?[0-9A-Fa-f]{1,8}$') { throw "-SunScast '$SunScast' is not a hex value" }
+@@ -1628,13 +1576,16 @@
+     Write-Host "      -SunScast $SunScast (override for a capture made before the S_cast recorder; logged EXACT_UNVERIFIED, must agree with lcg_cast.bin when it exists)" -ForegroundColor Yellow }
+ else { Clear-Gpulm 'GPULM_SUN_SCAST' }
+ # v360 SKY CHAIN (sky_chain.h): default ON in the binary; only -NoSkyChain sets GPULM_SKY_CHAIN=0 (the v359 sun-only path).
+-if ($NoSkyChain) { $env:GPULM_SKY_CHAIN = "0"; Note "-NoSkyChain: only the manager-0 sun is RNG-exact (v359 path); managers 1-2 sky are stochastic (~-0.05 pp)" }
++if ($FastCast) { $env:GPULM_SKY_CHAIN = "0" }
++elseif ($NoSkyChain) { $env:GPULM_SKY_CHAIN = "0"; Note "-NoSkyChain: only the manager-0 sun is RNG-exact (v359 path); managers 1-2 sky are stochastic (~-0.05 pp)" }
+ else { Clear-Gpulm 'GPULM_SKY_CHAIN' }
+ # v372 R1: the two chain knobs are set ONLY by their switches (a leftover shell value must never reach a bake)
+ Clear-Gpulm 'GPULM_SKY_CHAIN_FRUSTUM','GPULM_SKY_CHAIN_SUNBOX'
+ if ($NoSkyChainFrustum) { $env:GPULM_SKY_CHAIN_FRUSTUM = "0"; Note "-NoSkyChainFrustum: the sky chain stops at the first analytic light (the v372 sky-only rule); suns 2-4 of a map like earthcity_1 stay statistical" }
+ # 2026-10-06 DEFAULT ON: earthcity_1 +0.0608 pp (w104 -> w105); cyclotron (w106/w111) and lighttest2 (w101/w112) keyed-identical
+ if ($NoSkyChainSunBox) { Note "-NoSkyChainSunBox: sun reach boxes from the box-only pass (pre-default A/B)" } else { $env:GPULM_SKY_CHAIN_SUNBOX = "1" }
++# dev_XC: the GPU's own exact cast (surface / omni / half-life lights chained, see sky_chain.h read_exact_switches) is ON by default in fullgpu; no CPU cast helper any more.
++if ($NoExactCast) { $env:GPULM_EXACT_OFF = "1"; Note "-NoExactCast: the sky chain stops at the first surface / omni / half-life light (the 0.6.6 prefix); later suns are the GPU's statistical cast (A/B)" } else { Clear-Gpulm 'GPULM_EXACT_OFF' }
+ if ($NoSkyCellPkt) { $env:GPULM_SKY_CELLPKT = "0"; Note "-NoSkyCellPkt: the sky chain tests instanced geometry with the 2048 packet (v367), not the CPU's cell-limited one" }
+ else { Clear-Gpulm 'GPULM_SKY_CELLPKT' }
+ # v369s (guard3) the full two-level instanced rule: default ON in the binary; -NoSkyCellFull (or no cell packet) sets it to 0.

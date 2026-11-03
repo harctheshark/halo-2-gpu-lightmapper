@@ -1,6 +1,6 @@
 {
  "format": "h2lm-patch-series/1",
- "comment": "S1.1+S1.2 gpu_bake.ps1 patches (+ U1 2026-10-15: F24 = review finding 24, lm_tagwriter --tool $TOOL). Applied in order to COPIES of production by tools/patch_series.py. OSOY_LAUNCH_MD5 = the md5 (upper-case hex) of the payload's S1.3 osoy_launch.exe, filled in by the payload builder. U1 UPSTREAMED the whole chain into production with the user's OK: 'upstream' names production's md5 after the upstream and the pinned pre-upstream base (patches/base); production == chain(base) + tokens is verified at every build, so the series is a verified no-op and the payload copies production verbatim. W1 2026-10-20: production moved again (engine promotion 00:46): P7 per target; see the target notes. W2 2026-10-20 (0.6.3): production moved a third time (05:38 promotion); P8 per target.",
+ "comment": "S1.1+S1.2 gpu_bake.ps1 patches (+ U1 2026-10-15: F24 = review finding 24, lm_tagwriter --tool $TOOL). Applied in order to COPIES of production by tools/patch_series.py. OSOY_LAUNCH_MD5 = the md5 (upper-case hex) of the payload's S1.3 osoy_launch.exe, filled in by the payload builder. U1 UPSTREAMED the whole chain into production with the user's OK: 'upstream' names production's md5 after the upstream and the pinned pre-upstream base (patches/base); production == chain(base) + tokens is verified at every build, so the series is a verified no-op and the payload copies production verbatim. W1 2026-10-20: production moved again (engine promotion 00:46): P7 per target; see the target notes. W2 2026-10-20 (0.6.3): production moved a third time (05:38 promotion); P8 per target. 0.6.8 (2026-10-29): + post_upstream P13 (H2LM_FARMS: the farm_wNN workers in another folder than H2LM_WORK, the standalone's 'Temp (safe to delete)'; unset = the production path) applied to the verified production copy; production itself is NOT changed (not upstreamed). 0.6.8 RC: + P15 (dev_XC promotion, P13 upstreamed into it); post_upstream = P14 only (comment-only public-text fix). 0.6.8 RC (later): + post_upstream P17 (the four tool command lines quote the scenario and the BSP: names with spaces; tests/rc068/make_p17.py) BEFORE P14; production is not changed.",
  "tokens": {
   "OSOY_LAUNCH_MD5": "^[0-9A-F]{32}$"
  },
@@ -19,14 +19,20 @@
     "P9_promote064_engine_v373.patch",
     "P10_promote065_engine_v373.patch",
     "P11_promote066_engine_v373.patch",
-    "P12_promote067_engine_v373.patch"
+    "P12_promote067_engine_v373.patch",
+    "P15_promote068_engine_v373.patch",
+    "P16_toolloader_engine_v373.patch",
+    "P19_promote069_engine_v373.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "669dcc144a4961043cbb572611d55756",
+    "md5": "d16ac070fc973e6d43738cc89903670d",
     "prior_md5s": [
+     "e976ba73600efe0400500c7f08ea48f5",
+     "30c277813d04426df76f319ee201a11c",
+     "669dcc144a4961043cbb572611d55756",
      "cefcf497e5434411ac2a0ac3d3b9a46d",
      "cabc84493fb968a8289b08717407ab59",
      "b35dc488b917940e6c8d58463ad5c642",
@@ -36,12 +42,17 @@
      "7a033e064ef1c222b41e8fbdfcdaa884"
     ],
     "base_file": "../base/engine_v373/gpu_bake.ps1",
-    "note": "U1 2026-10-15: engine_v373\\gpu_bake.ps1 = this chain with OSOY_LAUNCH_MD5 = E2DBA7AF... (the payload's osoy_launch.exe). W1 2026-10-20: the chain is now P1+P3+P2+F24+P1b (drive-root; X1) + P7 (the 2026-10-20 promotion's M2 early injection / B5 hook v5 pins + SceneryFixDependencies.db md5 / fix #9 probe-mode guard) = production 15771590. P1b is NOT an identity in the chain: it is the step that turns fe88bd8b into b35dc488 (dev_M1) before P7; dropping it would make the chain unable to reproduce production. prior_md5s: b35dc488 = dev_M1 (the 0.6.2 candidate engine), fe88bd8b = production before the promotion; pre-promotion backup engine_v373\\_backup_20261020_004652_pre_062 W2 2026-10-20 (0.6.3): production moved again (05:38 promotion: -Responsive, -ExactVertexLighting, v373D log patterns, lmw_gate.py in the writer file list): P8 = production f13328c7; 15771590 is the previous promotion (pre-promotion backup engine_v373\\_backup_20261020_053840_pre_063). W3 2026-10-21 (0.6.4): production moved a fourth time (14:56 promotion: scenery multi-permutation fix, -WriterOnly / -ToolOverlay + cross-folder BSP, GPULM_COMPAT validation, responsive v2): P9 = production 7a033e06; f13328c7 is the previous promotion (pre-promotion backup engine_v373\\_backup_20261021_145623_pre_064). W5 2026-10-22 (0.6.5): + P10 (the 05:24 promotion: gpu_bake looks for sky_gate.py in the engine dir first, then the code root; multi-cubemap-sky BSPs accepted, per-hit sky selection) = production cabc8449. W6 2026-10-22 (0.6.6): + P11 (the 17:24 promotion: relevance-aware Sapien re-save guard, used-set bitmaps/render_models via lmw_usedset.py, triplicate corner-texel fill) = production cefcf497."
-   }
+    "note": "U1 2026-10-15: engine_v373\\gpu_bake.ps1 = this chain with OSOY_LAUNCH_MD5 = E2DBA7AF... (the payload's osoy_launch.exe). W1 2026-10-20: the chain is now P1+P3+P2+F24+P1b (drive-root; X1) + P7 (the 2026-10-20 promotion's M2 early injection / B5 hook v5 pins + SceneryFixDependencies.db md5 / fix #9 probe-mode guard) = production 15771590. P1b is NOT an identity in the chain: it is the step that turns fe88bd8b into b35dc488 (dev_M1) before P7; dropping it would make the chain unable to reproduce production. prior_md5s: b35dc488 = dev_M1 (the 0.6.2 candidate engine), fe88bd8b = production before the promotion; pre-promotion backup engine_v373\\_backup_20261020_004652_pre_062 W2 2026-10-20 (0.6.3): production moved again (05:38 promotion: -Responsive, -ExactVertexLighting, v373D log patterns, lmw_gate.py in the writer file list): P8 = production f13328c7; 15771590 is the previous promotion (pre-promotion backup engine_v373\\_backup_20261020_053840_pre_063). W3 2026-10-21 (0.6.4): production moved a fourth time (14:56 promotion: scenery multi-permutation fix, -WriterOnly / -ToolOverlay + cross-folder BSP, GPULM_COMPAT validation, responsive v2): P9 = production 7a033e06; f13328c7 is the previous promotion (pre-promotion backup engine_v373\\_backup_20261021_145623_pre_064). W5 2026-10-22 (0.6.5): + P10 (the 05:24 promotion: gpu_bake looks for sky_gate.py in the engine dir first, then the code root; multi-cubemap-sky BSPs accepted, per-hit sky selection) = production cabc8449. W6 2026-10-22 (0.6.6): + P11 (the 17:24 promotion: relevance-aware Sapien re-save guard, used-set bitmaps/render_models via lmw_usedset.py, triplicate corner-texel fill) = production cefcf497. 0.6.8 RC (2026-10-29): + P15 (the dev_XC promotion: the GPU computes the exact photon cast itself, no CPU-cast process; P13 H2LM_FARMS is now part of production) = 30c27781. Built from the promoted copy build/rc068_glw until production is promoted (tests/rc068/promote_068.py). 0.6.8 RC (2026-10-29, later): + P16 (the tool loader is H2GpuLightmapper.ToolLoader.exe, built from the unchanged inject.cpp with file details; ONE path line, $INJ; tests/rc068/make_p16.py, promoted by tests/rc068/promote_p16.py) = e976ba73; 30c27781 is the dev_XC promotion. 0.6.9 rc069_a2 (2026-11-03): + P19 (the dev_RB promotion: the part plan carries a sub-chart texel cut T0/T1 -> GPULM_PART_TEX, engine_v375) = d16ac070; e976ba73 is the engine_v374 / rc069_a1 file. P17, P14 and P18 (post_upstream) are re-made on d16ac070 (tests/rc069/make_p19.py); the AO chain is unchanged (dev_AO13 carries dev_AO12's gpu_bake.ps1)."
+   },
+   "post_upstream": [
+    "P17_toolquote_engine_v373.patch",
+    "P14_comment_engine_v373.patch",
+    "P18_rt_fastnq_engine_v373.patch"
+   ]
   },
   {
    "path": "_research/ao/dev_AO/gpu_bake.ps1",
-   "src": "_research/ao/dev_AO10/gpu_bake.ps1",
+   "src": "_research/ao/dev_AO14/gpu_bake.ps1",
    "src_note": "V1 2026-10-14: the payload keeps INST _research/ao/dev_AO as the AO engine dir name. W1 2026-10-20: the AO engine is now _research/ao/dev_AO4 = the promoted engine_v373 + exactly dev_AO2's AO additions (tests/w1_rebuild_062/make_dev_ao4.py: three-way merge, no P2 custom text); dev_AO2 (bac932e8) is the pre-promotion AO engine and stays as the pinned history. W2 2026-10-20 (0.6.3): the AO engine is now _research/ao/dev_AO5 = the 05:38-promoted engine_v373 + exactly dev_AO4's AO additions (tests/w2_rebuild_063/make_dev_ao5.py); dev_AO4 is the 0.6.2 AO engine. W3 2026-10-21 (0.6.4): the AO engine is now _research/ao/dev_AO6 = the 0.6.4-promoted engine_v373 + exactly dev_AO5's AO additions (tests/w3_rebuild_064/make_dev_ao6.py, then build_ao6.py: CSBLOB for the AO kernel + its two df64 compat twins); dev_AO5 is the 0.6.3 AO engine. W5 2026-10-22 (0.6.5): the production source is now _research/ao/dev_AO8 = the 0.6.5-promoted engine_v373 + exactly dev_AO6's AO additions (tests/w5_release_065/make_dev_ao8.py).",
    "base_md5": "405570d10d890b5b0ca9505904777a05",
    "patches": [
@@ -54,14 +65,20 @@
     "P9_promote064_dev_AO.patch",
     "P10_promote065_dev_AO.patch",
     "P11_promote066_dev_AO.patch",
-    "P12_promote067_dev_AO.patch"
+    "P12_promote067_dev_AO.patch",
+    "P15_promote068_dev_AO.patch",
+    "P16_toolloader_dev_AO.patch",
+    "P20_aocut_dev_AO.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "92ee02265849c266a85c385bc63b0589",
+    "md5": "ff8de832ccace002566a197ccf860af5",
     "prior_md5s": [
+     "b34c221e14fd8f162d7a4678d033532b",
+     "d95fb2960deab1cc00947ef4a70b3d0c",
+     "92ee02265849c266a85c385bc63b0589",
      "59d529c5996dc4983f294d52462013a6",
      "7ff83e05ecf1cc72e1ca2b72344f4808",
      "1d58922e4810e9488367f682a01bb9ae",
@@ -71,8 +88,12 @@
      "cd4883222df27f1c4c7a1924c5787af1"
     ],
     "base_file": "../base/_research/ao/dev_AO2/gpu_bake.ps1",
-    "note": "U1 2026-10-15: _research\u0007o\\dev_AO2\\gpu_bake.ps1 = P1+P3+F24 on the pinned base. W1 2026-10-20: + P1b + P7 = _research\u0007o\\dev_AO4\\gpu_bake.ps1 (440ce318). prior: 1d58922e = dev_AO2 + P1b (the 0.6.2 candidate), bac932e8 = dev_AO2 as promoted before W2 2026-10-20 (0.6.3): + P8 = _research/ao/dev_AO5/gpu_bake.ps1 (1a0318ac); 440ce318 = dev_AO4 (the 0.6.2 AO engine). W3 2026-10-21 (0.6.4): + P9 = _research/ao/dev_AO6/gpu_bake.ps1 (cd488322); 1a0318ac = dev_AO5 (the 0.6.3 AO engine). W5 2026-10-22 (0.6.5): + P10 = _research/ao/dev_AO8/gpu_bake.ps1 (7ff83e05) = the 0.6.5-promoted gpu_bake + exactly the AO additions (tests/w5_release_065/make_dev_ao8.py). W6 2026-10-22 (0.6.6): + P11 (the 17:24 promotion: relevance-aware Sapien re-save guard, used-set bitmaps/render_models via lmw_usedset.py, triplicate corner-texel fill) = _research/ao/dev_AO9/gpu_bake.ps1 (59d529c5) = the 0.6.6-promoted gpu_bake + exactly the AO additions (tests/w6_release_066/make_dev_ao9.py)."
-   }
+    "note": "U1 2026-10-15: _research\u0007o\\dev_AO2\\gpu_bake.ps1 = P1+P3+F24 on the pinned base. W1 2026-10-20: + P1b + P7 = _research\u0007o\\dev_AO4\\gpu_bake.ps1 (440ce318). prior: 1d58922e = dev_AO2 + P1b (the 0.6.2 candidate), bac932e8 = dev_AO2 as promoted before W2 2026-10-20 (0.6.3): + P8 = _research/ao/dev_AO5/gpu_bake.ps1 (1a0318ac); 440ce318 = dev_AO4 (the 0.6.2 AO engine). W3 2026-10-21 (0.6.4): + P9 = _research/ao/dev_AO6/gpu_bake.ps1 (cd488322); 1a0318ac = dev_AO5 (the 0.6.3 AO engine). W5 2026-10-22 (0.6.5): + P10 = _research/ao/dev_AO8/gpu_bake.ps1 (7ff83e05) = the 0.6.5-promoted gpu_bake + exactly the AO additions (tests/w5_release_065/make_dev_ao8.py). W6 2026-10-22 (0.6.6): + P11 (the 17:24 promotion: relevance-aware Sapien re-save guard, used-set bitmaps/render_models via lmw_usedset.py, triplicate corner-texel fill) = _research/ao/dev_AO9/gpu_bake.ps1 (59d529c5) = the 0.6.6-promoted gpu_bake + exactly the AO additions (tests/w6_release_066/make_dev_ao9.py). 0.6.8 RC (2026-10-29): + P15 (the dev_XC promotion: the GPU computes the exact photon cast itself, no CPU-cast process; P13 H2LM_FARMS is now part of production) = d95fb296 = _research/ao/dev_AO11 (dev_AO10 + the same change, tests/rc068/resolve_ao11.py). Built from the promoted copy build/rc068_glw until production is promoted (tests/rc068/promote_068.py). 0.6.8 RC (later): + P16 (H2GpuLightmapper.ToolLoader.exe; one path line) = b34c221e = _research/ao/dev_AO11 after tests/rc068/promote_p16.py."
+   },
+   "post_upstream": [
+    "P17_toolquote_dev_AO.patch",
+    "P14_comment_dev_AO.patch"
+   ]
   }
  ]
 }

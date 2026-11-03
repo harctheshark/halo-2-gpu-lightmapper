@@ -210,6 +210,23 @@ class Stager:
                 if prec.get('upstreamed'):
                     # U1 (2026-10-15): production already holds this series -- patch_series proved production == chain(pinned base)
                     # + the payload's token values byte for byte, so the INST file is a PRISTINE production copy (kind prod)
+                    if prec.get('post_patches'):
+                        # 0.6.8: + reviewed post-upstream patches (P13 H2LM_FARMS) applied to that verified production copy: kind patched,
+                        # pinned to the last post patch's result md5; production itself is unchanged (patch_series pinned the first one to it)
+                        if sm != prec['production_md5'] or L.md5_bytes(data) != prec['post_patches'][-1]['result_md5']:
+                            raise Refused('%s: the post-upstream %s is not the pinned result (%s / %s / %s)'
+                                          % (s['label'], t['path'], sm, prec['production_md5'], L.md5_bytes(data)))
+                        self.upstream_bases[src] = prec['base_md5']
+                        what = role.split(':', 1)[-1] + '+' + '+'.join(os.path.splitext(p['file'])[0].split('_')[0] for p in prec['post_patches'])
+                        self.notes.append('%s %s: production %s holds the U1 upstream; + post-upstream %s -> %s'
+                                          % (s['label'], t['path'], sm[:8], ', '.join(p['file'] for p in prec['post_patches']), L.md5_bytes(data)[:8]))
+                        self._add(t['path'], data, {'kind': 'patched', 'role': 'upstreamed+post:' + what, 'sourceMd5': sm, 'source': src,
+                                                    'label': s['label'], 'series': s['file'], 'patches': prec['post_patches'],
+                                                    'preTokenMd5': prec['pre_token_md5'], 'tokens': prec.get('tokens', {}),
+                                                    'upstream': {'base_md5': prec['base_md5'], 'base_file': prec.get('base_file'),
+                                                                 'patches': prec['patches'], 'preTokenMd5': prec['pre_token_md5'],
+                                                                 'tokens': prec.get('tokens', {})}})
+                        continue
                     if sm != prec['production_md5'] or L.md5_bytes(data) != sm:
                         raise Refused('%s: the upstreamed %s is not production verbatim (%s / %s / %s)'
                                       % (s['label'], t['path'], sm, prec['production_md5'], L.md5_bytes(data)))
@@ -294,6 +311,7 @@ class Stager:
         gdata, gm = self._read_source(gp)
         if gm != lt.get('guard_md5'):
             raise Refused('--with-custom-engine: %s md5 %s is not the T3a-tested %s' % (gp, gm, lt.get('guard_md5')))
+        rt_guard = None
         for dest, rec in sorted(list(self.entries.items())):
             if not dest.startswith('engine_v373/'):
                 continue
@@ -301,12 +319,28 @@ class Stager:
             if nd == 'engine_custom/v041-fullgpu/fullgpu.exe':
                 self._add(nd, gdata, {'kind': 'built', 'role': 'built:N3', 'source': gp, 'label': 'S1.7 N3 (T3a PASS)',
                                       'sourceMd5': rec['sourceMd5'], 'replaces': rec.get('source')})
+            elif nd == 'engine_custom/v041-fullgpu/fullgpu_rt.exe':
+                # 0.6.9: Custom's RT host is the RT variant WITH the N3 guard edits (T3a record: guard_rt_*, gpu_identity_proof_rt), never the plain RT exe
+                # of the lightmap engine. Without that record the file is simply not shipped (gpu_bake then runs the guarded D3D11 fullgpu.exe: -Rt is a no-op).
+                grt, rproof = lt.get('guard_rt_fullgpu'), str(lt.get('gpu_identity_proof_rt', ''))
+                if not grt or not rproof.upper().startswith('PASS'):
+                    self.notes.append('engine_custom/: NO RT host (T3a record has no guard_rt_fullgpu / gpu_identity_proof_rt PASS); Custom runs the guarded D3D11 fullgpu.exe')
+                    continue
+                if lt.get('production_rt_md5') != rec['md5']:
+                    raise Refused('--with-custom-engine: the RT guard was built from the RT exe %s but the payload carries %s' % (lt.get('production_rt_md5'), rec['md5']))
+                rp = os.path.join(os.path.dirname(latest_p), *grt.replace(chr(92), '/').split('/'))
+                rdata, rm = self._read_source(rp)
+                if rm != lt.get('guard_rt_md5'):
+                    raise Refused('--with-custom-engine: %s md5 %s is not the T3a-tested RT guard %s' % (rp, rm, lt.get('guard_rt_md5')))
+                rt_guard = rm
+                self._add(nd, rdata, {'kind': 'built', 'role': 'built:N3rt', 'source': rp, 'label': '0.6.9 N3 RT guard (T3a PASS)',
+                                      'sourceMd5': rec['md5'], 'replaces': rec.get('source')})
             else:
                 data = open(os.path.join(self.inst, *dest.split('/')), 'rb').read()
                 r2 = {k: v for k, v in rec.items() if k not in ('path', 'size', 'md5')}
                 r2['copyOf'] = dest
                 self._add(nd, data, r2)
-        return {'shipped': True, 'latest': latest_p, 'guard_md5': gm, 'proof': proof}
+        return {'shipped': True, 'latest': latest_p, 'guard_md5': gm, 'proof': proof, 'guard_rt_md5': rt_guard}
 
     # ------------------------------------------------------------------ AO engine sync (review fix, finding 15)
     def check_ao_engine(self):
@@ -400,6 +434,28 @@ class Stager:
                                                          else 'no P1b drive-root handling in: ' + ', '.join(bad))}
         if not rec['enabled']:
             self.notes.append('drive-root H2EK disabled in this payload (features.driveRoot): ' + rec['reason'])
+        return rec
+
+    # ------------------------------------------------------------------ 0.6.8 bounded temp: H2LM_FARMS (P13 + P5c)
+    def check_farms(self):
+        """0.6.8 (2026-10-29): the shell puts the farm_wNN workers in WORK\\Temp (safe to delete) only when EVERY gpu_bake.ps1 this
+        payload ships carries P13 (H2LM_FARMS: "$FARMS\\farm_w") and the light-probe driver carries P5c (its --farm check follows
+        H2LM_FARMS). features.farms.enabled records that; without it the shell keeps the farms in WORK and never sets H2LM_FARMS."""
+        gbs = sorted(d for d in self.entries if d.endswith('/gpu_bake.ps1'))
+        bad = []
+        for gb in gbs:
+            data = open(os.path.join(self.inst, *gb.split('/')), 'rb').read().decode('utf-8', errors='replace')
+            if 'H2LM P13' not in data or '$OUT  = "$FARMS\\farm_w' not in data:
+                bad.append(gb)
+        lp = '_research/lightprobes/gpu_lightprobes.py'
+        if lp in self.entries:
+            data = open(os.path.join(self.inst, *lp.split('/')), 'rb').read().decode('utf-8', errors='replace')
+            if 'P5c' not in data or "'H2LM_FARMS'" not in data:
+                bad.append(lp)
+        rec = {'enabled': bool(gbs) and not bad, 'checked': gbs + ([lp] if lp in self.entries else []), 'missing': bad,
+               'reason': None if gbs and not bad else ('no gpu_bake.ps1 in the payload' if not gbs else 'no H2LM_FARMS handling (P13 / P5c) in: ' + ', '.join(bad))}
+        if not rec['enabled']:
+            self.notes.append('farms in Temp disabled in this payload (features.farms): ' + rec['reason'])
         return rec
 
     # ------------------------------------------------------------------ light probes (V5, gate T4)
@@ -552,6 +608,8 @@ class Stager:
                         if ('$W\\' + rel) in code and rel.lower().endswith(code_ext):
                             wcode.append('%d: $W\\%s' % (ln, rel))
                         continue
+                    if var == 'BIN' and rel.lower() == 'v041-fullgpu' + chr(92) + 'fullgpu_rt.exe':
+                        continue          # 0.6.9 P18: Test-Path guarded; an engine without the RT host (engine_custom without the RT guard record) runs the D3D11 fullgpu.exe
                     n += 1
                     target = os.path.join(base[var], *rel.split('\\'))
                     if not os.path.exists(target):
@@ -714,6 +772,7 @@ def main(argv=None):
             ao = st.check_ao_engine()
             probes = st.check_probes()
             driveroot = st.check_driveroot()
+            farms = st.check_farms()
             st.tag_roles()
             refs = st.check_gpu_bake_refs()
             imps = st.check_imports()
@@ -738,10 +797,11 @@ def main(argv=None):
             'engine': {k: st.entries[k]['md5'] for k in ('engine_v373/gpu_bake.ps1', 'engine_v373/v041-fullgpu/fullgpu.exe',
                                                           '_research/ao/dev_AO/gpu_bake.ps1', '_research/ao/dev_AO/v041-fullgpu/fullgpu.exe',
                                                           'osoyoos/osoy_launch.exe') if k in st.entries},
-            'custom_engine': custom, 'ao_engine': ao, 'probes_gate': probes, 'driveroot': driveroot,
+            'custom_engine': custom, 'ao_engine': ao, 'probes_gate': probes, 'driveroot': driveroot, 'farms': farms,
             'features': {'ao': {'enabled': ao['enabled'], 'reason': ao['reason']},
                          'probes': {'enabled': probes['enabled'], 'reason': probes['reason']},
-                         'driveRoot': {'enabled': driveroot['enabled'], 'reason': driveroot['reason']}},
+                         'driveRoot': {'enabled': driveroot['enabled'], 'reason': driveroot['reason']},
+                         'farms': {'enabled': farms['enabled'], 'reason': farms['reason']}},
             'gpu_bake_refs': refs, 'imports': imps, 'pe': pe,
             'engine_manifest_drift': drift, 'notes': st.notes, 'warnings': st.warnings,
             'sources': {k: st.sources[k] for k in sorted(st.sources)},     # every input read (md5 at read time == at the end)

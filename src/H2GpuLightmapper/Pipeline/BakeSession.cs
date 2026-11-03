@@ -27,7 +27,7 @@ using Json = H2GpuLightmapper.Core.Util.Json;
 
 namespace H2GpuLightmapper.Pipeline
 {
-    public enum PromptKind { ChangedTags, InstallWithoutLayer, InstallRetry, RestoreAfterFailedInstall, RestoreAfterCancel }
+    public enum PromptKind { ChangedTags, InstallWithoutLayer, InstallRetry, RestoreAfterFailedInstall, RestoreAfterCancel, AoAgain }
 
     public sealed class Prompt
     {
@@ -66,6 +66,13 @@ namespace H2GpuLightmapper.Pipeline
         public OverlayContext Overlay;
         /// <summary>Dev (MapBakeSession only): keep the temporary work folder (the map's files + overlay) instead of deleting it.</summary>
         public bool KeepMapTemp;
+        /// <summary>Dev (MapBakeSession only): internal A/B switch.</summary>
+        public bool NoStage;
+        /// <summary>Dev (A/B comparisons only): force gpu_bake's -MaxCallsPerPart (the part sizing normally follows the free VRAM, which other programs change between two runs; the lightmap differs slightly with the part size).</summary>
+        public int? DevMaxCalls;
+        /// <summary>Dev / tests only (--dev-simulate-quarantine REL): this INST file is deleted again right after every (re)extraction, as an
+        /// antivirus quarantine would (PayloadInstaller.SimulateQuarantineRel).</summary>
+        public string DevSimulateQuarantine;
     }
 
     /// <summary>
@@ -182,6 +189,13 @@ namespace H2GpuLightmapper.Pipeline
         }
         /// <summary>The live tags were written by this run (the shell's install, or gpu_bake -WriteBack's [4b] / [4]).</summary>
         private bool _installed;
+        // 0.6.8 bounded temp: this bake's hold on its Temp farm folders (.lock + sentinel); a vanished folder fails the run with
+        // TempJanitor.RootGoneMessage before any later step (an install in particular) can run
+        private readonly List<TempLease> _leases = new List<TempLease>();
+        private volatile bool _tempGone;
+        private string _tempGoneWhat;
+        /// <summary>0.6.8: the folder that holds this bake's workers (WORK\Temp (safe to delete), or WORK for a payload without features.farms).</summary>
+        private string Farms { get { return _rt != null ? _rt.Farms : _host.Installer.FarmRootOf(_work); } }
         private readonly List<RecoveryItem> _markers = new List<RecoveryItem>();
         private PreflightItem _hybridFail;
         /// <summary>Compatibility mode (DF64): every engine this bake runs has it (gpu_bake.ps1 validates GPULM_COMPAT); the kernel set the bake runs
@@ -333,6 +347,9 @@ namespace H2GpuLightmapper.Pipeline
             // review fix (finding 15): AO only when the payload proved the AO trace engine matches the lightmap engine
             string aoWhy;
             if (_o.Ao && !_host.AoEnabled(out aoWhy)) Refuse("ambient occlusion is not available: " + aoWhy);
+            // 0.6.8 xc8: AO only needs the payload's ao_existing.py (an older payload has none)
+            if (_o.Mode == BakeMode.AoOnly && !_host.Manifest.InstComponent.Has(InstLayout.AoExisting))
+                Refuse("AO only is not available in this build (its payload has no " + InstLayout.AoExisting + ")");
 
             // ---- root / scenario / BSP
             string full = null;
@@ -425,7 +442,7 @@ namespace H2GpuLightmapper.Pipeline
                     ProbeWrite = true, RunToolSmoke = true, Custom = _o.Quality == Quality.Custom, CustomPhotons = _o.Photons,
                     InstDirName = inst.DirName, InstMaxPathLen = inst.MaxPathLen, ScenarioRel = rel, Bsp = _o.Bsp,
                     AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot,
-                    FullgpuSelectsDgpu = dgpuExports, AllowDriveRoot = _driveRootOk,
+                    FullgpuSelectsDgpu = dgpuExports, AllowDriveRoot = _driveRootOk, FarmsInTemp = _host.Manifest.FarmsInTemp,
                 });
                 foreach (var it in _pf.Items.Where(i => i.Level != CheckLevel.Ok)) Say("    " + it);
                 _toolMd5 = _pf.Tool == null ? null : _pf.Tool.Md5;
@@ -440,7 +457,7 @@ namespace H2GpuLightmapper.Pipeline
                 _rt = _host.Resolve(PfRoot);
                 if (_rt.SlotBase == null)
                 {
-                    try { _rt.SlotBase = SlotAliasPlanner.Plan(_work, _host.Paths.AliasLocalAppData, _host.Paths.AliasVolumeRoot).SlotBase + " (planned)"; }
+                    try { _rt.SlotBase = SlotAliasPlanner.Plan(_host.Installer.FarmRootOf(_work), _host.Paths.AliasLocalAppData, _host.Paths.AliasVolumeRoot).SlotBase + " (planned)"; }
                     catch (SlotAliasRefusedException e) { Refuse("no DLL slot base fits this H2EK path: " + e.Message); }
                 }
             }
@@ -449,11 +466,16 @@ namespace H2GpuLightmapper.Pipeline
                 Say("  runtime: extract / verify ...");
                 try
                 {
+                    _host.Installer.SimulateQuarantineRel = _so.DevSimulateQuarantine;
+                    _host.Installer.RefuseIfRemovedAgain(PfRoot);      // 0.6.8 RC: before StartupEnsure, which would re-extract it silently
                     var q = _host.Installer.StartupEnsure(PfRoot, new ExtractOptions { Cancel = _cts.Token });
                     if (!q.Ok) Refuse("the runtime could not be prepared: " + q);
                     var v = _host.Installer.VerifyAndRepairBeforeBake(PfRoot, _cts.Token);
                     Say(string.Format(CultureInfo.InvariantCulture, "  runtime ok ({0:0.0} s md5): slot base {1}", v.Seconds, v.SlotBase));
                 }
+                catch (DefenderRemovedException e) { Refuse(e.Message); }      // 0.6.8 RC: the antivirus removed a runtime file (again)
+                catch (Exception e) when (QuarantineGuard.IsVirusError(e))
+                { Refuse("Windows Security (Defender) blocked a file of the H2 GPU Lightmapper while it was being unpacked (" + e.Message + "). Restore it from Windows Security > Protection history, or allow it, then run the bake again. Nothing was written."); }
                 catch (SlotAliasRefusedException e) { Refuse("no DLL slot base fits this H2EK path: " + e.Message); }
                 catch (OperationCanceledException) { throw; }
                 catch (RefusedException) { throw; }
@@ -461,7 +483,7 @@ namespace H2GpuLightmapper.Pipeline
                 { Refuse("the runtime payload could not be extracted / verified: " + e.Message); }
                 _rt = _host.Resolve(PfRoot);
             }
-            _env = BakeEnv.Build(_rt);
+            _env = StageChannel.Apply(BakeEnv.Build(_rt));
             if (_so.Overlay != null)
             {
                 // .map bake: tool_fast, the tags and the scenery database come from the overlay root; the shell's own paths (INST, farm folders, run folder) stay real.
@@ -483,6 +505,7 @@ namespace H2GpuLightmapper.Pipeline
                     ProbeWrite = false, RunToolSmoke = false, Custom = _o.Quality == Quality.Custom, CustomPhotons = _o.Photons,
                     InstDirName = inst.DirName, InstMaxPathLen = inst.MaxPathLen, ScenarioRel = rel, Bsp = _o.Bsp,
                     AliasLocalAppData = _host.Paths.AliasLocalAppData, AliasVolumeRoot = _host.Paths.AliasVolumeRoot, AllowDriveRoot = _driveRootOk,
+                    FarmsInTemp = _host.Manifest.FarmsInTemp,
                     GpuCheckExe = gpu ? _rt.GpuCheckExe : null,
                     GpuCheckPlainExe = gpu ? InstLayout.FindByName(inst, _rt.InstDir, InstLayout.GpuCheckPlain) : null,
                     PwshExe = _rt.PwshExe, PwshEnv = _env, FullgpuSelectsDgpu = dgpuExports, CompatEngine = _engineHasCompat,
@@ -527,6 +550,11 @@ namespace H2GpuLightmapper.Pipeline
                 else if (vsrc != null && _so.AssumeOtherVramUseMB.HasValue) other = (long)_so.AssumeOtherVramUseMB.Value * 1048576L;
                 _limits = vsrc == null ? (gpuRes != null ? GpuLimits.Compute(null, null, 0) : GpuLimits.Unknown(null))
                                        : GpuLimits.Compute(vram, vsrc, _o.Quality == Quality.Custom ? _o.Photons : 0, other);
+                if (_so.DevMaxCalls.HasValue && _so.DevMaxCalls.Value > 0 && _limits != null)
+                {
+                    _limits.MaxCallsPerPart = _so.DevMaxCalls.Value;
+                    _limits.Notes.Add("DEV (--dev-max-calls): -MaxCallsPerPart forced to " + _so.DevMaxCalls.Value.ToString("N0", CultureInfo.InvariantCulture));
+                }
                 if (vsrc != null)
                 {
                     Say("  gpu memory: " + (vram.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB (" + vsrc + ")"
@@ -604,10 +632,10 @@ namespace H2GpuLightmapper.Pipeline
                        + _host.ProbesWhy + "): use Lightmap Only, which resets this BSP's " + _points + " probes to zero like `tool lightmaps` (CLI: --mode lightmap); dev: --dev-probes");
             if (probes)
             {
-                // X1 item 4: the GPU probe pass holds ~281 points per BSP at its buffer cap; refuse HERE, before any bake, not at the end
+                // X1 item 4 (rc069_a2): the engine bakes more than ~281 points in exact batches; only Halo 2's own 1,024 per BSP is refused, HERE, before any bake, not at the end
                 var pv = GpuLimits.CheckProbes(_points);
                 if (pv.Refuse) Refuse(pv.Message);
-                if (pv.Marginal) { _probeWarning = pv.Message; Say("  " + pv.Message); }
+                if (pv.Marginal || pv.Batched) { _probeWarning = pv.Message; Say("  " + pv.Message); }
             }
             CheckCancel();
 
@@ -672,7 +700,7 @@ namespace H2GpuLightmapper.Pipeline
             // ---- hybrid GPU (review fix, finding 17): the per-app preference of exactly the fullgpu.exe copies this bake runs
             if (_hybridFail != null)
             {
-                var exes = new[] { _n, _m }.Where(w => w.HasValue).Select(w => Path.Combine(BakePlanner.FarmDir(_work, w.Value), "fullgpu.exe")).ToList();
+                var exes = new[] { _n, _m }.Where(w => w.HasValue).Select(w => Path.Combine(BakePlanner.FarmDir(Farms, w.Value), "fullgpu.exe")).ToList();
                 var missing = exes.Where(e => !PreflightChecks.HighPerformancePreferenceSet(e)).ToList();
                 if (missing.Count > 0)
                 {
@@ -697,6 +725,10 @@ namespace H2GpuLightmapper.Pipeline
             SceneryFixCheck(dry, rel);
             CheckCancel();
 
+            // ---- AO only (0.6.8 xc8): the installed lightmap must exist and must not carry AO already -- decided BEFORE any capture, GPU time or backup
+            if (_o.Mode == BakeMode.AoOnly) CheckAoOnlyStart(dry);
+            CheckCancel();
+
             // ---- capture reuse gate (section 7)
             _tagsNow = new Lazy<TagsFingerprint>(() => TagsFingerprint.Compute(_root, _set));
             var changed = new List<string>();
@@ -709,7 +741,7 @@ namespace H2GpuLightmapper.Pipeline
                 if (_toolMd5 == null) _toolMd5 = CaptureIdentity.Md5OrNull(Path.Combine(_root, "tool_fast.exe"));
                 if (_n.HasValue)
                 {
-                    var v = CaptureRecord.Evaluate(BakePlanner.FarmDir(_work, _n.Value), CaptureIdentity.For(_o, _host.Manifest, _root, engineRel, false, _toolMd5),
+                    var v = CaptureRecord.Evaluate(BakePlanner.FarmDir(Farms, _n.Value), CaptureIdentity.For(_o, _host.Manifest, _root, engineRel, false, _toolMd5),
                                                    rel, _o.Bsp, false, () => _tagsNow.Value, _o.ReuseUnrecorded);
                     if (!v.Allowed) Refuse("Reuse existing capture: " + v.Reason);
                     _reuseN = true; _reuseNNote = v.Describe();
@@ -718,7 +750,7 @@ namespace H2GpuLightmapper.Pipeline
                 }
                 if (_m.HasValue)
                 {
-                    var v = CaptureRecord.Evaluate(BakePlanner.FarmDir(_work, _m.Value), CaptureIdentity.For(_o, _host.Manifest, _root, engineRel, true, _toolMd5),
+                    var v = CaptureRecord.Evaluate(BakePlanner.FarmDir(Farms, _m.Value), CaptureIdentity.For(_o, _host.Manifest, _root, engineRel, true, _toolMd5),
                                                    rel, _o.Bsp, true, () => _tagsNow.Value, _o.ReuseUnrecorded);
                     if (v.Allowed)
                     {
@@ -750,6 +782,50 @@ namespace H2GpuLightmapper.Pipeline
                 }
             }
             CheckCancel();
+
+            // ---- 0.6.8 bounded temp: room for this bake's workers on the Temp drive (8 GB must stay free); older cached captures go first
+            if (!dry && _rt != null && _rt.FarmsInTemp)
+            {
+                long need = 0;
+                var spare = new List<string>();
+                foreach (var w in new[] { _n, _m }.Where(x => x.HasValue))
+                {
+                    string f = BakePlanner.FarmDir(Farms, w.Value);
+                    spare.Add(f);
+                    need += Directory.Exists(f) ? Math.Max(0, TempJanitor.NeedFor(_work, w.Value) - SafeFs.DirSize(f)) : TempJanitor.NeedFor(_work, w.Value);
+                }
+                var sp = new JanitorReport();
+                string why = TempJanitor.EnsureSpace(_work, need, spare, sp);
+                foreach (var l in sp.Lines) Say("  temp: " + l);
+                if (why != null) Refuse(why);
+            }
+        }
+
+        /// <summary>AO only: the lightmap set must be installed (it is what AO is added to) and the install record must not say it already has AO (a second AO would darken the
+        /// same places twice). An unrecorded set is allowed -- the program can only know about AO it added itself -- and the log says so. --force (or "Yes" in the window)
+        /// adds AO again. ao_existing.py repeats these checks (and the checks that need the capture) when it runs.</summary>
+        private void CheckAoOnlyStart(bool dry)
+        {
+            var miss = new[] { _set.LtmpName, _set.Prefix + "_truecolor_bitmaps.bitmap", _set.Prefix + "_bitmaps.bitmap" }.Where(n => !File.Exists(Path.Combine(_set.TagDir, n))).ToList();
+            if (miss.Count > 0)
+                Refuse("AO only adds ambient occlusion to a lightmap that is already in the tags, and this scenario / BSP has none yet (missing: " + string.Join(", ", miss)
+                       + "). Bake the lightmap first (Lightmap Only), then run AO only. Nothing was changed.");
+            var md5s = AoRecords.SetMd5s(_set);
+            var rec = AoRecords.Find(AoRecords.Load(_work), md5s);
+            if (rec == null)
+            {
+                Say("  AO only: no install record says this lightmap has AO yet (the program only knows about AO it added itself)");
+                return;
+            }
+            if (_o.AoForce) { Say("  AO only: " + rec.Describe() + " is in this lightmap already -- adding AO again (forced)"); return; }
+            string text = AoRecords.AlreadyText(rec);
+            if (!dry && Ask(new Prompt { Kind = PromptKind.AoAgain, Title = "Add AO again?", Message = "Ambient occlusion has already been added to this lightmap (" + rec.Describe() + ").\n\nAdding it again darkens the same places twice. Add it again anyway?" }))
+            {
+                _o.AoForce = true;
+                Say("  AO only: " + rec.Describe() + " is in this lightmap already -- adding AO again (confirmed)");
+                return;
+            }
+            Refuse(text + " Nothing was changed.");
         }
 
         /// <summary>
@@ -882,8 +958,10 @@ namespace H2GpuLightmapper.Pipeline
                     var acq = run.AcquireGpuLock(lk, _so.LockWait, _so.LockPoll, _cts.Token);
                     if (acq == LockAcquire.Cancelled) throw new OperationCanceledException("cancelled while waiting for the GPU lock");
                     if (acq == LockAcquire.TimedOut) throw new StepFailedException("another bake held the GPU lock for more than " + _so.LockWait.TotalMinutes + " min -- gave up");
+                    TakeTempLeases(run);
                     foreach (var s in plan.Steps)
                     {
+                        CheckTempAlive();
                         if (s.Id == StepIds.MapQuery) { run.Shell("step " + s.Index + " " + s.Id + ": done before planning (" + _points + " probe point(s))"); continue; }
                         // review fix (finding 10): once the live tags were written only Verify follows -- it runs even when a
                         // cancel arrived during the (deferred) tag write, so the written set is always verified
@@ -900,7 +978,18 @@ namespace H2GpuLightmapper.Pipeline
                     else if (!plan.Install) reason = "stage only -- nothing was written to the tags; the final stage is " + plan.FinalStage;
                     if (_installed && run.CancelRequested) reason = (reason != null ? reason + "; " : "") + "installed and verified -- the cancel arrived during the tag write and was applied after it";
                 }
+                catch (OperationCanceledException) when (_tempGone || TempGoneNow())
+                {
+                    final = RunState.Failed; reason = (_installed ? TempJanitor.RootGoneAfterWriteMessage : TempJanitor.RootGoneMessage) + " (" + _tempGoneWhat + ")";
+                    run.Shell("*** " + reason); Aftermath(plan, false);
+                }
+                catch (TempGoneException) { final = RunState.Failed; reason = (_installed ? TempJanitor.RootGoneAfterWriteMessage : TempJanitor.RootGoneMessage) + " (" + _tempGoneWhat + ")"; run.Shell("*** " + reason); Aftermath(plan, false); }
                 catch (OperationCanceledException e) { final = RunState.Cancelled; reason = e.Message + (_installed ? " (AFTER the install: the new lightmap is in the tags)" : ""); Aftermath(plan, true); }
+                catch (StepFailedException e) when (TempGoneNow())
+                {
+                    final = RunState.Failed; reason = (_installed ? TempJanitor.RootGoneAfterWriteMessage : TempJanitor.RootGoneMessage) + " (" + _tempGoneWhat + "; the step reported: " + e.Message + ")";
+                    run.Shell("*** " + reason); Aftermath(plan, false);
+                }
                 catch (StepFailedException e) { final = RunState.Failed; reason = e.Message; Aftermath(plan, false); }
                 catch (SafetyException e) { final = RunState.Failed; reason = "refused by a safety rule: " + e.Message; Aftermath(plan, false); }
                 catch (Exception e) { final = RunState.Failed; reason = e.GetType().Name + ": " + e.Message; run.Shell(e.ToString()); Aftermath(plan, false); }
@@ -915,6 +1004,36 @@ namespace H2GpuLightmapper.Pipeline
                 StopCancelWatch();
             }
             CloseStep();
+            // 0.6.9: the worker's own copy of fullgpu.exe (farm_wNNullgpu.exe) can be removed by the antivirus while the INST copy survives: look BEFORE the cleanup deletes it
+            string farmExeGone = null;
+            if (!_so.DryRun && final == RunState.Failed)
+            {
+                try { foreach (var w in new[] { _n, _m }.Where(x => x.HasValue)) { farmExeGone = QuarantineGuard.FarmExeRemoved(BakePlanner.FarmDir(Farms, w.Value)); if (farmExeGone != null) break; } }
+                catch (Exception) { }
+            }
+            AfterBakeJanitor(run, plan, final == RunState.Done);
+            // 0.6.8 RC: a runtime file the antivirus removed WHILE the bake ran (INST's tool loader, then inject.exe, 2026-10-29) is the real reason of the failure,
+            // not the step that tripped over it; it is recorded, so the next bake re-extracts it once and then reports it before the bake
+            if (!_so.DryRun && (final == RunState.Failed || final == RunState.Done))
+            {
+                try
+                {
+                    var gone = _host.Installer.FindRemovedAfterBake(PfRoot);
+                    if (farmExeGone != null && !gone.Any(g => string.Equals(Path.GetFileName(g.Key), "fullgpu.exe", StringComparison.OrdinalIgnoreCase)))
+                        gone.Insert(0, new KeyValuePair<string, string>(farmExeGone, null));
+                    if (gone.Count > 0)
+                    {
+                        string more = gone.Count > 1 ? " (" + (gone.Count - 1) + " more file(s) of the app are gone too: " + string.Join(", ", gone.Skip(1).Take(3).Select(g => Path.GetFileName(g.Key))) + ")" : "";
+                        if (final == RunState.Failed)
+                        {
+                            reason = QuarantineGuard.Message(gone[0].Key, gone[0].Value, _host.Manifest.AppVersion, true, !_installed) + more + " [the step reported: " + reason + "]";
+                            run.Shell("*** " + reason);
+                        }
+                        else run.Shell("*** WARNING: " + QuarantineGuard.Message(gone[0].Key, gone[0].Value, _host.Manifest.AppVersion, true, false) + more);
+                    }
+                }
+                catch (Exception e) { try { run.Shell("runtime check after the bake: " + e.Message); } catch { } }
+            }
             // 0.6.4: a write-back fallback is part of the run summary (the bake still ends DONE: the lightmap is written, by the other path)
             try
             {
@@ -1030,6 +1149,14 @@ namespace H2GpuLightmapper.Pipeline
                         run.Shell("a cancel was requested from outside this window (" + (File.Exists(req) ? req : extra) + ")");
                         RequestCancel();
                     }
+                    else if (!_tempGone && TempGoneNow())
+                    {
+                        // 0.6.8: the user cleared Temp under the bake: stop it (a tag write in progress -- the install reads only KEEP -- finishes first)
+                        if (Interlocked.Exchange(ref fired, 1) != 0) return;
+                        _tempGone = true;
+                        run.Shell("*** the temporary folder was deleted during the bake (" + _tempGoneWhat + "): stopping the bake");
+                        RequestCancel();
+                    }
                 }
                 catch { }
             }, null, 500, 1000);
@@ -1088,6 +1215,7 @@ namespace H2GpuLightmapper.Pipeline
                 case StepIds.StageCheck: DoStageCheck(s); return true;
                 case StepIds.StageOrToolFallback: return DoStageOrToolFallback(plan, s);
                 case StepIds.AoTrace: case StepIds.AoApply: case StepIds.AoStage: DoSimple(s, "gpu_ao " + s.Args[1]); return true;
+                case StepIds.AoPrecheck: case StepIds.AoExisting: DoAoExisting(s); return true;
                 case StepIds.CopyFinalStage: DoCopyFinalStage(s); return true;
                 case StepIds.CopyLiveLtmp: DoCopyLiveLtmp(s); return true;
                 case StepIds.ProbeBake: DoProbeBake(s); return true;
@@ -1096,7 +1224,7 @@ namespace H2GpuLightmapper.Pipeline
                 case StepIds.AssembleCheckSet: DoAssembleCheckSet(s); return true;
                 case StepIds.ValidateFinal: DoSimple(s, "lmw_validate --check-set (" + s.Args[2] + "; nothing is installed, the stage is kept)"); return true;
                 case StepIds.Install: DoInstall(plan, plan.InstallStage); return true;
-                case StepIds.Verify: DoVerify(plan); return true;
+                case StepIds.Verify: DoVerify(plan); RecordAoInstalled(); return true;
                 default: throw new StepFailedException("unknown plan step " + s.Id);
             }
         }
@@ -1182,6 +1310,16 @@ namespace H2GpuLightmapper.Pipeline
         /// <param name="resultWhy">the run's result text ("installed by ..."); null when the layer text says it (withoutLayer)</param>
         private void RunProductionWriteBack(BakePlan plan, bool skipCapture, PlanStep captureFrom, string headline, string resultWhy, bool withoutLayer)
         {
+            // 0.6.8 RC (F1): preflight only WARNS about the fallback's own backup paths (gpu_bake -WriteBack backs up into the farm and
+            // _TAGBAK_auto, both MAX_PATH-bound). If this bake really needs the fallback and those paths do not fit, stop HERE, before the
+            // fallback process starts: nothing has been written to the tags yet.
+            var over = PathBudget.FallbackOver(_o.Root, _o.ScenarioRel, _o.Bsp, _rt != null && _rt.FarmsInTemp);
+            if (over != null)
+            {
+                Run.Shell("*** " + headline + " is needed, but its backup path would reach " + over.Length + " characters (" + over.What + "; limit " + PathBudget.Limit + "): " + over.Example);
+                throw new StepFailedException("this map needs the tool write-back fallback, but on this H2EK path its backup files would reach " + over.Length
+                    + " characters (limit " + PathBudget.Limit + "). Nothing was written to your tags. Move the H2EK to a shorter path, then bake again.");
+            }
             var args = BakePlanner.GpuBakeArgs(_o, plan.Worker.Value, true, skipCapture, plan.Limits);
             var spec = PwshInvocation.GpuBake(WithEngine(plan.Engine), _env, args, StepIds.GpuBakeFallback);
             var fs = new PlanStep { Id = StepIds.GpuBakeFallback, UiStep = StepId.Install, Kind = PlanStepKind.Process, FileName = spec.FileName, Cwd = spec.Cwd };
@@ -1197,8 +1335,14 @@ namespace H2GpuLightmapper.Pipeline
             Run.Shell("---- " + headline + ": " + fs.CommandLine);
             if (fresh)
                 foreach (var m in CaptureRecord.SupersedeExisting(fs.CaptureOut, DateTime.Now)) Run.Shell("the earlier capture record was renamed aside: " + m);
+            // 0.6.8: this engine path keeps its own marker and backup in the farm (Temp, which the user may delete): the shell's KEEP marker names
+            // the set and this run's _TAGBAK_ui backup until the write-back is verified, and the _TAGBAK_auto folders it makes are recorded as ours
+            CheckTempAlive();
+            var autoBefore = TempJanitor.AutoBackupNames(_work);
+            if (plan.Install) StartupRecovery.WriteToolWbMarker(_work, plan.Worker.Value, _set, _backup == null ? null : _backup.Dir, Run.RunTag, DateTime.Now);
             var oc = RunWriteBackProcess(fs, marker, bak);
-            if (InstallRan(oc)) { MarkInstalled(); SignalSapien(); }
+            try { TempJanitor.RecordAutoBackupsSince(_work, autoBefore); } catch (Exception e) { Run.Shell("note: could not record the auto backups: " + e.Message); }
+            if (InstallRan(oc)) { MarkInstalled(); SignalSapien(); KeepToolBackup(bak); }
             if (fresh && (oc.Ok || oc.Parser.PhasesSeen.Any(ph => ph != "1"))) WriteCaptureRecord(fs, false);
             if (oc.Cancelled && !_installed) throw new OperationCanceledException("cancelled during the install");
             if (!oc.Ok && !(oc.Cancelled && _installed)) throw FailedStep("the production write-back stopped (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
@@ -1206,6 +1350,30 @@ namespace H2GpuLightmapper.Pipeline
             if (withoutLayer) _installedWithoutLayer = true;
             Run.SetStep(StepId.Verify);
             DoVerify(plan);
+            if (StartupRecovery.FinishToolWbMarker(_work, plan.Worker.Value, DateTime.Now)) Run.Shell("the tool write-back is verified: its KEEP marker was set aside (.done_)");
+            try { foreach (var l in TempJanitor.PruneAutoBackups(_work).Lines) Run.Shell("backups: " + l); } catch (Exception) { }
+        }
+
+        /// <summary>0.6.8: the tool write-back's own backup (OUT\tag_backup_before_writeback, in Temp) is copied into the run's KEEP RUN\tagbak
+        /// (md5-verified) and status.json points there, so "Undo last install" still works after Temp is cleared.</summary>
+        private void KeepToolBackup(string bak)
+        {
+            try
+            {
+                if (!Directory.Exists(bak)) return;
+                string to = Path.Combine(Run.RunDir, RunFolder.BackupDirName);
+                if (Directory.Exists(to)) return;
+                Directory.CreateDirectory(to);
+                int n = 0;
+                foreach (var f in Directory.GetFiles(bak).Where(f => !SafeFs.IsReparsePoint(f) && Path.GetFileName(f).IndexOf(".older_", StringComparison.OrdinalIgnoreCase) < 0))
+                {
+                    SafeFs.CopyVerified(f, Path.Combine(to, Path.GetFileName(f)));
+                    n++;
+                }
+                lock (Run.Status) Run.Status.InstallBackupDir = to;
+                Run.Shell("the write-back's backup (" + n + " file(s)) copied to " + to + " (KEEP; Undo last install uses it)");
+            }
+            catch (Exception e) { Run.Shell("note: the write-back's backup stays only in " + bak + " (" + e.Message + ")"); }
         }
 
         /// <summary>
@@ -1248,6 +1416,34 @@ namespace H2GpuLightmapper.Pipeline
                 Run.Shell(why ?? "capture record written: " + CaptureRecord.PathIn(s.CaptureOut) + " (" + id.Describe() + ", " + fp.Count + " tag files fingerprinted, " + fp.HashedCount + " with a content hash)");
             }
             catch (Exception e) { Run.Shell("capture record NOT written (" + e.Message + ") -- this capture will not be offered for reuse"); }
+        }
+
+        /// <summary>AO only: ao_existing.py. Exit 2 with a line "AO only: REFUSED -- ..." is a refusal in plain words (nothing was written); the line becomes the run's reason.</summary>
+        private void DoAoExisting(PlanStep s)
+        {
+            string refusal = null;
+            var oc = RunStepProcess(s, l => { if (l.StartsWith("AO only: REFUSED", StringComparison.Ordinal)) refusal = l.Trim(); });
+            if (oc.Cancelled) throw new OperationCanceledException("cancelled during AO only");
+            if (oc.Ok) return;
+            if (refusal != null) throw new StepFailedException(refusal);
+            throw FailedStep("AO only (" + s.Args[1] + ") failed (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
+        }
+
+        /// <summary>After an installed + verified lightmap WITH ambient occlusion (a full bake with AO, or AO only): the install record that stops a second AO on the same set.</summary>
+        private void RecordAoInstalled()
+        {
+            if (!_o.Ao || !_installed || _installedWithoutLayer || _productionWriteBack) return;
+            try
+            {
+                var md5s = AoRecords.SetMd5s(_set);
+                if (md5s == null) return;
+                var r = new AoRecord { Scenario = _o.ScenarioRel, Bsp = _o.Bsp, Mode = _o.Mode == BakeMode.AoOnly ? "ao-only" : "bake", RunTag = Run.RunTag, Utc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                                       Strength = _o.AoStrength, Exponent = _o.AoExponent };
+                foreach (var kv in md5s) r.Files[kv.Key] = kv.Value;
+                AoRecords.Append(_work, r);
+                Run.Shell("AO install record written: " + AoRecords.PathFor(_work) + " (" + r.Describe() + ")");
+            }
+            catch (Exception e) { Run.Shell("note: the AO install record was not written (" + e.Message + ") -- a second AO only would not be stopped"); }
         }
 
         private void DoSimple(PlanStep s, string what)
@@ -1317,6 +1513,7 @@ namespace H2GpuLightmapper.Pipeline
             {
                 AppVersion = _rt.AppVersion, Root = _rt.Root, Work = _rt.Work, InstDir = _rt.InstDir, SlotBase = _rt.SlotBase, PwshDir = _rt.PwshDir, PwshExe = _rt.PwshExe,
                 PyDir = _rt.PyDir, PyExe = _rt.PyExe, GpuBakePs1 = script, LmwInstallPy = _rt.LmwInstallPy, BoundsDb = _rt.BoundsDb, ScanSceneryPy = _rt.ScanSceneryPy, GpuCheckExe = _rt.GpuCheckExe,
+                FarmRoot = _rt.FarmRoot,
             };
         }
 
@@ -1493,7 +1690,7 @@ namespace H2GpuLightmapper.Pipeline
                 var r = TagInstaller.Install(new InstallRequest
                 {
                     PyExe = _rt.PyExe, LmwInstallPy = plan.LmwInstallPy ?? _rt.LmwInstallPy, Root = _root, Work = _work, Stage = stage, TargetDir = _set.TagDir,
-                    BackupDir = plan.InstallBackupDir, AutoBackupRoot = Path.Combine(_work, "_TAGBAK_auto"), Marker = plan.Marker, Env = _env,
+                    BackupDir = plan.InstallBackupDir, AutoBackupRoot = null, Marker = plan.Marker, Env = _env,      // 0.6.8: _TAGBAK_auto retired in the shell's install
                 }, Run);
                 Run.Shell("install: " + r.Message);
                 if (r.SapienPing != null) Run.Shell(r.SapienPing);
@@ -1609,10 +1806,73 @@ namespace H2GpuLightmapper.Pipeline
                 if (_backup != null && _backup.FirstBake && !rels.Any()) rels.Add(_set.ScenarioRel + ".scenario");
                 if (rels.Count > 0)
                     foreach (var w in new[] { plan.Worker, plan.ProbeWorker }.Where(x => x.HasValue))
-                        if (CaptureRecord.RestampFiles(BakePlanner.FarmDir(_work, w.Value), _root, rels))
+                        if (CaptureRecord.RestampFiles(BakePlanner.FarmDir(Farms, w.Value), _root, rels))
                             Run.Shell("capture record of farm_w" + w.Value.ToString("D2", CultureInfo.InvariantCulture) + ": fingerprint of " + string.Join(", ", rels) + " refreshed after our install");
             }
             catch (Exception e) { Run.Shell("capture record refresh failed: " + e.Message); }
+            // 0.6.8: _TAGBAK_ui stays bounded: the original + the newest 5 backups of this set
+            try { foreach (var l in TempJanitor.PruneUiBackups(_work, _set.Prefix).Lines) Run.Shell("backups: " + l); } catch (Exception e) { Run.Shell("backup prune failed: " + e.Message); }
+        }
+
+        // ================================================================== 0.6.8 bounded temp
+
+        public sealed class TempGoneException : Exception { public TempGoneException(string m) : base(m) { } }
+
+        /// <summary>Takes the .lock (+ sentinel) of every Temp farm this bake uses. A folder another live bake holds refuses the run.</summary>
+        private void TakeTempLeases(BakeRun run)
+        {
+            if (_rt == null || !_rt.FarmsInTemp) return;
+            TempJanitor.EnsureTemp(_work);
+            foreach (var w in new[] { _n, _m }.Where(x => x.HasValue))
+            {
+                string f = BakePlanner.FarmDir(Farms, w.Value);
+                try { _leases.Add(TempLease.Acquire(f, run.RunTag)); }
+                catch (SafetyException e) { throw new StepFailedException(e.Message); }
+                run.Shell("temp: " + f + " is this bake's (its .lock is held until the bake ends; the folder may be deleted at any time: the bake then stops and writes nothing)");
+            }
+        }
+
+        /// <summary>A Temp folder this bake holds was deleted (its sentinel is gone).</summary>
+        private bool TempGoneNow()
+        {
+            foreach (var l in _leases)
+                if (l.Gone) { _tempGone = true; _tempGoneWhat = l.Dir + " was deleted"; return true; }
+            return _tempGone;
+        }
+
+        /// <summary>Before every step (and before a tool write-back): a vanished run root fails the run here, so nothing after it -- an install
+        /// in particular -- runs on half-deleted data.</summary>
+        private void CheckTempAlive()
+        {
+            if (TempGoneNow()) throw new TempGoneException(_tempGoneWhat);
+        }
+
+        /// <summary>When the run ends (any outcome): release the Temp leases, remove this bake's KEEP skeleton overlays (scenario bakes: they
+        /// hold links into the live tags; rebuilt by the next bake), then the janitor: log bundle to RUN\farm_logs, a failed run's stage to
+        /// RUN\failed, slim / delete the farms, capture cache, cap, run bundles.</summary>
+        private void AfterBakeJanitor(BakeRun run, BakePlan plan, bool ok)
+        {
+            foreach (var l in _leases) { try { l.Dispose(); } catch (Exception) { } }
+            _leases.Clear();
+            try
+            {
+                if (_so.Overlay == null)
+                {
+                    var ws = new[] { _n, _m }.Where(x => x.HasValue).Select(x => x.Value).ToList();
+                    foreach (var l in TempJanitor.RemoveSkeletons(_work, ws, true).Lines) run.Shell("temp: " + l);
+                }
+                var settings = TempSettings.From(_host.LoadSettings());
+                var q = new AfterBakeRequest
+                {
+                    Work = _work, RunDir = run.RunDir, Success = ok, Settings = settings, FarmsInTemp = _rt != null && _rt.FarmsInTemp,
+                    ProductsJson = _rt == null ? null : Path.Combine(_rt.InstDir, InstLayout.FarmProductsRel),
+                    Log = l => run.Shell(l),
+                };
+                foreach (var w in new[] { _n, _m }.Where(x => x.HasValue)) q.Farms.Add(new KeyValuePair<string, bool>(BakePlanner.FarmDir(Farms, w.Value), _so.Overlay != null));
+                var rep = TempJanitor.AfterBake(q);
+                run.Shell("temp: after the bake: " + rep);
+            }
+            catch (Exception e) { try { run.Shell("temp: the after-bake cleanup failed: " + e.Message); } catch (Exception) { } }
         }
 
         /// <summary>After a cancel / failure: if an install marker is left, offer lmw_install restore (section 9).</summary>

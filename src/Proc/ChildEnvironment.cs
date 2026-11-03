@@ -17,6 +17,7 @@ namespace H2Lm.Proc
         public string Root;      // H2LM_ROOT  = the H2EK root (tool_fast.exe, tags\)
         public string Work;      // H2LM_WORK  = <ROOT>\GPU Lightmap Work   (the REAL path, never the DLL-slot alias)
         public string Code;      // H2LM_CODE  = <WORK>\_runtime\<appver>-<h8>  (INST)
+        public string Farms;     // H2LM_FARMS = <WORK>\Temp (safe to delete)  (0.6.8, gpu_bake P13; null = not set, the farms are in WORK)
         public bool NoWindow = true;   // H2LM_NOWINDOW=1
     }
 
@@ -24,8 +25,10 @@ namespace H2Lm.Proc
     {
         /// <summary>Removed from the inherited environment (case-insensitive prefixes): design section 5, plus (review fix)
         /// fullgpu's research knobs DEVP_* (gather.cpp: DEVP_SB_PAD changes products, DEVP_PROF_EXIT=1 exits 0 right after the
-        /// gather...) and gpu_bake's own temporaries V370_*.</summary>
-        public static readonly string[] StrippedPrefixes = { "GPULM_", "OSOYOOS_", "H2LM_", "PYTHON", "DEVP_", "V370_" };
+        /// gather...) and gpu_bake's own temporaries V370_*. 0.6.8: also the Windows py launcher's PY_PYTHON / PY_PYTHON3 / PY_PYTHON2 (they
+        /// pick the launcher's interpreter, e.g. a Python 3.13 without numpy): `py` resolves to the bundle's py.exe (a python.exe, which
+        /// ignores both these and a script's shebang), but if anything ever reached C:\Windows\py.exe they would steer it.</summary>
+        public static readonly string[] StrippedPrefixes = { "GPULM_", "OSOYOOS_", "H2LM_", "PYTHON", "DEVP_", "V370_", "PY_PYTHON" };
 
         /// <summary>
         /// Variables a log / a dry-run plan may print WITH their value (review fix, privacy): the ones the shell sets or
@@ -36,7 +39,7 @@ namespace H2Lm.Proc
         public static bool IsLoggable(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
-            foreach (var p in new[] { "H2LM_", "GPULM_", "OSOYOOS_", "DEVP_", "V370_", "PYTHON", "POWERSHELL_" })
+            foreach (var p in new[] { "H2LM_", "GPULM_", "OSOYOOS_", "DEVP_", "V370_", "PYTHON", "POWERSHELL_", "PY_PYTHON" })
                 if (name.StartsWith(p, StringComparison.OrdinalIgnoreCase)) return true;
             foreach (var n in new[] { "PATH", "PSModulePath", "PSExecutionPolicyPreference", "NO_COLOR" })
                 if (string.Equals(name, n, StringComparison.OrdinalIgnoreCase)) return true;
@@ -73,6 +76,7 @@ namespace H2Lm.Proc
             if (!string.IsNullOrEmpty(s.Root)) e.Set("H2LM_ROOT", s.Root);
             if (!string.IsNullOrEmpty(s.Work)) e.Set("H2LM_WORK", s.Work);
             if (!string.IsNullOrEmpty(s.Code)) e.Set("H2LM_CODE", s.Code);
+            if (!string.IsNullOrEmpty(s.Farms)) e.Set("H2LM_FARMS", s.Farms);
             if (s.NoWindow) e.Set("H2LM_NOWINDOW", "1");
             string sysRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows";
             var path = new List<string>();

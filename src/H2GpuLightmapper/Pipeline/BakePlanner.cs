@@ -14,6 +14,10 @@
 //   Lightmap Only, AO on      gpu_bake stage-only -> OUT\skeleton + a 'written' tagw_report.json (else: the map fell back to the
 //                             tool writer, AO needs the direct writer) -> gpu_ao trace (quality low->low, super/custom->super) ->
 //                             apply --strength X --exponent Y --overwrite -> stage -> the shell installs OUT\ao\sXeY\tagw_stage.
+//   AO only (0.6.8 xc8)       no lighting is baked: the lightmap that is already installed gets ambient occlusion added.
+//                             [gpu_bake -CaptureOnly when the capture is new: phase 1 only] -> gpu_ao trace (the same AO trace) -> ao_existing.py stage
+//                             (decodes the installed set, applies the full bake's occlusion to its pixels, regenerates P8, validates) -> OUToonly\sXeY\stage
+//                             -> copy-final-stage -> install (backup first) -> verify. Refuses when the set is missing / does not match the BSP / already has AO.
 //   Standard, no probe points identical to Lightmap Only.
 //   Standard, probe points    lightmap stage-only in worker N (+ optional AO) -> copy the final stage to RUN\final_stage -> probe
 //                             worker M: gpu_lightprobes (its own GPULM_SKY_HI capture, or a probe-ready reuse) --ltmp-src
@@ -23,9 +27,12 @@
 //   Custom P / MC             gpu_bake -Quality custom -Photons P -MCSamples MC (P2: the osoy_launch 'cuban' row on every custom
 //                             tool run, incl. the tool write-back fallback -- U3: every fallback argv the shell builds carries
 //                             -Photons / -MCSamples too); gpu_lightprobes --quality custom --photons --mc-samples.
-//   Install                   py lmw_install.py install --stage .. --target-dir <tagdir> --backup-dir RUN\tag_backup_before_writeback
-//                             --auto-backup-root WORK\_TAGBAK_auto --marker OUT\writeback_in_progress.txt (AO / probes);
-//                             Lightmap Only / Standard without probes: --backup-dir OUT\tag_backup_before_writeback, as [4b].
+//   Install                   py lmw_install.py install --stage RUN\final_stage --target-dir <tagdir> --backup-dir RUN\tagbak
+//                             --marker WORK\standalone\markers\install_wNN.json (0.6.8 bounded temp: every mode installs from the KEEP copy of
+//                             the final stage, the backup and the marker are in KEEP, never in the farm, which lives in WORK\Temp (safe to delete)
+//                             and may be deleted at any moment; _TAGBAK_auto is retired in the shell's install -- no --auto-backup-root).
+//   Farms                     0.6.8: OUT = <farm root>\farm_wNN, the farm root = WORK\Temp (safe to delete) when the payload's engine takes
+//                             H2LM_FARMS (MANIFEST features.farms), else WORK (the 0.6.7 layout).
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -78,7 +85,7 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>Does it use the lightmap worker N? (everything but Probes mode)</summary>
         public static bool NeedsLightmapWorker(BakeOptions o) { return o.Mode != BakeMode.Probes; }
         /// <summary>Does it need the map query (probe points / environments)? (Standard and Probes)</summary>
-        public static bool NeedsMapQuery(BakeOptions o) { return o.Mode != BakeMode.Lightmap; }
+        public static bool NeedsMapQuery(BakeOptions o) { return o.Mode != BakeMode.Lightmap && o.Mode != BakeMode.AoOnly; }
 
         /// <summary>INST-relative gpu_bake for the quality: Custom uses engine_custom (N3 guarded fullgpu) when the payload has it.</summary>
         public static string GpuBakeRel(BakeOptions o, PayloadManifest m)
@@ -87,7 +94,8 @@ namespace H2GpuLightmapper.Pipeline
             return InstLayout.GpuBake;
         }
 
-        public static string FarmDir(string work, int w) { return Path.Combine(work, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture)); }
+        /// <param name="farmRoot">the folder that holds the workers: ResolvedRuntime.Farms (WORK\Temp (safe to delete) or WORK).</param>
+        public static string FarmDir(string farmRoot, int w) { return Path.Combine(farmRoot, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture)); }
 
         /// <summary>gpu_bake's own arguments in run_bake.ps1's order (+ the P2 custom parameters last).</summary>
         public static List<string> GpuBakeArgs(BakeOptions o, int worker, bool writeBack, bool skipCapture, GpuLimits limits = null)
@@ -196,6 +204,7 @@ namespace H2GpuLightmapper.Pipeline
             if (o.Mode == BakeMode.Lightmap && pi.ProbePoints > 0)
                 p.Notes.Add("Lightmap Only on a probe BSP: this resets the BSP's " + pi.ProbePoints + " light probes to zero, as `tool lightmaps` does");
 
+            if (o.Mode == BakeMode.AoOnly) AddAoPrecheck(p, pi);
             if (p.Install)
             {
                 var b = p.Add(new PlanStep { Id = StepIds.Backup, UiStep = StepId.Backup, Kind = PlanStepKind.Shell, Title = "back up the live lightmap set to _TAGBAK_ui (md5-verified)" });
@@ -204,10 +213,22 @@ namespace H2GpuLightmapper.Pipeline
             }
 
             string rest = null;              // where the installed / final stage comes from
-            if (o.Mode != BakeMode.Probes)
+            if (o.Mode == BakeMode.AoOnly)
+            {
+                rest = AddAoOnly(p, pi, set, engineDir);
+                p.FinalStage = rest;
+                if (p.Install)
+                {
+                    p.InstallStage = rest;
+                    p.Marker = StartupRecovery.InstallMarkerPath(work, pi.Worker.Value);
+                    p.InstallBackupDir = Path.Combine(runDir, RunFolder.BackupDirName);
+                    p.LmwInstallPy = rt.LmwInstallPy;
+                }
+            }
+            else if (o.Mode != BakeMode.Probes)
             {
                 int n = pi.Worker ?? throw new InvalidOperationException("no lightmap worker");
-                string outN = FarmDir(work, n);
+                string outN = FarmDir(rt.Farms, n);
                 p.Out = outN;
                 // U3: gpu_bake always bakes stage-only. With install and no AO / probe layer the SHELL installs the direct writer's
                 // stage (the [4b] command, with Retry); gpu_bake -WriteBack (the production argv) runs only as the tool write-back
@@ -286,14 +307,23 @@ namespace H2GpuLightmapper.Pipeline
                     AddValidate(p, rt, set, o, fin, Path.Combine(runDir, "final_stage_validate.json"), "the merged final stage");
                     rest = fin;
                 }
+                if (!p.ProbePath)
+                {
+                    // 0.6.8 bounded temp: the final stage leaves the farm (which may be deleted at any moment) for KEEP RUN\final_stage before
+                    // anything reads it again: the install's source, the stage-only result and a .map bake's injection source are that copy
+                    string fin = Path.Combine(runDir, "final_stage");
+                    var cp = p.Add(new PlanStep { Id = StepIds.CopyFinalStage, UiStep = StepId.TagWriter, Kind = PlanStepKind.Shell, Title = "copy the final stage to RUN\\final_stage (the files tagw_report.json lists, md5-verified; the farm is temporary)" });
+                    cp.Params.Add("from", rest).Add("to", fin);
+                    rest = fin;
+                }
                 p.FinalStage = rest;
                 if (p.Install)
                 {
                     p.InstallStage = rest;
-                    p.Marker = Path.Combine(outN, StartupRecovery.MarkerName);
-                    // U3: the default path keeps EXACTLY [4b]'s install command: the baking engine's own lmw_install.py and the
-                    // worker's OUT\tag_backup_before_writeback (lmw_install renames an older copy there .older_<ts>, never deletes)
-                    p.InstallBackupDir = shellInstallsLightmap ? Path.Combine(outN, "tag_backup_before_writeback") : Path.Combine(runDir, RunFolder.BackupDirName);
+                    p.Marker = StartupRecovery.InstallMarkerPath(work, n);
+                    // 0.6.8: the backup goes to the run's own RUN\tagbak (KEEP) in every mode; Lightmap Only / Standard without a layer keep the
+                    // baking engine's own lmw_install.py (the one gpu_bake's [4b] runs), the layers use the payload's
+                    p.InstallBackupDir = Path.Combine(runDir, RunFolder.BackupDirName);
                     p.LmwInstallPy = shellInstallsLightmap ? Path.Combine(engineDir, "v043-tagwriter", "lmw_install.py") : rt.LmwInstallPy;
                 }
             }
@@ -320,7 +350,7 @@ namespace H2GpuLightmapper.Pipeline
                     var ck = p.Add(new PlanStep { Id = StepIds.CheckLiveLtmp, UiStep = StepId.Install, Kind = PlanStepKind.Shell, Title = "the live lightmap tag is still the one the probes were written into" });
                     ck.Params.Add("live", Path.Combine(set.TagDir, set.LtmpName)).Add("report", Path.Combine(ps, "tagw_report.json")).Add("copy", live);
                     p.InstallStage = ps;
-                    p.Marker = Path.Combine(p.OutProbe, StartupRecovery.MarkerName);
+                    p.Marker = StartupRecovery.InstallMarkerPath(work, pi.ProbeWorker.Value);
                     p.InstallBackupDir = Path.Combine(runDir, RunFolder.BackupDirName);
                     p.LmwInstallPy = rt.LmwInstallPy;
                 }
@@ -334,12 +364,12 @@ namespace H2GpuLightmapper.Pipeline
                 ins.Args.AddRange(TagInstaller.InstallArgs(new InstallRequest
                 {
                     LmwInstallPy = p.LmwInstallPy ?? rt.LmwInstallPy, Stage = p.InstallStage, TargetDir = set.TagDir, BackupDir = p.InstallBackupDir,
-                    AutoBackupRoot = Path.Combine(work, "_TAGBAK_auto"), Marker = p.Marker,
+                    AutoBackupRoot = null, Marker = p.Marker,          // 0.6.8: _TAGBAK_auto retired in the shell's install (the run's tagbak + _TAGBAK_ui are the backups)
                 }));
                 ins.Params.Add("stage", p.InstallStage).Add("targetDir", set.TagDir).Add("backupDir", p.InstallBackupDir).Add("marker", p.Marker)
                           .Add("onExit2", "nothing changed, the stage is kept: Retry after closing Sapien / Guerilla").Add("onExit1", "offer lmw_install restore from the backup dir");
                 if (o.Mode != BakeMode.Probes && !o.Ao && !p.ProbePath)
-                    ins.Params.Add("same", "the command gpu_bake's [4b] runs (its own $TW\\lmw_install.py, the same arguments): only the Retry is new");
+                    ins.Params.Add("same", "gpu_bake's [4b] lmw_install.py (its own $TW copy) on the KEEP copy of its stage, backup RUN\\tagbak, marker in KEEP; with Retry");
             }
             if (p.Install)
             {
@@ -356,7 +386,21 @@ namespace H2GpuLightmapper.Pipeline
                 var fb = p.Find(StepIds.StageOrToolFallback);
                 if (fb != null) fb.Params.Add("fallbackEnv", GpuCheck.CompatEnvVar + "=1");
             }
+            ApplyRebakeHint(o, p, pi.ReuseLightmap);        // 0.6.8 Advanced "Re-bake speedup" (off: nothing added)
             return p;
+        }
+
+        /// <summary>0.6.8 "Re-bake speedup" (--rebake-hint, default off): GPULM_SKY_HINT=1 on the gpu_bake steps of a bake that reuses its lightmap
+        /// capture (the farm's skychain_hint.txt is the previous bake's chain of THIS capture; the engine refuses a hint with another S_cast).
+        /// Off, or a fresh capture: nothing is set (the argv and environment are exactly as before).</summary>
+        public static void ApplyRebakeHint(BakeOptions o, BakePlan p, bool reuseLightmap)
+        {
+            if (!o.RebakeHint) return;
+            if (!reuseLightmap) { p.Warnings.Add(BakeOptions.RebakeHintLabel + " has no effect: this bake makes a new capture (it only speeds up 'Reuse existing capture')"); return; }
+            int n = 0;
+            foreach (var s in p.Steps)
+                if (s.Kind == PlanStepKind.Process && s.Id == StepIds.GpuBake) { s.EnvExtra[BakeOptions.RebakeHintEnvVar] = "1"; n++; }
+            if (n > 0) p.Notes.Add(BakeOptions.RebakeHintNote);
         }
 
         /// <summary>--force-compat: GPULM_COMPAT=1 on a step that runs the GPU engine (gpu_bake, its tool write-back fallback, the AO trace and the light
@@ -366,6 +410,74 @@ namespace H2GpuLightmapper.Pipeline
             if (!o.ForceCompat || s == null || s.Kind != PlanStepKind.Process) return;
             if (s.Id == StepIds.GpuBake || s.Id == StepIds.GpuBakeFallback || s.Id == StepIds.AoTrace || s.Id == StepIds.ProbeBake)
                 s.EnvExtra[GpuCheck.CompatEnvVar] = "1";
+        }
+
+        /// <summary>AO only, first step: the gates that need no capture (ao_existing.py precheck). A refusal here costs no backup and no GPU time.</summary>
+        private static void AddAoPrecheck(BakePlan p, PlanInput pi)
+        {
+            var o = pi.O;
+            var rt = pi.Rt;
+            string drv = InstLayout.Full(rt.InstDir, InstLayout.AoDriver);
+            var s = p.Add(new PlanStep
+            {
+                Id = StepIds.AoPrecheck, UiStep = StepId.Preflight, Kind = PlanStepKind.Process, FileName = rt.PyExe, Cwd = rt.Work,
+                Title = "ao_existing precheck (read-only): the installed lightmap exists, has no AO yet, and belongs to this BSP",
+            });
+            s.Args.Add(InstLayout.Full(rt.InstDir, InstLayout.AoExisting)); s.Args.Add("precheck");
+            s.Args.AddRange(new[] { "--scenario", o.ScenarioRel, "--bsp", o.Bsp, "--engine", InstLayout.Full(rt.InstDir, InstLayout.AoEngineDir), "--ao-dir", Path.GetDirectoryName(drv),
+                                    "--h2-root", rt.Root, "--tool", Path.Combine(rt.Root, "tool_fast.exe"), "--records", AoRecords.PathFor(rt.Work) });
+            if (o.AoForce) s.Args.Add("--force");
+        }
+
+        /// <summary>The AO-only steps (0.6.8 xc8). Returns the stage folder the shell copies and installs. The capture (geometry only) is new unless the plan reuses one; the
+        /// AO trace is the full bake's own; ao_existing.py then adds the occlusion to the lightmap that is installed now. The install record check is ao_existing's too
+        /// (it gets the record file and --force); the session checks it up front as well, so a refusal costs no GPU time.</summary>
+        private static string AddAoOnly(BakePlan p, PlanInput pi, TagSet set, string engineDir)
+        {
+            var o = pi.O;
+            var rt = pi.Rt;
+            int n = pi.Worker ?? throw new InvalidOperationException("no lightmap worker");
+            string outN = FarmDir(rt.Farms, n);
+            p.Out = outN;
+            if (!pi.ReuseLightmap)
+            {
+                var args = GpuBakeArgs(o, n, false, false, pi.Limits);
+                args.Remove("-ExactVertexLighting");               // no tag writer runs in AO only
+                args.Add("-CaptureOnly");
+                var spec = PwshInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);
+                var g = p.Add(new PlanStep
+                {
+                    Id = StepIds.GpuBake, UiStep = StepId.Capture, Kind = PlanStepKind.Process,
+                    Title = "gpu_bake.ps1 farm_w" + n.ToString("D2", CultureInfo.InvariantCulture) + " (capture only: AO only needs the geometry; no lighting is baked)",
+                    FileName = spec.FileName, Cwd = spec.Cwd, CaptureWorker = n, CaptureOut = outN, FreshCapture = true,
+                });
+                g.Args.AddRange(spec.Args);
+            }
+            string drv = InstLayout.Full(rt.InstDir, InstLayout.AoDriver);
+            string aoEng = InstLayout.Full(rt.InstDir, InstLayout.AoEngineDir);
+            string py = rt.PyExe, work = rt.Work;
+            var common = new List<string> { "--farm", outN, "--worker", n.ToString(CultureInfo.InvariantCulture), "--scenario", o.ScenarioRel, "--bsp", o.Bsp, "--engine", aoEng };
+            var tr = p.Add(new PlanStep { Id = StepIds.AoTrace, UiStep = StepId.AO, Kind = PlanStepKind.Process, Title = "gpu_ao trace (dev_AO gpu_bake -AOOnly on the capture, quality " + o.AoTraceQuality + ")", FileName = py, Cwd = work });
+            tr.Args.Add(drv); tr.Args.Add("trace"); tr.Args.AddRange(common); tr.Args.Add("--quality"); tr.Args.Add(o.AoTraceQuality);
+            if (o.Fixes) { tr.Args.Add("--plucker-fix"); tr.Args.Add("--scenery-fix"); }
+            if (o.Responsive) tr.EnvExtra["GPULM_RESPONSIVE"] = "1";
+            string ax = InstLayout.Full(rt.InstDir, InstLayout.AoExisting);
+            var ex = p.Add(new PlanStep
+            {
+                Id = StepIds.AoExisting, UiStep = StepId.AO, Kind = PlanStepKind.Process, FileName = py, Cwd = work,
+                Title = "ao_existing stage (strength " + Num(o.AoStrength) + ", exponent " + Num(o.AoExponent) + "): add the AO to the installed lightmap -> OUT\\aoonly\\" + o.AoTag + "\\stage (nothing installed)",
+            });
+            ex.Args.Add(ax); ex.Args.Add("stage");
+            ex.Args.AddRange(new[] { "--farm", outN, "--scenario", o.ScenarioRel, "--bsp", o.Bsp, "--engine", aoEng, "--ao-dir", Path.GetDirectoryName(drv), "--h2-root", rt.Root,
+                                     "--tool", Path.Combine(rt.Root, "tool_fast.exe"), "--strength", Num(o.AoStrength), "--exponent", Num(o.AoExponent), "--tag", o.AoTag, "--overwrite",
+                                     "--records", AoRecords.PathFor(rt.Work) });
+            if (o.AoForce) ex.Args.Add("--force");
+            p.Notes.Add("AO only: no lighting is baked -- the lightmap installed now (ours, the stock tool's or Bungie's) keeps its light; ambient occlusion is an artistic layer, not CPU-faithful, and it is added once (an install record stops a second AO on the same lightmap)");
+            p.Notes.Add("AO only changes the lightmap bitmaps (truecolor + P8) and the vertex-lit instance records; the geometry, UVs and per-vertex directions of the installed lightmap are kept");
+            var cp = p.Add(new PlanStep { Id = StepIds.CopyFinalStage, UiStep = StepId.TagWriter, Kind = PlanStepKind.Shell, Title = "copy the final stage to RUN\\final_stage (the files tagw_report.json lists, md5-verified; the farm is temporary)" });
+            string fin = Path.Combine(p.RunDir, "final_stage");
+            cp.Params.Add("from", Path.Combine(outN, "aoonly", o.AoTag, "stage")).Add("to", fin);
+            return fin;
         }
 
         /// <summary>Review fix (finding 21): py INST\engine_v373\v043-tagwriter\lmw_validate.py --check-set DIR --bsp &lt;live bsp&gt;
@@ -387,7 +499,7 @@ namespace H2GpuLightmapper.Pipeline
             var rt = pi.Rt;
             int m = pi.ProbeWorker ?? throw new InvalidOperationException("no probe worker");
             Guards.AssertWorker(m);
-            string outM = FarmDir(rt.Work, m);
+            string outM = FarmDir(rt.Farms, m);
             p.OutProbe = outM;
             string pr = Path.Combine(p.RunDir, "probes");
             var s = p.Add(new PlanStep
@@ -402,7 +514,9 @@ namespace H2GpuLightmapper.Pipeline
             if (o.Quality == Quality.Custom)
                 s.Args.AddRange(new[] { "--photons", o.Photons.ToString(CultureInfo.InvariantCulture), "--mc-samples", o.Rays.ToString(CultureInfo.InvariantCulture) });
             if (pi.ReuseProbe) s.Args.Add("--skip-capture");
-            s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", pi.OverlayWork != null ? FarmDir(pi.OverlayWork, m) : outM, "--pwsh", rt.PwshExe });
+            // 0.6.8: with the farms in Temp the probe driver's --farm is the real farm (P5c checks it against H2LM_FARMS); only the 0.6.7 layout of a
+            // .map bake still names the overlay work folder's farm junction (the driver then checks it against H2LM_WORK)
+            s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", pi.OverlayWork != null && !rt.FarmsInTemp ? FarmDir(pi.OverlayWork, m) : outM, "--pwsh", rt.PwshExe });
             if (o.Fixes) { s.Args.Add("--plucker-fix"); s.Args.Add("--scenery-fix"); }
             if (o.Responsive) s.EnvExtra["GPULM_RESPONSIVE"] = "1";             // X2: gpu_lightprobes.py runs gpu_bake itself and has no -Responsive argument
             s.Params.Add("adds", "GPULM_PROBES=RUN\\probes\\probes.bin and GPULM_SKY_HI=1 for its gpu_bake only (the lightmap capture never sees SKY_HI)");
@@ -414,7 +528,7 @@ namespace H2GpuLightmapper.Pipeline
             {
                 AppVersion = rt.AppVersion, Root = rt.Root, Work = rt.Work, InstDir = rt.InstDir, SlotBase = rt.SlotBase,
                 PwshDir = rt.PwshDir, PwshExe = rt.PwshExe, PyDir = rt.PyDir, PyExe = rt.PyExe, MapbakeDir = rt.MapbakeDir, MapbakePy = rt.MapbakePy, GpuBakePs1 = script,
-                LmwInstallPy = rt.LmwInstallPy, BoundsDb = rt.BoundsDb, ScanSceneryPy = rt.ScanSceneryPy, GpuCheckExe = rt.GpuCheckExe,
+                LmwInstallPy = rt.LmwInstallPy, BoundsDb = rt.BoundsDb, ScanSceneryPy = rt.ScanSceneryPy, GpuCheckExe = rt.GpuCheckExe, FarmRoot = rt.FarmRoot,
             };
         }
 

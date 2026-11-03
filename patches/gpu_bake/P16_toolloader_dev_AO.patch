@@ -1,0 +1,15 @@
+# title: P16 0.6.8: the tool loader is H2GpuLightmapper.ToolLoader.exe (was inject.exe); one path line (AO engine)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: 840672eb8505ef9227f061c732fac883
+# result-md5: 71449c17f9130b98e5f4939b73ebb45a
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -476,7 +476,7 @@
+     Get-Content "$OUT\writeback_in_progress.txt" | ForEach-Object { Write-Host "    $_" -ForegroundColor Red } }
+ $TOOL = "$RP\tool_fast.exe"
+ $DLL  = "$BIN\v014-inject-estimator\gpulm_estimator.dll"     # v371: $BIN (was $W)
+-$INJ  = "$WC\v014-inject-estimator\inject.exe"
++$INJ  = "$WC\v014-inject-estimator\H2GpuLightmapper.ToolLoader.exe"
+ $FULLGPU = "$BIN\v041-fullgpu\fullgpu.exe"                    # v371: $BIN (was the $W copy, named inline in phase 3)
+ # >>> v366 tagwriter vars
+ $TW          = "$PSScriptRoot\v043-tagwriter"   # dev_LP v372R: stage_LP's own writer copy (lighting environments pass-through)

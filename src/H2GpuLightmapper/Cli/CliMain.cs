@@ -31,8 +31,8 @@ namespace H2GpuLightmapper.Cli
 @"H2 GPU Lightmapper -- command line (the same exe as the window; no window opens)
 
   ""H2 GPU Lightmapper.exe"" --cli bake --h2ek DIR --scenario S --bsp B
-        [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap]
-        [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture] [--no-install] [--yes]
+        [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap|ao]
+        [--ao [--ao-strength X] [--ao-exponent Y]] [--force] [--reuse-capture] [--no-install] [--yes]
         [--ao-fallback stop|install] [--probes-fallback stop|install] [--install-retries N [--install-retry-wait-s S]]
         [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix]
         [--dry-run [--json] [--probe-points N] [--assume-vram-mb N [--assume-other-vram-mb N]]]
@@ -52,12 +52,22 @@ namespace H2GpuLightmapper.Cli
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --scenario S --bsp B [--list | --from BACKUP | --undo-last-install] [--dry-run]
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --recover
   ""H2 GPU Lightmapper.exe"" --cli cleanup-alias --h2ek DIR   (removes the H2GLM\<k6> short-path link to that H2EK's work folder)
+  ""H2 GPU Lightmapper.exe"" --cli cleanup --h2ek DIR [--dry-run] [--legacy] [--json]
+        Empties the temporary folder GPU Lightmap Work\Temp (safe to delete) (folders a running bake holds are kept): the workers, kept captures
+        and .map bake folders. --legacy instead lists the folders earlier versions (0.6.7 and older) left in GPU Lightmap Work -- this app's
+        workers with a capture, _mapbake, the skeleton overlays of those workers, _TAGBAK_auto, old runtimes -- and removes exactly those
+        (--dry-run: list only). A worker folder this app did not create is never listed. Refused while a bake runs on that H2EK.
   ""H2 GPU Lightmapper.exe"" --cli doctor [--h2ek DIR] [--json] [--repair] [--no-gpu] [--no-extract]
   ""H2 GPU Lightmapper.exe"" --cli scan-scenery-fix --h2ek DIR [--scenario S]   (Scan and Build Scenery Fix Dependencies: adds the scenery
         models the database SceneryFixDependencies.db in the H2EK folder does not know yet; every bake also does this for its own scenario)
   ""H2 GPU Lightmapper.exe"" --cli cancel --h2ek DIR          (cancels the bake running on that H2EK, in any window)
   ""H2 GPU Lightmapper.exe"" --cli status --h2ek DIR
 
+  --mode ao = AO only: no lighting is baked. The lightmap that is ALREADY in the tags (made by this program, the stock tool or Bungie) gets ambient occlusion added
+  (--ao-strength / --ao-exponent as for --ao; --ao is implied). It makes a capture of the geometry (or --reuse-capture), traces the occlusion, applies it to the installed
+  lightmap's pixels (truecolor, P8 regenerated, vertex-lit records) and installs the result like any bake (the current set is backed up first). It stops, in words and
+  without writing anything, when the scenario / BSP has no lightmap yet, the lightmap does not belong to the BSP or its pixels do not match the geometry, or when the
+  install record says AO is in it already (a second AO would darken the same places twice): --force adds it again anyway. Not for a .map bake.
   Defaults (reset every launch): --quality super, --mode standard, AO off (strength 1.0, exponent 0.5), a new capture, install.
   AO and light probes need the direct tag writer's stage; when a map falls back to the tool writer the bake stops (exit 3),
   or with --ao-fallback install (AO) / --probes-fallback install (light probes: they are RESET to zero, like tool lightmaps)
@@ -135,6 +145,7 @@ namespace H2GpuLightmapper.Cli
                 case "cancel": return Cancel(args, start);
                 case "status": return Status(args, start);
                 case "cleanup-alias": return CleanupAlias(args, start);
+                case "cleanup": return Cleanup(args, start);
                 case null: case "help": case "--help": case "-h": case "/?":
                     Console.WriteLine(Usage);
                     return verb == null ? ExitRefused : ExitOk;
@@ -208,9 +219,10 @@ namespace H2GpuLightmapper.Cli
             if ((p.HasValue || r.HasValue) && o.Quality != Quality.Custom) a.Errors.Add("--photons / --rays are only valid with --quality custom");
             if (p.HasValue) o.Photons = p.Value;
             if (r.HasValue) o.Rays = r.Value;
-            string m = a.Choice("--mode", "standard", "standard", "probes", "lightmap");
-            o.Mode = m == "probes" ? BakeMode.Probes : m == "lightmap" ? BakeMode.Lightmap : BakeMode.Standard;
-            o.Ao = a.Has("--ao");
+            string m = a.Choice("--mode", "standard", "standard", "probes", "lightmap", "ao");
+            o.Mode = m == "probes" ? BakeMode.Probes : m == "lightmap" ? BakeMode.Lightmap : m == "ao" ? BakeMode.AoOnly : BakeMode.Standard;
+            o.Ao = a.Has("--ao") || o.Mode == BakeMode.AoOnly;          // AO only is AO: --ao is implied (and may be given)
+            o.AoForce = a.Has("--force");
             var s = a.GetDouble("--ao-strength");
             var x = a.GetDouble("--ao-exponent");
             if ((s.HasValue || x.HasValue) && !o.Ao) a.Errors.Add("--ao-strength / --ao-exponent need --ao");
@@ -227,6 +239,7 @@ namespace H2GpuLightmapper.Cli
             o.Responsive = a.Has("--responsive");
             o.ExactVertexLighting = a.Has("--exact-vertex-lighting");
             o.SceneryPermutationFix = a.Has("--scenery-permutation-fix");
+            o.RebakeHint = a.Has("--rebake-hint");        // 0.6.8: GPULM_SKY_HINT=1 on reuse bakes (Advanced "Re-bake speedup")
             o.ForceCompat = a.Has("--force-compat");
             o.ReuseUnrecorded = a.Has("--reuse-unrecorded");
             if (o.ReuseUnrecorded && !o.ReuseCapture) a.Errors.Add("--reuse-unrecorded needs --reuse-capture");
@@ -241,15 +254,16 @@ namespace H2GpuLightmapper.Cli
         {
             var a = ParseFor(args, start + 1,
                 new[] { "--h2ek", "--scenario", "--bsp", "--map", "--map-out", "--vista-out", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
-                        "--worker", "--probe-worker", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s" },
-                new[] { "--ao", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp" },
+                        "--worker", "--probe-worker", "--dev-max-calls", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s", "--dev-simulate-quarantine" },
+                new[] { "--ao", "--force", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--rebake-hint", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp", "--dev-no-stage" },
                 new[] { "--sky-cubemap" });
             var o = BakeOptionsFrom(a);
             var so = new SessionOptions
             {
                 DryRun = a.Has("--dry-run"), SkipPreflight = a.Has("--dev-skip-preflight"), SkipGpuCheck = a.Has("--dev-skip-gpucheck"),
                 AssumeProbePoints = a.GetInt("--probe-points"), AssumeVramMB = a.GetInt("--assume-vram-mb"), AssumeOtherVramUseMB = a.GetInt("--assume-other-vram-mb"), CancelFile = a.Get("--cancel-file"),
-                AssumeNoFp64 = a.Has("--assume-no-fp64"), KeepMapTemp = a.Has("--dev-keep-mapbake-temp"),
+                AssumeNoFp64 = a.Has("--assume-no-fp64"), KeepMapTemp = a.Has("--dev-keep-mapbake-temp"), NoStage = a.Has("--dev-no-stage"), DevMaxCalls = a.GetInt("--dev-max-calls"),
+                DevSimulateQuarantine = a.Get("--dev-simulate-quarantine"),
             };
             bool json = a.Has("--json");
             var lw = a.GetDouble("--lock-wait-min");
@@ -269,6 +283,7 @@ namespace H2GpuLightmapper.Cli
             var host = AppHost.Create(HostConfigFrom(a));
             int ae = ArgErrors(a);
             if (ae >= 0) return ae;
+            if (!so.DryRun) CliSweep(host, o.Root, json ? Console.Error : Console.Out);
             if (o.IsMapBake) return BakeMap(host, o, so, json);
 
             var s = new BakeSession(host, o, so);
@@ -349,7 +364,7 @@ namespace H2GpuLightmapper.Cli
         {
             Console.Out.WriteLine("=== question: " + p.Title + " -- " + p.Message.Replace("\n", " "));
             foreach (var d in p.Details.Take(30)) Console.Out.WriteLine("===     " + d);
-            bool yes = p.Kind == PromptKind.ChangedTags ? o.AcceptChangedTags : BakeSession.FlagsAllowInstallWithoutLayer(o, p);
+            bool yes = p.Kind == PromptKind.ChangedTags ? o.AcceptChangedTags : p.Kind == PromptKind.AoAgain ? o.AoForce : BakeSession.FlagsAllowInstallWithoutLayer(o, p);
             Console.Out.WriteLine("=== answer: " + (yes ? "yes (flag)" : "no (the CLI never answers yes without a flag)"));
             return yes;
         }
@@ -641,31 +656,97 @@ namespace H2GpuLightmapper.Cli
             if (root == null) return ExitRefused;
             string work = ShellPaths.WorkOf(root);
             string lad = host.Paths.AliasLocalAppData ?? host.Paths.LocalAppData;
-            string k6 = DllSlots.SlotAliasPlanner.Key6(work);
-            var dirs = new List<string>();
-            if (!string.IsNullOrEmpty(lad)) dirs.Add(Path.Combine(lad, DllSlots.SlotAliasPlanner.AliasFolderName, k6));
-            dirs.Add(Path.Combine(host.Paths.AliasVolumeRoot ?? Path.GetPathRoot(work), DllSlots.SlotAliasPlanner.AliasFolderName, k6));
-            int removed = 0, found = 0;
-            foreach (var d in dirs.Distinct(StringComparer.OrdinalIgnoreCase))
+            // 0.6.8: the slot alias names the folder of the workers: WORK (0.6.7) or WORK\Temp (safe to delete) (0.6.8); both are looked for
+            var dirs = new List<KeyValuePair<string, string>>();
+            foreach (var tgt in new[] { work, ShellPaths.TempOf(work) })
             {
+                string k6 = DllSlots.SlotAliasPlanner.Key6(tgt);
+                if (!string.IsNullOrEmpty(lad)) dirs.Add(new KeyValuePair<string, string>(Path.Combine(lad, DllSlots.SlotAliasPlanner.AliasFolderName, k6), tgt));
+                dirs.Add(new KeyValuePair<string, string>(Path.Combine(host.Paths.AliasVolumeRoot ?? Path.GetPathRoot(work), DllSlots.SlotAliasPlanner.AliasFolderName, k6), tgt));
+            }
+            int removed = 0, found = 0;
+            foreach (var dt in dirs)
+            {
+                string d = dt.Key, want = dt.Value;
                 string target;
                 if (!DllSlots.Junction.PathExists(d)) continue;
                 if (!DllSlots.Junction.TryGetTarget(d, out target)) { Console.Out.WriteLine(d + ": not a junction -- left untouched"); continue; }
-                if (!DllSlots.Junction.SamePathText(target, work)) { Console.Out.WriteLine(d + ": a junction to " + target + ", not this work folder -- left untouched"); continue; }
+                if (!DllSlots.Junction.SamePathText(target, want)) { Console.Out.WriteLine(d + ": a junction to " + target + ", not this work folder -- left untouched"); continue; }
                 found++;
                 if (dry) { Console.Out.WriteLine("would remove the alias " + d + " -> " + target); continue; }
                 try
                 {
                     using (TagWriteGate.Enter(work, "removing the alias"))
-                        DllSlots.SlotAlias.RemoveAlias(d, work);
+                        DllSlots.SlotAlias.RemoveAlias(d, want);
                     removed++;
-                    Console.Out.WriteLine("removed the alias " + d + " (the link only; " + work + " is untouched)");
+                    Console.Out.WriteLine("removed the alias " + d + " (the link only; " + want + " is untouched)");
                 }
                 catch (SafetyException e) { Console.Error.WriteLine("refused: " + e.Message); return ExitRefused; }
             }
-            if (found == 0) Console.Out.WriteLine("no alias of " + work + " exists (" + string.Join("; ", dirs) + ")");
+            if (found == 0) Console.Out.WriteLine("no alias of " + work + " or its temporary folder exists (" + string.Join("; ", dirs.Select(x => x.Key)) + ")");
             Console.Out.WriteLine("RESULT " + (dry ? "DRY RUN" : "OK") + ": " + (dry ? found : removed) + " alias(es)");
             return ExitOk;
+        }
+
+        // ------------------------------------------------------------------ cleanup (0.6.8 bounded temp)
+
+        /// <summary>--cli cleanup --h2ek DIR [--dry-run] [--legacy] [--json]: Clean now (Temp), or the opt-in removal of the folders earlier versions
+        /// left (listed first, exactly). Refused while a bake runs (TagWriteGate). Exit 0 done, 2 refused, 3 something could not be removed.</summary>
+        private static int Cleanup(string[] args, int start)
+        {
+            var a = ParseFor(args, start + 1, new[] { "--h2ek" }, new[] { "--dry-run", "--legacy", "--json" });
+            string root = a.Get("--h2ek");
+            bool dry = a.Has("--dry-run"), legacy = a.Has("--legacy"), json = a.Has("--json");
+            if (string.IsNullOrWhiteSpace(root)) a.Errors.Add("--h2ek DIR is required");
+            var host = AppHost.Create(HostConfigFrom(a));
+            int ae = ArgErrors(a);
+            if (ae >= 0) return ae;
+            root = RootFrom(root);
+            if (root == null) return ExitRefused;
+            string work = ShellPaths.WorkOf(root);
+            var lines = new List<string>();
+            var doc = new JObj().Add("schema", "h2lm-cleanup/1").Add("root", root).Add("work", work).Add("temp", ShellPaths.TempOf(work)).Add("dryRun", dry).Add("legacy", legacy);
+            if (!dry)
+            {
+                string why = TagWriteGate.Blocked(work, legacy ? "removing the earlier versions' folders" : "cleaning the temporary folder");
+                if (why != null) { Console.Error.WriteLine("REFUSED: " + why); return ExitRefused; }
+            }
+            JanitorReport rep;
+            if (legacy)
+            {
+                var items = TempJanitor.ListLegacy(work, host.HasPayload ? host.Installer : null, root);
+                lines.Add(items.Count == 0 ? "no folders of earlier versions were found in " + work : "folders of earlier versions (" + items.Count + ", " + JanitorReport.Gb(items.Sum(i => i.Bytes)) + "):");
+                foreach (var it in items) lines.Add("  " + it);
+                doc.Add("items", items.Select(i => (object)new JObj().Add("path", i.Path).Add("kind", i.Kind).Add("bytes", i.Bytes).Add("why", i.Why)).ToList());
+                if (dry || items.Count == 0) { lines.Add("RESULT " + (dry ? "DRY RUN" : "OK") + ": nothing was deleted"); return Emit(json, doc.Add("ok", true), lines, ExitOk); }
+                using (TagWriteGate.Enter(work, "removing the earlier versions' folders"))
+                    rep = TempJanitor.RemoveLegacy(work, items, host.HasPayload ? host.Installer : null, root);
+            }
+            else
+            {
+                lines.Add("temporary folder " + ShellPaths.TempOf(work) + ": " + JanitorReport.Gb(TempJanitor.TempSize(work)));
+                if (dry) rep = TempJanitor.CleanNow(work, true);
+                else using (TagWriteGate.Enter(work, "cleaning the temporary folder")) rep = TempJanitor.CleanNow(work);
+            }
+            foreach (var l in rep.Lines) lines.Add("  " + l);
+            lines.Add("RESULT " + (dry ? "DRY RUN" : rep.Problems.Count == 0 ? "OK" : "PROBLEMS") + ": " + rep);
+            doc.Add("lines", rep.Lines.Cast<object>().ToList()).Add("problems", rep.Problems.Cast<object>().ToList()).Add("freedBytes", rep.FreedBytes).Add("ok", rep.Problems.Count == 0);
+            return Emit(json, doc, lines, rep.Problems.Count == 0 ? ExitOk : ExitFailed);
+        }
+
+        /// <summary>0.6.8: the start-up sweep before a CLI bake (the window runs it when an H2EK is picked). Never fails the bake.</summary>
+        private static void CliSweep(AppHost host, string rootArg, TextWriter info)
+        {
+            try
+            {
+                if (!host.HasPayload || string.IsNullOrWhiteSpace(rootArg)) return;
+                string work = ShellPaths.WorkOf(ShellPaths.NormalizeRoot(rootArg));
+                if (!Directory.Exists(work)) return;
+                var rep = TempJanitor.Sweep(work, TempSettings.From(host.LoadSettings()), null, null, host.Manifest.FarmsInTemp);
+                if (rep.Skipped) { info.WriteLine("temp: start-up sweep skipped: " + rep.SkipReason); return; }
+                foreach (var l in rep.Lines) info.WriteLine("temp: " + l);
+            }
+            catch (Exception e) { info.WriteLine("temp: the start-up sweep failed: " + e.Message); }
         }
 
         // ------------------------------------------------------------------ scan-scenery-fix (SF1)
@@ -783,6 +864,7 @@ namespace H2GpuLightmapper.Cli
             {
                 ProbeWrite = true, RunToolSmoke = true, InstDirName = inst == null ? null : inst.DirName, InstMaxPathLen = inst == null ? 0 : inst.MaxPathLen,
                 AliasLocalAppData = host.Paths.AliasLocalAppData, AliasVolumeRoot = host.Paths.AliasVolumeRoot, AllowDriveRoot = drvOk,
+                FarmsInTemp = host.HasPayload && host.Manifest.FarmsInTemp,
                 GpuCheckExe = !noGpu && rt != null ? rt.GpuCheckExe : null,
                 GpuCheckPlainExe = !noGpu && rt != null && inst != null ? InstLayout.FindByName(inst, rt.InstDir, InstLayout.GpuCheckPlain) : null,
                 PwshExe = rt == null ? null : rt.PwshExe, PwshEnv = env,
@@ -802,6 +884,16 @@ namespace H2GpuLightmapper.Cli
                 var li = GpuLock.Inspect(GpuLock.PathFor(work));
                 lines.Add("  GPU lock: " + (li.Exists ? "held: " + li.Content : "free"));
                 doc.Add("gpuLock", li.Exists ? li.Content : null);
+                // 0.6.8 bounded temp: the two sides of the work folder
+                long tempB = TempJanitor.TempSize(work);
+                long keepB = 0;
+                foreach (var kd in new[] { ShellPaths.StandaloneOf(work), TagBackup.UiRoot(work), Path.Combine(work, "_TAGBAK_auto"), ShellPaths.InstParentOf(work) }) keepB += SafeFs.DirSize(kd);
+                var ts = TempSettings.From(host.LoadSettings());
+                lines.Add("  temporary folder: " + ShellPaths.TempOf(work) + "  " + JanitorReport.Gb(tempB) + " (cap " + ts.CapGB + " GB, " + ts.KeepCaptures + " capture(s) kept for reuse; safe to delete)");
+                lines.Add("  kept files (run logs, backups, runtime): " + JanitorReport.Gb(keepB));
+                var leg = TempJanitor.ListLegacy(work, null, null, false);
+                if (leg.Count > 0) lines.Add("  folders of earlier versions: " + leg.Count + " (--cli cleanup --h2ek \"" + root + "\" --legacy --dry-run lists them)");
+                doc.Add("tempBytes", tempB).Add("keepBytes", keepB).Add("tempCapGB", (long)ts.CapGB).Add("keepCaptures", (long)ts.KeepCaptures).Add("legacyItems", (long)leg.Count);
             }
             doc.Add("ok", ok);
             lines.Add("RESULT " + (ok ? "OK" : "PROBLEMS FOUND"));

@@ -2,7 +2,7 @@
 
 Milestone 3: AO and light probes are baked by the ordinary pipeline (the inject verb takes whatever final stage it made: a lightmap + truecolor bitmap, or the
 lightmap only for a Lightprobes-only bake), and a Vista map (cache v8) is read through its MCC form (h2conv's reverse converter, kept in the run folder's h2work)
-and, when asked, converted back to Vista by h2conv.inject --to-vista.
+and, when asked, converted back to Vista by h2conv (--to-vista).
 
 The exe runs it with the bundled Python, one verb at a time, and reads the JSON/exit code.  The working files of a run live in the temporary per-run
 folder the exe made, and `cleanup` deletes it.
@@ -12,16 +12,19 @@ script only starts its command line tools (read, inject and query) as child proc
 or copies their code (aggregation, not linking).  Stdlib only.
 
   query    --map M --kit TAGS [--cache F] [--work-dir D] --out JSON   what the map is (container, skies, cube maps, bsps); refusals in plain words
-  prepare  --map M --kit TAGS --tool-root ROOT --run DIR [--sky-cubemap SKY=VAL ...]
+  prepare  --map M --kit TAGS --tool-root ROOT --run DIR [--root-name r] [--sky-cubemap SKY=VAL ...]
                                                               read ONLY the lightmapper's dependency subset of the map into DIR\\tags_x, then build the real-copy
-                                                              overlay root DIR\\root (kit tags copied + the tree read from the map on top; never links)
+                                                              overlay root DIR\\root (0.6.8: DIR\\r; the kit tags the map needs (0.6.9) copied + the tree read from the map on top; never links)
   inject   --map M --run DIR --stage STAGE --scenario S --bsp B --out FINAL [--ltmp-only] [--vista-out yes|no]
                                                               inject ONLY the lightmap + its bitmap (or just the lightmap) into a COPY of the map, validate, publish FINAL
                                                               (a Vista map: through its MCC form; --vista-out yes converts the result back to Vista)
   validate --map M                                            h2conv's map validators
   snap     --tags TAGS --out F  /  snapdiff A B               live-tag guard (stat snapshot / difference list)
   junction --link L --target T                                the overlay work folder's farm_wNN -> the real farm folder (only inside a _mapbake run folder)
-  cleanup  --run DIR [--keep NAME ...]                        delete the run folder (junctions unlinked first), keeping the named children
+  cleanup  --run DIR [--keep NAME ...]                        delete the run folder (only links that point inside it are unlinked, never followed; any other
+                                                              link refuses the delete), keeping the named children
+  wipefarm --farm farm_wNN [--keep-stage]                     delete the derived geometry / texture products of a worker's farm folder (logs and engine copies stay)
+  scan     --root DIR                                         list the tag / map files below DIR (exit 1 when any is found)
 """
 import argparse
 import ctypes
@@ -29,12 +32,15 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
+import zlib
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
+STAGED = bool(os.environ.get('H2LM_STAGE_CH'))
 BS = chr(92)
 OFF_LIMITS = 'do not look in here claude'
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
@@ -108,7 +114,7 @@ def h2conv_home(a):
     return home
 
 
-def run_h2conv(home, module, args, log_path=None, cwd=None):
+def run_h2conv(home, module, args, log_path=None, cwd=None, dirs=None):
     """Start `python -m <module> <args>` as a child process (the bundled Python, no window, below normal priority).  Output is mirrored to this
     process' stdout (prefixed) and to log_path.  -> (exit code, last lines)"""
     shim = os.path.join(HERE, 'h2conv_run.py')
@@ -118,7 +124,12 @@ def run_h2conv(home, module, args, log_path=None, cwd=None):
     tail = []
     log = open(log_path, 'w', encoding='utf-8', errors='replace') if log_path else None
     try:
-        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=cwd or home,
+        env = None
+        if STAGED:
+            env = dict(os.environ)
+            vd = [d for d in (env.get('H2LM_STAGE_DIRS', '').split(';') + list(dirs or [])) if d]
+            env['H2LM_STAGE_DIRS'] = ';'.join(dict.fromkeys(os.path.abspath(d) for d in vd))
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=cwd or home, env=env,
                              creationflags=CREATE_NO_WINDOW | BELOW_NORMAL)
         for raw in p.stdout:
             line = raw.decode('utf-8', 'replace').rstrip('\r\n')
@@ -141,7 +152,8 @@ def cmd_query(a):
     home = h2conv_home(a)
     out = a.out
     wd = [['--work-dir', os.path.abspath(a.work_dir)]] if getattr(a, 'work_dir', None) else []
-    rc, tail = run_h2conv(home, 'h2conv.mapbake_query', [a.map, '--kit', a.kit] + (['--cache', a.cache] if a.cache else []) + (wd[0] if wd else []) + ['--out', out])
+    rc, tail = run_h2conv(home, 'h2conv._rp', [a.map, '--kit', a.kit] + (['--cache', a.cache] if a.cache else []) + (wd[0] if wd else []) + ['--out', out],
+                          dirs=[os.path.abspath(a.work_dir)] if getattr(a, 'work_dir', None) else None)
     if rc != 0 or not os.path.isfile(out):
         r = {'schema': 'h2lm-mapbake-query/1', 'ok': False, 'map': a.map, 'error': 'the map reader failed (exit %d): %s' % (rc, ' | '.join(tail[-4:]))}
         write_json(out, r)
@@ -214,50 +226,186 @@ def tree_size(root):
     return n, tot
 
 
+MAX_TOOL_PATH = 259      # tool_fast is not long-path aware: a full path of 260+ characters (MAX_PATH incl. the NUL) cannot be opened
+
+
+def _mcc_range(f, h, start, length):
+    """bytes [start, start+length) of the DECOMPRESSED image of a chunk-compressed MCC map (header 0x380 bytes, then chunks that each inflate to
+    the chunk size), or None when the map does not follow that layout"""
+    cs, tbl_off, n = struct.unpack_from('<I', h, 0x308)[0], struct.unpack_from('<I', h, 0x310)[0], struct.unpack_from('<I', h, 0x314)[0]
+    if cs <= 0 or n <= 0 or start < 0x380 or length <= 0:
+        return None
+    first, last = (start - 0x380) // cs, (start + length - 1 - 0x380) // cs
+    if last >= n:
+        return None
+    f.seek(tbl_off + first * 8)
+    tbl = list(struct.iter_unpack('<iI', f.read((last - first + 1) * 8)))
+    parts = []
+    for i, (csize, coff) in zip(range(first, last + 1), tbl):
+        f.seek(coff)
+        blob = f.read(abs(csize))
+        data = blob if csize < 0 else zlib.decompress(blob)
+        if i < n - 1 and len(data) != cs:
+            return None
+        parts.append(data)
+    base = 0x380 + first * cs
+    out = b''.join(parts)[start - base:start - base + length]
+    return out if len(out) == length else None
+
+
+def map_tag_names(path):
+    """0.6.8 RC: the names of every tag in a cache file (= every tag tool_fast loads for its scenario), lower case without the group
+    extension; None when the table cannot be read (the caller then checks every kit tag). Read in memory only, never written."""
+    try:
+        with open(path, 'rb') as f:
+            h = f.read(0x800)
+            if len(h) < 0x380 or h[:4] != b'daeh':
+                return None
+            ver = struct.unpack_from('<I', h, 4)[0]
+            if ver == 13:                                                    # MCC: count / offset / size at 0x20 (offset in the decompressed image)
+                cnt, off, size = struct.unpack_from('<iIi', h, 0x20)
+                if struct.unpack_from('<H', h, 0x1C)[0] & 1:
+                    buf = _mcc_range(f, h, off, size)
+                else:
+                    f.seek(off)
+                    buf = f.read(size)
+            elif ver == 8 and len(h) == 0x800:                                                   # Vista: count / buffer offset / size at 0x2CC
+                cnt, off, size = struct.unpack_from('<III', h, 0x2CC)
+                f.seek(off)
+                buf = f.read(size)
+            else:
+                return None
+    except (OSError, struct.error, zlib.error, ValueError, MemoryError):
+        return None
+    if not buf or len(buf) != size or cnt <= 0:
+        return None
+    names = set(n.decode('latin-1').strip().lower().replace('/', BS) for n in buf.split(b'\0'))
+    names.discard('')
+    return names if len(names) * 2 >= cnt else None
+
+
+def unreachable_overlay_paths(kit_tags, ov_tags, names=None):
+    """0.6.8 RC: the kit tag files the overlay copy WOULD hold at a full path tool_fast cannot open (> MAX_TOOL_PATH characters), with the
+    same file selection as build_overlay. A tag the tool cannot open is silently missing in the bake (2026-10-29: on a 92-character H2EK
+    root, 21 tags headlong uses -- ui screens, a first-person animation graph, a looping sound -- sat past it and almost every surface lost its
+    diffuse bitmap -> grey albedo). names = map_tag_names(): only the kit tags the map uses count (a kit tag the scenario never loads may be
+    unreachable without harm); None = every kit tag counts.
+    Returns ([(length, rel), ...] of the counted tags, (longest counted length, its rel), number of unreachable tags not counted)."""
+    out, longest, ignored = [], (0, ''), 0
+    kit_tags = lp(kit_tags)                                                       # a plain walk silently skips folders past MAX_PATH
+    for dp, dn, fn in os.walk(kit_tags):
+        dn[:] = [d for d in dn if d.lower() != OFF_LIMITS and not (rel_is_top(dp, kit_tags) and d.lower() == 'temp_scenario')
+                 and not is_reparse(os.path.join(dp, d))]
+        rel = os.path.relpath(dp, kit_tags)
+        for f in fn:
+            if f.lower().endswith(SKIP_EXT) or '(auto-backup' in f.lower():
+                continue
+            r = f if rel == '.' else os.path.join(rel, f)
+            n = len(os.path.join(ov_tags, r))
+            if names is not None and os.path.splitext(r)[0].lower() not in names:
+                ignored += n > MAX_TOOL_PATH
+                continue
+            longest = max(longest, (n, r))
+            if n > MAX_TOOL_PATH:
+                out.append((n, r))
+    return sorted(out, reverse=True), longest, ignored
+
+
 def rel_is_top(dp, kit_tags):
     return os.path.normcase(os.path.abspath(dp)) == os.path.normcase(os.path.abspath(kit_tags))
 
 
-def build_overlay(kit_tags, ext_tags, ov_tags):
-    """REAL COPIES only: every kit tag file (except other maps' bsp/lightmap tags and archives) is copied to the overlay, then the tree read from the map is copied on
-    top (the map's files win).  Nothing is hard-linked or junctioned; a reparse point in the kit is skipped and reported."""
-    extrel = set()
-    for dp, dn, fn in os.walk(ext_tags):
-        for f in fn:
-            extrel.add(os.path.relpath(os.path.join(dp, f), ext_tags).lower())
-    n_kit = n_ext = n_over = n_skip = 0
-    reparse = []
-    t0 = time.time()
-    for dp, dn, fn in os.walk(kit_tags):
-        keep = []
-        for d in dn:
-            full = os.path.join(dp, d)
-            if d.lower() == OFF_LIMITS or (rel_is_top(dp, kit_tags) and d.lower() == 'temp_scenario'):
-                continue                                                           # Sapien's scratch scenarios are not part of any map
-            if is_reparse(full):
-                reparse.append(os.path.relpath(full, kit_tags))
+# 0.6.9: the overlay holds the kit tags the MAP NEEDS, not the whole kit. The map's tag-name table is its dependency closure (every tag
+# the game loads for the scenario, hence every tag tool_fast loads to light it). On top of that, always copied (inclusive on purpose):
+# the small shared folders below (folders the tool itself loads whatever the map: the multiplayer player models, the shader collections, the HUD ...), every file of the scenario's folder and of its structure bsp's folder (the skeleton run copies / links
+# them), and the loose files of the tags root. Every kit FOLDER is created (empty ones too), so a folder link into the overlay still resolves.
+KEEP_DIRS = ('globals', 'shaders', 'rasterizer', 'cubemaps', 'effects', 'multiplayer', 'ai', 'camera', 'cursors', 'scenarios' + BS + 'shaders', 'scenarios' + BS + 'ui',
+             'ui' + BS + 'hud', 'objects' + BS + 'multi', 'objects' + BS + 'characters' + BS + 'dervish', 'objects' + BS + 'characters' + BS + 'masterchief')
+SKIP_IN_FOLDER = ('radiance_bitmaps',)     # the CPU tool's own old radiance output beside the scenario: nothing reads it (its lightmap tag is never copied)
+
+
+def scan_kit(kit_tags):
+    """One pass over the kit tags with the exclusions the overlay copy has always had (Sapien's scratch folder, the off-limits folder, links).
+    -> {'dirs': [rel], 'files': [(rel, size)], 'reparse': [rel], 'total_files': n, 'total_bytes': n}"""
+    dirs, files, reparse = [], [], []
+    n = tot = 0
+    stack = ['']
+    while stack:
+        rel = stack.pop()
+        try:
+            ents = list(os.scandir(lp(os.path.join(kit_tags, rel) if rel else kit_tags)))
+        except OSError:
+            continue
+        for e in ents:
+            r = e.name if not rel else rel + BS + e.name
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
                 continue
-            keep.append(d)
-        dn[:] = keep
-        rel = os.path.relpath(dp, kit_tags)
-        dst_dir = ov_tags if rel == '.' else os.path.join(ov_tags, rel)
-        os.makedirs(lp(dst_dir), exist_ok=True)
-        for f in fn:
-            r = f if rel == '.' else os.path.join(rel, f)
-            src = os.path.join(dp, f)
-            if r.lower() in extrel:
-                n_over += 1
-                continue
-            if f.lower().endswith(SKIP_EXT) or '(auto-backup' in f.lower():
-                n_skip += 1
-                continue
-            if is_reparse(src):
+            if st.st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT:
                 reparse.append(r)
                 continue
-            shutil.copyfile(lp(src), lp(os.path.join(dst_dir, f)))
-            n_kit += 1
-            if n_kit % 6000 == 0:
-                say('  overlay: %d kit tags copied (%.0f s)' % (n_kit, time.time() - t0))
+            if st.st_file_attributes & 0x10:
+                if e.name.lower() == OFF_LIMITS or (not rel and e.name.lower() == 'temp_scenario'):
+                    continue                                                           # Sapien's scratch scenarios are not part of any map
+                dirs.append(r)
+                stack.append(r)
+            else:
+                files.append((r, st.st_size))
+                n += 1
+                tot += st.st_size
+    dirs.sort()
+    files.sort()
+    return {'dirs': dirs, 'files': files, 'reparse': reparse, 'total_files': n, 'total_bytes': tot}
+
+
+def select_kit_files(scan, names=None, scen_dirs=(), extrel=frozenset()):
+    """The kit files the overlay copy holds. names = map_tag_names() (None: the whole kit, as before 0.6.9); scen_dirs = tag folders (relative, any
+    slash) whose files are all copied. A file the map's own tree (extrel, lower case) replaces is not copied from the kit.
+    -> {'files': [(rel, size)], 'bytes': n, 'skipped': n, 'overridden': n, 'unused': n}"""
+    pre = tuple(d.replace('/', BS).strip(BS).lower() + BS for d in scen_dirs if d)
+    keep_dirs = tuple(d.lower() + BS for d in KEEP_DIRS)
+    out, nbytes, skipped, over, unused = [], 0, 0, 0, 0
+    for r, sz in scan['files']:
+        low = r.lower()
+        if low in extrel:
+            over += 1
+            continue
+        if low.endswith(SKIP_EXT) or '(auto-backup' in low:
+            skipped += 1
+            continue
+        if names is not None and BS in low and os.path.splitext(low)[0] not in names:
+            if not low.startswith(keep_dirs) and not (low.startswith(pre) and not any(x in low for x in SKIP_IN_FOLDER)):
+                unused += 1
+                continue
+        out.append((r, sz))
+        nbytes += sz
+    return {'files': out, 'bytes': nbytes, 'skipped': skipped, 'overridden': over, 'unused': unused}
+
+
+def build_overlay(kit_tags, ext_tags, ov_tags, scan=None, sel=None):
+    """REAL COPIES only: the selected kit tag files (default: every kit tag file except other maps' bsp/lightmap tags and archives) are copied to the overlay,
+    then the tree read from the map is copied on top (the map's files win).  Nothing is hard-linked or junctioned; a reparse point in the kit is skipped and reported."""
+    n_ext = 0
+    t0 = time.time()
+    if scan is None:
+        scan = scan_kit(kit_tags)
+    if sel is None:
+        extrel = set()
+        for dp, dn, fn in os.walk(ext_tags):
+            for f in fn:
+                extrel.add(os.path.relpath(os.path.join(dp, f), ext_tags).lower())
+        sel = select_kit_files(scan, None, (), extrel)
+    os.makedirs(lp(ov_tags), exist_ok=True)
+    for d in scan['dirs']:
+        os.makedirs(lp(os.path.join(ov_tags, d)), exist_ok=True)
+    n_kit = 0
+    reparse = list(scan['reparse'])
+    for r, _sz in sel['files']:
+        shutil.copyfile(lp(os.path.join(kit_tags, r)), lp(os.path.join(ov_tags, r)))
+        n_kit += 1
+        if n_kit % 6000 == 0:
+            say('  overlay: %d kit tags copied (%.0f s)' % (n_kit, time.time() - t0))
     for dp, dn, fn in os.walk(ext_tags):
         rel = os.path.relpath(dp, ext_tags)
         dst_dir = ov_tags if rel == '.' else os.path.join(ov_tags, rel)
@@ -268,15 +416,17 @@ def build_overlay(kit_tags, ext_tags, ov_tags):
                 raise MapbakeError('overlay: %s exists before the copy from the map' % d)
             shutil.copyfile(lp(os.path.join(dp, f)), lp(d))
             n_ext += 1
-    return {'kit_copied': n_kit, 'kit_skipped': n_skip, 'extracted_copied': n_ext, 'kit_overridden': n_over, 'reparse_skipped': reparse,
-            'seconds': round(time.time() - t0, 1)}
+    return {'kit_copied': n_kit, 'kit_skipped': sel['skipped'], 'kit_unused': sel['unused'], 'kit_bytes_copied': sel['bytes'], 'map_copied': n_ext,
+            'kit_overridden': sel['overridden'], 'reparse_skipped': reparse, 'seconds': round(time.time() - t0, 1)}
 
 
 def assert_real_copies(root_dir):
     """the overlay holds no hard link and no reparse point (a stray write could otherwise reach the live tags)"""
     bad = []
     n = 0
-    for dp, dn, fn in os.walk(root_dir):
+    # 0.6.8 RC: walk the \\?\ spelling -- a plain os.walk silently skips every folder past MAX_PATH (it counted 454 files too few on a
+    # 92-character H2EK root, and those folders were not checked for links at all)
+    for dp, dn, fn in os.walk(lp(root_dir)):
         for d in dn:
             if is_reparse(os.path.join(dp, d)):
                 bad.append('reparse point ' + os.path.join(dp, d))
@@ -296,6 +446,45 @@ def assert_real_copies(root_dir):
     return n
 
 
+def _is_staged(path):
+    try:
+        fd = os.open(lp(path), os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+        try:
+            return os.read(fd, 8) == b'H2LMSTG\x01'
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+
+
+def loose_files(root, min_size=1):
+    out = []
+    for dp, dn, fn in os.walk(root):
+        for f in fn:
+            p = os.path.join(dp, f)
+            try:
+                if os.stat(lp(p)).st_size < min_size:
+                    continue
+            except OSError:
+                continue
+            if not _is_staged(p):
+                out.append(p)
+    return out
+
+
+LIBFBXSDK_MD5 = '8146976216f143923aab24a9be73fdea'
+
+
+def install_toolshim(base_src, root):
+    shim = os.environ.get('H2LM_SHIM_DLL') or os.path.join(HERE, 'toolshim', 'libfbxsdk.dll')
+    if not os.path.isfile(shim):
+        raise MapbakeError('a required component of this build is missing (mapbake helper); reinstall the app')
+    if md5_file(base_src) != LIBFBXSDK_MD5:
+        raise MapbakeError('libfbxsdk.dll of this H2EK is not the supported build (md5 %s): verify the H2EK files in Steam, then bake again' % md5_file(base_src))
+    shutil.copyfile(base_src, os.path.join(root, 'libfbxsdk_core.dll'))
+    shutil.copyfile(shim, os.path.join(root, 'libfbxsdk.dll'))
+
+
 def cmd_prepare(a):
     below_normal()
     home = h2conv_home(a)
@@ -308,7 +497,9 @@ def cmd_prepare(a):
         if os.path.commonpath([os.path.normcase(p), os.path.normcase(kit)]) == os.path.normcase(kit):
             raise MapbakeError('the run folder is inside the kit tags: %s' % p)
     tags_x = os.path.join(run, 'tags_x')
-    root = os.path.join(run, 'root')
+    if a.root_name not in ('root', 'r'):
+        raise MapbakeError('--root-name must be root or r')
+    root = os.path.join(run, a.root_name)                                         # 0.6.8: 'r' (MAX_PATH headroom under WORK\\Temp (safe to delete)\\m<id>)
     logs = os.path.join(run, 'logs')
     for d in (tags_x, root):
         if os.path.exists(d):
@@ -316,18 +507,39 @@ def cmd_prepare(a):
     os.makedirs(logs, exist_ok=True)
     rep = {'schema': 'h2lm-mapbake-prepare/1', 'map': a.map, 'run': run}
 
-    # ---- free space (the overlay is a real copy of the kit tags)
+    # ---- free space (the overlay is a real copy of the kit tags the map needs; 0.6.9: not the whole kit)
     t0 = time.time()
-    n_kit, kit_bytes = tree_size(kit)
+    # the map's tag-name table = its dependency closure; None (table unreadable, or H2LM_MAPBAKE_WHOLE_KIT set) = every kit tag, as before 0.6.9
+    names = None if os.environ.get('H2LM_MAPBAKE_WHOLE_KIT') else map_tag_names(a.map)
+    scan = scan_kit(kit)
+    n_kit, kit_bytes = scan['total_files'], scan['total_bytes']
     free = shutil.disk_usage(run).free
-    need = int(kit_bytes * 1.05) + (3 << 30)
-    say('kit tags: %d files, %.1f GB; free on the run drive: %.1f GB (need about %.1f GB)' % (n_kit, kit_bytes / 1e9, free / 1e9, need / 1e9))
+    sel0 = select_kit_files(scan, names)                                          # before the map is read: its scenario folders are not known yet
+    need = int(sel0['bytes'] * 1.05) + (3 << 30)
+    say('kit tags: %d files, %.1f GB; the temporary copy holds %s%.2f GB; free on the run drive: %.1f GB (need about %.1f GB)' % (
+        n_kit, kit_bytes / 1e9, ('the %d the map needs: ' % len(sel0['files'])) if names is not None else 'all of them: ', sel0['bytes'] / 1e9, free / 1e9, need / 1e9))
     if free < need:
         raise MapbakeError('not enough free disk space on the drive of %s: the temporary copy needs about %.1f GB, %.1f GB are free' % (run, need / 1e9, free / 1e9))
     rep['kit'] = {'files': n_kit, 'bytes': kit_bytes, 'free': free}
+    # ---- 0.6.8 RC: every kit tag must stay openable by tool_fast inside the overlay, else the bake would silently miss textures
+    # the capture reads root\tags (this is where the textures went missing); the skeleton run reads the same tags through the longer
+    # root\w\_gpulm_skel\w2NN\tags, but a skeleton that differs from the capture is refused by gpu_bake's own soup / key guards
+    # only the kit tags the map uses (its tag-name table = the scenario's whole dependency closure) must fit; if the table cannot be read, all must
+    which = 'tag(s) this map uses' if names is not None else 'kit tag file(s) (the map\'s tag list could not be read, so every kit tag is checked)'
+    far, longest, ignored = unreachable_overlay_paths(kit, os.path.join(root, 'tags'), names)
+    rep['overlay_paths'] = {'longest': longest[0], 'map_tag_names': len(names) if names is not None else None, 'unused_past_limit': ignored}
+    if far:
+        over = far[0][0] - MAX_TOOL_PATH
+        raise MapbakeError('this H2EK is on too long a path for baking from a .map: in the temporary copy of the kit, %d %s would need more than '
+                           '%d characters (the longest, %d characters: %s), which tool_fast cannot open, so the map would bake with missing textures. '
+                           'Move the H2EK to a folder at least %d characters shorter (or shorten those tag folder names), then bake again. Nothing was written.'
+                           % (len(far), which, MAX_TOOL_PATH, far[0][0], far[0][1], over))
+    say('overlay paths: every %s stays within %d characters (longest %d)%s' % (
+        'tag this map uses' if names is not None else 'kit tag', MAX_TOOL_PATH, longest[0],
+        ('; %d kit tag file(s) this map does not use are past it (not needed)' % ignored) if ignored else ''))
 
     # ---- 1. read ONLY the dependency subset of the map (the lightmapper's closure: visual deps + placed objects)
-    ext_report = os.path.join(logs, 'extract_report.json')
+    ext_report = os.path.join(logs, 'read_report.json')
     args = [a.map, tags_x, '--deps', 'visual', '--include', 'scen,bloc,mach,ctrl,lifi', '--kit', kit, '--kit-policy', 'identical', '--write-identical',
             '--force-output-dir', '--report', ext_report, '--quiet']
     for s in a.sky_cubemap or []:
@@ -336,13 +548,31 @@ def cmd_prepare(a):
         # a Vista map: h2conv reverse-converts it to its MCC form first; that temporary map lives in the run folder (kept for the inject, deleted with the run folder)
         args += ['--work-dir', os.path.join(run, 'h2work'), '--keep-temp']
         rep['vista_input'] = True
-    rc, tail = run_h2conv(home, 'h2conv.extract', args, os.path.join(logs, 'extract.log'))
+    rc, tail = run_h2conv(home, 'h2conv._ra', args, os.path.join(logs, 'read.log'), dirs=[tags_x, os.path.join(run, 'h2work')])
     if rc != 0 or not os.path.isfile(ext_report):
         raise MapbakeError('reading the map failed (exit %d): %s' % (rc, ' | '.join(tail[-3:])))
+    if STAGED:
+        clear = loose_files(tags_x) + loose_files(os.path.join(run, 'h2work'), min_size=1 << 16)
+        if clear:
+            for c in clear:
+                try:
+                    os.remove(lp(c))
+                except OSError:
+                    pass
+            raise MapbakeError('preparing the map\'s files failed (%d file(s), the first %s); they were deleted. Bake again; if it repeats, reinstall the app'
+                               % (len(clear), os.path.basename(clear[0])))
     er = json.load(open(ext_report, encoding='utf-8'))
     counts = er.get('counts', {})
-    rep['extract'] = {'counts': counts, 'seconds': er.get('seconds'), 'plan_warnings': (er.get('plan') or {}).get('warnings', [])[:20],
+    rep['read'] = {'counts': counts, 'seconds': er.get('seconds'), 'plan_warnings': (er.get('plan') or {}).get('warnings', [])[:20],
                       'sky_cubemap': er.get('sky_cubemap')}
+    if STAGED:
+        try:
+            red = {k: v for k, v in er.items() if k not in ('tags',)}
+            red['tags_listed'] = len(er.get('tags', []))
+            red['note'] = 'the per-tag list is not kept'
+            write_json(ext_report, red)
+        except Exception:                                                          # noqa: BLE001
+            pass
     if counts.get('failed'):
         bad = [t for t in er.get('tags', []) if t.get('status') == 'failed'][:5]
         raise MapbakeError('%d tag(s) of the map could not be read: %s' % (counts['failed'], '; '.join('%s:%s (%s)' % (b['group'], b['name'], (b.get('error') or '')[:80]) for b in bad)))
@@ -352,6 +582,27 @@ def cmd_prepare(a):
         raise MapbakeError('reading the map did not produce one scenario and its structure bsp(s) (scenario %d, bsp %d)' % (len(scn), len(bsps)))
     rep['scenario'] = scn[0]['name']
     rep['bsps'] = [b['name'] for b in bsps]
+    # 0.6.9: the final selection -- the map's tag-name closure + the small shared folders + every file of the scenario's / bsp's folders
+    ext_rel = set()
+    for dp, dn, fn in os.walk(tags_x):
+        for f in fn:
+            ext_rel.add(os.path.relpath(os.path.join(dp, f), tags_x).lower())
+    scen_dirs = sorted(set(os.path.dirname(t['file'].replace('/', BS)) for t in scn + bsps))
+    # a sky cube map chosen from the KIT (the map holds none of its own) is not in the map's tag-name table, but the capture reads it
+    extra = set()
+    for ch in er.get('sky_cubemap') or []:
+        for c in [ch.get('cubemap')] + list(ch.get('candidates') or []):
+            if c:
+                extra.add(str(c).replace('/', BS).lower())
+    sel = select_kit_files(scan, (names | extra) if names is not None else None, scen_dirs, ext_rel)
+    need = int(sel['bytes'] * 1.05) + (3 << 30)
+    free = shutil.disk_usage(run).free
+    say('overlay: %d kit tags (%.2f GB) will be copied%s; free on the run drive: %.1f GB (need about %.1f GB)' % (
+        len(sel['files']), sel['bytes'] / 1e9, (', %d kit tag files this map does not need are left out' % sel['unused']) if names is not None else '', free / 1e9, need / 1e9))
+    if free < need:
+        raise MapbakeError('not enough free disk space on the drive of %s: the temporary copy needs about %.1f GB, %.1f GB are free' % (run, need / 1e9, free / 1e9))
+    rep['overlay_plan'] = {'whole_kit': names is None, 'kit_files': len(sel['files']), 'kit_bytes': sel['bytes'], 'left_out': sel['unused'], 'folders_copied_whole': scen_dirs,
+                           'need': need, 'free': free}
     for t in scn + bsps:
         if not os.path.isfile(lp(os.path.join(tags_x, t['file'].replace('/', BS)))):
             raise MapbakeError('tag %s read from the map is missing from %s' % (t['file'], tags_x))
@@ -364,15 +615,18 @@ def cmd_prepare(a):
     for f in ROOT_FILES:
         src = os.path.join(tool_root, f)
         if os.path.isfile(src):
+            if f == 'libfbxsdk.dll' and STAGED:
+                install_toolshim(src, root)
+                continue
             shutil.copyfile(src, os.path.join(root, f))
             if f == 'tool_fast.exe' and md5_file(src) != md5_file(os.path.join(root, f)):
                 raise MapbakeError('the copy of tool_fast.exe does not verify')
     # tool_fast exits silently (code 127, before it logs anything) when these folders are missing from its root: they must exist
     for d in ('data', 'reports', 'shader_cache'):
         os.makedirs(os.path.join(root, d), exist_ok=True)
-    ov = build_overlay(kit, tags_x, os.path.join(root, 'tags'))
-    say('overlay: %d kit tags copied, %d skipped (other maps\' bsp / lightmap tags), %d tags from the map on top (%d kit files overridden) in %.0f s'
-        % (ov['kit_copied'], ov['kit_skipped'], ov['extracted_copied'], ov['kit_overridden'], ov['seconds']))
+    ov = build_overlay(kit, tags_x, os.path.join(root, 'tags'), scan, sel)
+    say('overlay: %d kit tags copied (%.2f GB), %d skipped (other maps\' bsp / lightmap tags), %d not needed by this map, %d tags from the map on top (%d kit files overridden) in %.0f s'
+        % (ov['kit_copied'], ov['kit_bytes_copied'] / 1e9, ov['kit_skipped'], ov['kit_unused'], ov['map_copied'], ov['kit_overridden'], ov['seconds']))
     if ov['reparse_skipped']:
         say('overlay: skipped %d link(s) inside the kit tags (never followed): %s' % (len(ov['reparse_skipped']), ', '.join(ov['reparse_skipped'][:3])))
     rep['overlay'] = ov
@@ -431,7 +685,7 @@ def cmd_inject(a):
     os.makedirs(os.path.dirname(out_tmp), exist_ok=True)
     if os.path.exists(out_tmp):
         os.remove(out_tmp)
-    rep_json = os.path.join(logs, 'inject_report.json')
+    rep_json = os.path.join(logs, 'write_report.json')
     fw = lambda p: p.replace(BS, '/')                                              # noqa: E731  (h2conv takes tag paths with forward slashes from a shell)
     args = [a.map, inj, out_tmp, '--bsp', fw(bsp_rel), '--lightmap', fw((folder + BS if folder else '') + lm_base), '--scnr-clusters', 'keep', '--shift-align', '0',
             '--report', rep_json, '--overwrite', '--force-output-dir']      # the run folder lives under the work folder inside the H2EK: h2conv refuses that by default
@@ -443,7 +697,7 @@ def cmd_inject(a):
         args += ['--to-vista']
         if vname:
             args += ['--vista-name', vname]
-    rc, tail = run_h2conv(home, 'h2conv.inject', args, os.path.join(logs, 'inject.log'))
+    rc, tail = run_h2conv(home, 'h2conv._rc', args, os.path.join(logs, 'write.log'), dirs=[inj, os.path.join(run, 'h2work')])
     if rc != 0 or not os.path.isfile(out_tmp):
         raise MapbakeError('injecting the lightmap into the map failed (exit %d): %s' % (rc, ' | '.join(tail[-3:])))
     ir = json.load(open(rep_json, encoding='utf-8')) if os.path.isfile(rep_json) else {}
@@ -458,21 +712,21 @@ def cmd_inject(a):
                                % (vo.get('failures'), vo.get('validate_file'), vo.get('encode_failures')))
     reps = [t for t in (ir.get('tags') or []) if str(t.get('action', '')).startswith('replace')]
     replaced = sorted('%s:%s' % (t.get('group'), t.get('name')) for t in reps)
-    say('injected: %s' % (', '.join(replaced) if replaced else '(see inject_report.json)'))
+    say('injected: %s' % (', '.join(replaced) if replaced else '(see write_report.json)'))
     added = (ir.get('build') or {}).get('tags_added') or []
     odd = [r for r in reps if r.get('group') not in ('sbsp', 'ltmp', 'bitm')]
     if added or odd or len(reps) != (2 if ltmp_only else 3):
         raise MapbakeError('the injection touched more than the lightmap and its bitmap (replaced %d, added %d: %s)'
                            % (len(reps), len(added), ', '.join(replaced)[:300]))
-    # ---- validate the product (the MCC map h2conv.inject made; a Vista result is validated too: header / directory / XOR checksum / tag table)
-    vrc, vtail = run_h2conv(home, 'h2conv.mapbake_query', [out_tmp, '--kit', 'none', '--validate', '--out', os.path.join(logs, 'validate.json')], os.path.join(logs, 'validate.json.log'))
+    # ---- validate the product (the MCC map h2conv made; a Vista result is validated too: header / directory / XOR checksum / tag table)
+    vrc, vtail = run_h2conv(home, 'h2conv._rp', [out_tmp, '--kit', 'none', '--validate', '--out', os.path.join(logs, 'validate.json')], os.path.join(logs, 'validate.json.log'))
     vj = json.load(open(os.path.join(logs, 'validate.json'), encoding='utf-8')) if os.path.isfile(os.path.join(logs, 'validate.json')) else {}
     if vrc != 0 or vj.get('problems'):
         raise MapbakeError('the injected map did not validate: %s' % '; '.join((vj.get('problems') or vtail)[:5]))
     say('validate_file + plugin walk: OK')
     if vista_out:
         out_tmp_vista = vpath
-        vrc, vtail = run_h2conv(home, 'h2conv.mapbake_query', [out_tmp_vista, '--kit', 'none', '--validate', '--out', os.path.join(logs, 'validate_vista.json')], os.path.join(logs, 'validate_vista.log'))
+        vrc, vtail = run_h2conv(home, 'h2conv._rp', [out_tmp_vista, '--kit', 'none', '--validate', '--out', os.path.join(logs, 'validate_vista.json')], os.path.join(logs, 'validate_vista.log'))
         vj = json.load(open(os.path.join(logs, 'validate_vista.json'), encoding='utf-8')) if os.path.isfile(os.path.join(logs, 'validate_vista.json')) else {}
         if vrc != 0 or vj.get('problems') or map_version(out_tmp_vista) != 8:
             raise MapbakeError('the Vista map did not validate: %s' % '; '.join((vj.get('problems') or vtail)[:5]))
@@ -499,7 +753,7 @@ def cmd_inject(a):
     say('output: %s (%d bytes, md5 %s)' % (final, os.path.getsize(final), m_part))
     res = {'schema': 'h2lm-mapbake-inject/1', 'output': final, 'size': os.path.getsize(final), 'md5': m_part, 'replaced': replaced, 'set_aside': moved,
            'format': 'vista' if vista_out else 'mcc', 'vista_input': vista_in,
-           'inject_report': ir.get('counts') or ir.get('summary')}
+           'write_report': ir.get('counts') or ir.get('summary')}
     write_json(os.path.join(logs, 'inject_result.json'), res)
     if a.report:
         write_json(a.report, res)
@@ -509,7 +763,7 @@ def cmd_inject(a):
 def cmd_validate(a):
     home = h2conv_home(a)
     out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.map)), 'validate.json')
-    rc, tail = run_h2conv(home, 'h2conv.mapbake_query', [a.map, '--kit', 'none', '--validate', '--out', out])
+    rc, tail = run_h2conv(home, 'h2conv._rp', [a.map, '--kit', 'none', '--validate', '--out', out])
     j = json.load(open(out, encoding='utf-8')) if os.path.isfile(out) else {}
     return 0 if rc == 0 and not j.get('problems') else 1
 
@@ -556,6 +810,41 @@ def unlink_reparse_points(top):
     return n
 
 
+def _is_run_folder(run):
+    low = run.lower().rstrip(os.sep) + os.sep
+    base = os.path.basename(run.rstrip(os.sep)).lower()
+    return base.startswith('m') and ((os.sep + '_mapbake' + os.sep) in low or (os.sep + 'temp (safe to delete)' + os.sep) in low)
+
+
+def _links_below(top):
+    out = []
+    for dp, dn, fn in os.walk(lp(top)):
+        keep = []
+        for d in dn:
+            full = os.path.join(dp, d)
+            if is_reparse(full):
+                out.append(full)
+            else:
+                keep.append(d)
+        dn[:] = keep
+        out += [os.path.join(dp, f) for f in fn if is_reparse(os.path.join(dp, f))]
+    return out
+
+
+def _target_inside(link, run):
+    # the link's target, read without following it further; a symbolic link / unreadable target counts as outside (fail closed)
+    try:
+        t = os.readlink(link)
+    except (OSError, ValueError):
+        return False
+    for pre in ('\\\\?\\', '\\??\\'):
+        if t.startswith(pre):
+            t = t[len(pre):]
+    t = os.path.normcase(os.path.abspath(t)).rstrip(os.sep)
+    r = os.path.normcase(os.path.abspath(run)).rstrip(os.sep)
+    return t == r or t.startswith(r + os.sep)
+
+
 def rmtree_force(path):
     def onerr(func, p, exc):
         try:
@@ -568,32 +857,120 @@ def rmtree_force(path):
 
 def cmd_cleanup(a):
     run = os.path.abspath(a.run)
-    if (os.sep + '_mapbake' + os.sep).lower() not in run.lower() + os.sep:
-        raise MapbakeError('cleanup only deletes a _mapbake run folder: %s' % run)
+    if not _is_run_folder(run):
+        raise MapbakeError('cleanup only deletes a .map run folder (_mapbake\\m* or Temp (safe to delete)\\m*): %s' % run)
     if not os.path.isdir(run):
         say('nothing to clean up (%s)' % run)
         return 0
     keep = set(k.lower() for k in (a.keep or []))
-    names = [n for n in os.listdir(run)]
     unlinked = 0
-    for n in names:
-        p = os.path.join(run, n)
-        if n.lower() in keep:
-            continue
-        if is_reparse(p):
+    rest = []
+    # a file another program holds for a moment (a virus scanner, the search indexer, a monitor that opened it) cannot be deleted just then: try again a few times
+    for attempt in range(8):
+        for n in os.listdir(run):
+            p = os.path.join(run, n)
+            if n.lower() in keep:
+                continue
             try:
-                os.rmdir(p)
+                if is_reparse(p):
+                    if not _target_inside(p, run):
+                        raise MapbakeError('tripwire: %s is a link that does not point inside the run folder -- nothing more is deleted' % p)
+                    try:
+                        os.rmdir(p)
+                    except OSError:
+                        os.unlink(p)
+                    unlinked += 1
+                elif os.path.isdir(p):
+                    bad = [x for x in _links_below(p) if not _target_inside(x, run)]
+                    if bad:
+                        raise MapbakeError('tripwire: %s holds a link that does not point inside the run folder (%s) -- it is not deleted' % (p, bad[0]))
+                    unlinked += unlink_reparse_points(p)
+                    if _links_below(p):
+                        raise MapbakeError('a link is still inside %s after the unlink -- it is not deleted' % p)
+                    rmtree_force(p)
+                else:
+                    os.remove(lp(p))
             except OSError:
-                os.unlink(p)
-            unlinked += 1
-            continue
-        if os.path.isdir(p):
-            unlinked += unlink_reparse_points(p)
-            rmtree_force(p)
-        else:
-            os.remove(p)
+                pass
+        rest = [n for n in os.listdir(run) if n.lower() not in keep]
+        if not rest:
+            break
+        time.sleep(1 + attempt)
+    if rest:
+        left = []
+        for n in rest:
+            for dp, dn, fn in os.walk(os.path.join(run, n)):
+                left += [os.path.join(dp, f) for f in fn]
+            if not left:
+                left.append(os.path.join(run, n))
+        say('WARNING: %s is not empty after %d tries: %d file(s) are still there (held by another program?), for example %s' % (run, attempt + 1, len(left), ', '.join(left[:3])))
+        return 1
     say('cleaned up %s (%d link(s) unlinked, kept: %s)' % (run, unlinked, ', '.join(sorted(keep)) or 'nothing'))
     return 0
+
+
+def cmd_wipefarm(a):
+    wipe_farm(a.farm, keep_stage=a.keep_stage)
+    return 0
+
+
+FARM_KEEP_EXT = ('.log', '.txt', '.json', '.exe', '.dll')           # what stays in a worker's farm folder: logs / reports / the engine copies; every derived data file goes
+FARM_DROP_NAMES = ('guard_usedset.txt',)                      # a .txt that lists the tags the map uses: not kept
+
+
+def wipe_farm(farm, keep_stage=False):
+    """Delete the derived geometry / texture products a bake left in a worker's farm folder (the capture: triangles, bitmaps, atlases ...; the lightmapper's own copy of what was
+    read from the map).  Logs, reports and the engine copies stay.  A map bake never reuses a capture, so nothing depends on them."""
+    farm = os.path.abspath(farm)
+    base = os.path.basename(farm).lower()
+    if not (base.startswith('farm_w') and base[6:].isdigit()):
+        raise MapbakeError('wipe-farm only wipes a farm_wNN folder: %s' % farm)
+    if not os.path.isdir(farm):
+        return
+    n = nbytes = 0
+    for dp, dn, fn in os.walk(farm):
+        dn[:] = [d for d in dn if not is_reparse(os.path.join(dp, d)) and not (keep_stage and d.lower() == 'tagw_stage' and dp == farm)]      # the engine copies (.exe / .dll) in any folder stay; the estimator's geometry dumps beside them go
+        for f in fn:
+            if f.lower().endswith(FARM_KEEP_EXT) and f.lower() not in FARM_DROP_NAMES:
+                continue
+            p = os.path.join(dp, f)
+            try:
+                nbytes += os.stat(lp(p)).st_size
+                os.remove(lp(p))
+                n += 1
+            except OSError:
+                pass
+    for d in sorted((x[0] for x in os.walk(farm, topdown=False)), key=len, reverse=True):
+        if d != farm and not is_reparse(d):
+            try:
+                os.rmdir(lp(d))
+            except OSError:
+                pass
+    say('removed %d derived file(s) (%.0f MB) from %s' % (n, nbytes / 1e6, farm))
+
+
+def cmd_scan(a):
+    """list the files below ROOT that look like a Halo 2 tag ('!MLB' 'dfbt' at 0x3C) or a map ('daeh'); exit 1 when any is found"""
+    root = os.path.abspath(a.root)
+    bad = 0
+    n = 0
+    for dp, dn, fn in os.walk(root):
+        for f in fn:
+            p = os.path.join(dp, f)
+            try:
+                fd = os.open(lp(p), os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+                try:
+                    head = os.read(fd, 128)
+                finally:
+                    os.close(fd)
+            except OSError:
+                continue
+            n += 1
+            if (len(head) >= 0x44 and head[0x3C:0x44] == b'!MLBdfbt') or head[:4] == b'daeh':
+                bad += 1
+                say('TAG/MAP SIGNATURE: %s' % p)
+    say('scan: %d files, %d with a tag / map signature' % (n, bad))
+    return 1 if bad else 0
 
 
 # ------------------------------------------------------------------------------------------------------------------ main
@@ -606,7 +983,7 @@ def main(argv=None):
     p.set_defaults(fn=cmd_query)
     p = sub.add_parser('prepare')
     p.add_argument('--map', required=True); p.add_argument('--kit', required=True); p.add_argument('--tool-root', required=True); p.add_argument('--run', required=True)
-    p.add_argument('--sky-cubemap', action='append', default=[]); p.add_argument('--report')
+    p.add_argument('--sky-cubemap', action='append', default=[]); p.add_argument('--report'); p.add_argument('--root-name', default='root')
     p.set_defaults(fn=cmd_prepare)
     p = sub.add_parser('inject')
     p.add_argument('--map', required=True); p.add_argument('--run', required=True); p.add_argument('--stage', required=True)
@@ -628,6 +1005,12 @@ def main(argv=None):
     p = sub.add_parser('cleanup')
     p.add_argument('--run', required=True); p.add_argument('--keep', action='append', default=[])
     p.set_defaults(fn=cmd_cleanup)
+    p = sub.add_parser('wipefarm')
+    p.add_argument('--farm', required=True); p.add_argument('--keep-stage', action='store_true')
+    p.set_defaults(fn=cmd_wipefarm)
+    p = sub.add_parser('scan')
+    p.add_argument('--root', required=True)
+    p.set_defaults(fn=cmd_scan)
     a = ap.parse_args(argv)
     try:
         return a.fn(a)

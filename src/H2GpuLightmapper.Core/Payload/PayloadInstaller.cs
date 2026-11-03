@@ -64,10 +64,17 @@ namespace H2GpuLightmapper.Core.Payload
         public string ScanSceneryPy;
         /// <summary>INST gpucheck.exe (null if absent).</summary>
         public string GpuCheckExe;
+        /// <summary>0.6.8: the folder that holds the farm_wNN workers = WORK\Temp (safe to delete) when the payload's engine takes H2LM_FARMS
+        /// (MANIFEST features.farms), else null = WORK (the 0.6.7 layout; H2LM_FARMS is never set).</summary>
+        public string FarmRoot;
+        /// <summary>The farm folder's parent actually used: <see cref="FarmRoot"/> or WORK.</summary>
+        public string Farms { get { return string.IsNullOrEmpty(FarmRoot) ? Work : FarmRoot; } }
+        /// <summary>The farms are in Temp (the 0.6.8 layout).</summary>
+        public bool FarmsInTemp { get { return !string.IsNullOrEmpty(FarmRoot); } }
 
         public BakeEnvSpec ToEnvSpec()
         {
-            return new BakeEnvSpec { PwshDir = PwshDir, PyDir = PyDir, Root = Root, Work = Work, Code = InstDir, NoWindow = true };
+            return new BakeEnvSpec { PwshDir = PwshDir, PyDir = PyDir, Root = Root, Work = Work, Code = InstDir, Farms = FarmsInTemp ? FarmRoot : null, NoWindow = true };
         }
     }
 
@@ -147,6 +154,21 @@ namespace H2GpuLightmapper.Core.Payload
             return r;
         }
 
+        /// <summary>0.6.8: the folder that holds the farm_wNN workers for this WORK: WORK\Temp (safe to delete) when the payload's engine takes
+        /// H2LM_FARMS (MANIFEST features.farms), else WORK itself (the 0.6.7 layout). The DLL slot base names THIS folder (or its alias):
+        /// the estimator DLL writes the capture into "&lt;slot base&gt;farm_wNN".</summary>
+        public string FarmRootOf(string work) { return Manifest.FarmsInTemp ? ShellPaths.TempOf(work) : work; }
+
+        /// <summary><see cref="FarmRootOf"/>, created when missing (Temp: with its READ ME). The user may delete Temp at any moment; every
+        /// bake re-creates it here, before the slot alias is checked against it.</summary>
+        public string EnsureFarmRoot(string work)
+        {
+            string fr = FarmRootOf(work);
+            if (Manifest.FarmsInTemp) Safety.TempJanitor.EnsureTemp(work);
+            else Directory.CreateDirectory(fr);
+            return fr;
+        }
+
         /// <summary>
         /// INST for one H2EK root: plans / creates the DLL-slot alias (S0.4 SlotAlias.Ensure on the REAL WORK), extracts the
         /// engine component into WORK\_runtime\&lt;dirName&gt; with every slot DLL patched to that base BEFORE the dir is sealed,
@@ -158,7 +180,7 @@ namespace H2GpuLightmapper.Core.Payload
             o = o ?? new ExtractOptions();
             string work = ShellPaths.WorkOf(root);
             Directory.CreateDirectory(work);
-            var slot = SlotAlias.Ensure(work, Paths.AliasLocalAppData, Paths.AliasVolumeRoot);
+            var slot = SlotAlias.Ensure(EnsureFarmRoot(work), Paths.AliasLocalAppData, Paths.AliasVolumeRoot);
             var c = Manifest.InstComponent;
             var res = new InstEnsureResult { Root = SafeFs.Norm(root), Work = work, Slot = slot, InstDir = InstDir(work) };
             var eo = new ExtractOptions
@@ -282,7 +304,7 @@ namespace H2GpuLightmapper.Core.Payload
         {
             string work = ShellPaths.WorkOf(root);
             Directory.CreateDirectory(work);   // a bake needs it anyway; the slot alias must point at an existing WORK
-            var slot = SlotAlias.Ensure(work, Paths.AliasLocalAppData, Paths.AliasVolumeRoot);
+            var slot = SlotAlias.Ensure(EnsureFarmRoot(work), Paths.AliasLocalAppData, Paths.AliasVolumeRoot);     // 0.6.8: the farms' folder (Temp, re-created if deleted)
             var rep = new CheckReport { SlotBase = slot.SlotBase };
             var c = Manifest.InstComponent;
             string inst = DirOf(c, work);
@@ -309,7 +331,7 @@ namespace H2GpuLightmapper.Core.Payload
             {
                 var c = cc.Component;
                 bool inst = c.Target == PayloadManifest.TargetInst;
-                if (inst && slot == null) { Directory.CreateDirectory(work); slot = SlotAlias.Ensure(work, Paths.AliasLocalAppData, Paths.AliasVolumeRoot); }
+                if (inst && slot == null) { Directory.CreateDirectory(work); slot = SlotAlias.Ensure(EnsureFarmRoot(work), Paths.AliasLocalAppData, Paths.AliasVolumeRoot); }
                 string dir = inst ? DirOf(c, work) : RtDir(c);
                 if (cc.Result.MarkerBad || !Directory.Exists(dir))
                 {
@@ -322,6 +344,7 @@ namespace H2GpuLightmapper.Core.Payload
                 {
                     string sb = inst ? slot.SlotBase : null;
                     var rr = PayloadExtractor.RepairFiles(Source, c, dir, cc.Result.BadFiles, (mf, data) => inst ? SlotTransform(mf, data, sb) : data, ct);
+                    if (rr.VirusBlocked.Count > 0) throw Removed(c, dir, rr.VirusBlocked[0], false);
                     if (!rr.Ok) throw new IOException("repair of " + c.Name + " failed: " + string.Join("; ", rr.Failed));
                     if (inst) PayloadExtractor.WriteMarker(dir, c, SlotMarker(slot.SlotBase, slot));
                 }
@@ -357,14 +380,163 @@ namespace H2GpuLightmapper.Core.Payload
             return VerifyBeforeBake(root, ct, true);
         }
 
-        /// <summary>VerifyBeforeBake, then Repair if needed; throws when the payload is still bad afterwards.</summary>
+        /// <summary>0.6.8 RC (antivirus): how long to wait after this call (re)wrote runtime files before checking that they are still there
+        /// (an on-write scan removes a flagged file within seconds). 0 = no wait.</summary>
+        public int SettleMs = 2000;
+        /// <summary>Dev / tests only (--dev-simulate-quarantine): this INST-relative file ('/' or '\\') is deleted again right after every
+        /// (re)extraction of it, as an antivirus would. Null in every normal run.</summary>
+        public string SimulateQuarantineRel;
+        /// <summary>The files (component dir + '/' + rel) the last VerifyAndRepairBeforeBake re-extracted: one of them gone after the bake = it
+        /// vanished AGAIN after its one re-extraction (FindRemovedAfterBake records it; the next bake then refuses instead of extracting).</summary>
+        private HashSet<string> _lastRewritten = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// VerifyBeforeBake, then Repair if needed; throws when the payload is still bad afterwards. 0.6.8 RC (antivirus quarantine): every
+        /// file this call (re)wrote -- and every INST file of an extraction younger than 2 minutes -- is checked again after <see cref="SettleMs"/>;
+        /// a file that is gone (or blocked, ERROR_VIRUS_INFECTED / _DELETED) then, or that already vanished once before (the quarantine record)
+        /// and is missing again, throws <see cref="DefenderRemovedException"/> with the user-facing text: it is re-extracted ONCE, never again.
+        /// </summary>
         public CheckReport VerifyAndRepairBeforeBake(string root, CancellationToken ct = default(CancellationToken))
         {
+            string work = ShellPaths.WorkOf(root);
+            var ic = Manifest.InstComponent;
+            string rec = QuarantineGuard.RecordPath(ShellPaths.InstParentOf(work), ic.DirName);
+            var once = QuarantineGuard.LoadRecord(rec);
             var rep = VerifyBeforeBake(root, ct);
-            if (rep.Ok) return rep;
-            var after = Repair(root, rep, ct);
-            if (!after.Ok) throw new IOException("the payload is damaged and could not be repaired: " + after);
-            return VerifyBeforeBake(root, ct);
+            foreach (var cc in rep.Components)
+                foreach (var rel in cc.Result.Missing.Concat(cc.Result.VirusBlocked))
+                    if (once.Contains(QuarantineGuard.Key(cc.Component, rel))) throw Removed(cc.Component, cc.Dir, rel, false);
+            var watch = new List<Tuple<PayloadComponent, string, string>>();      // (component, dir, rel) written by this call
+            _lastRewritten = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string instDir = DirOf(ic, work);
+            if (IsFreshExtraction(instDir)) foreach (var f in ic.Files) watch.Add(Tuple.Create(ic, instDir, f.Path));
+            if (!rep.Ok)
+            {
+                CheckReport after;
+                try { after = Repair(root, rep, ct); }
+                catch (DefenderRemovedException e) { Remember(rec, once, e.FilePath, rep); throw; }
+                foreach (var cc in rep.Components.Where(x => !x.Result.Ok))
+                    foreach (var rel in cc.Result.MarkerBad ? cc.Component.Files.Select(f => f.Path).ToList() : cc.Result.BadFiles)
+                    {
+                        watch.Add(Tuple.Create(cc.Component, cc.Dir, rel));
+                        _lastRewritten.Add(QuarantineGuard.Key(cc.Component, rel));
+                    }
+                if (!after.Ok)
+                {
+                    foreach (var cc in after.Components)
+                    {
+                        var gone = cc.Result.Missing.Concat(cc.Result.VirusBlocked).FirstOrDefault();
+                        if (gone != null) { once.Add(QuarantineGuard.Key(cc.Component, gone)); QuarantineGuard.SaveRecord(rec, once); throw Removed(cc.Component, cc.Dir, gone, false); }
+                    }
+                    throw new IOException("the payload is damaged and could not be repaired: " + after);
+                }
+            }
+            if (watch.Count > 0)
+            {
+                if (!string.IsNullOrEmpty(SimulateQuarantineRel))
+                {
+                    string sim = SimulateQuarantineRel.Replace('\\', '/');
+                    var w = watch.FirstOrDefault(x => x.Item1 == ic && string.Equals(x.Item3, sim, StringComparison.OrdinalIgnoreCase));
+                    if (w != null) SafeFs.TryDeleteFile(Path.Combine(w.Item2, w.Item3.Replace('/', '\\')));
+                }
+                if (SettleMs > 0) ct.WaitHandle.WaitOne(SettleMs);
+                ct.ThrowIfCancellationRequested();
+                foreach (var w in watch)
+                {
+                    if (QuarantineGuard.Probe(Path.Combine(w.Item2, w.Item3.Replace('/', '\\'))) == null) continue;
+                    once.Add(QuarantineGuard.Key(w.Item1, w.Item3));
+                    QuarantineGuard.SaveRecord(rec, once);
+                    throw Removed(w.Item1, w.Item2, w.Item3, false);
+                }
+            }
+            var final = VerifyBeforeBake(root, ct);
+            if (!final.Ok)
+            {
+                foreach (var cc in final.Components)
+                {
+                    var gone = cc.Result.Missing.Concat(cc.Result.VirusBlocked).FirstOrDefault();
+                    if (gone != null) { once.Add(QuarantineGuard.Key(cc.Component, gone)); QuarantineGuard.SaveRecord(rec, once); throw Removed(cc.Component, cc.Dir, gone, false); }
+                }
+                throw new IOException("the payload is damaged and could not be repaired: " + final);
+            }
+            if (once.Count > 0) QuarantineGuard.SaveRecord(rec, new string[0]);     // everything verifies again (restored / allowed): forget it
+            return final;
+        }
+
+        /// <summary>0.6.8 RC: after a bake, the runtime files (every INST file, the key runtime binaries) that are missing or blocked NOW --
+        /// removed by the antivirus while the bake ran. The next bake re-extracts such a file ONCE; one that was already re-extracted before
+        /// this bake (it vanished again) is recorded, so the next bake refuses before it starts.
+        /// Returns (full path, manifest md5) pairs; empty when everything is there.</summary>
+        public List<KeyValuePair<string, string>> FindRemovedAfterBake(string root)
+        {
+            var r = new List<KeyValuePair<string, string>>();
+            string work = ShellPaths.WorkOf(root);
+            var ic = Manifest.InstComponent;
+            string rec = QuarantineGuard.RecordPath(ShellPaths.InstParentOf(work), ic.DirName);
+            var once = QuarantineGuard.LoadRecord(rec);
+            bool rec2 = false;
+            var sets = new List<Tuple<PayloadComponent, string, IEnumerable<PayloadFile>>> { Tuple.Create(ic, DirOf(ic, work), (IEnumerable<PayloadFile>)ic.Files) };
+            foreach (var rc in Manifest.RtComponents) sets.Add(Tuple.Create(rc, RtDir(rc), rc.Files.Where(IsKeyFile)));
+            foreach (var s in sets)
+            {
+                if (!Directory.Exists(s.Item2)) continue;
+                foreach (var f in s.Item3)
+                {
+                    string p = Path.Combine(s.Item2, f.Path.Replace('/', '\\'));
+                    if (QuarantineGuard.Probe(p) == null) continue;
+                    r.Add(new KeyValuePair<string, string>(p, f.Md5));
+                    if (_lastRewritten.Contains(QuarantineGuard.Key(s.Item1, f.Path))) { once.Add(QuarantineGuard.Key(s.Item1, f.Path)); rec2 = true; }
+                }
+            }
+            if (rec2) QuarantineGuard.SaveRecord(rec, once);
+            return r;
+        }
+
+        /// <summary>0.6.8 RC: call BEFORE StartupEnsure on the way to a bake (StartupEnsure's quick check would otherwise re-extract it silently):
+        /// a file of the quarantine record (it vanished after its one re-extraction) that is still missing or blocked throws
+        /// <see cref="DefenderRemovedException"/>. The explicit Repair runtime (RepairEverything) does not call this: it re-extracts.</summary>
+        public void RefuseIfRemovedAgain(string root)
+        {
+            if (root == null) return;
+            string work = ShellPaths.WorkOf(root);
+            var ic = Manifest.InstComponent;
+            var once = QuarantineGuard.LoadRecord(QuarantineGuard.RecordPath(ShellPaths.InstParentOf(work), ic.DirName));
+            if (once.Count == 0) return;
+            var comps = new List<Tuple<PayloadComponent, string>> { Tuple.Create(ic, DirOf(ic, work)) };
+            foreach (var rc in Manifest.RtComponents) comps.Add(Tuple.Create(rc, RtDir(rc)));
+            foreach (var key in once)
+                foreach (var c in comps)
+                {
+                    if (!key.StartsWith(c.Item1.DirName + "/", StringComparison.OrdinalIgnoreCase) || !Directory.Exists(c.Item2)) continue;
+                    string rel = key.Substring(c.Item1.DirName.Length + 1);
+                    if (c.Item1.Find(rel) == null) continue;
+                    if (QuarantineGuard.Probe(Path.Combine(c.Item2, rel.Replace('/', '\\'))) != null) throw Removed(c.Item1, c.Item2, rel, false);
+                }
+        }
+
+        private DefenderRemovedException Removed(PayloadComponent c, string dir, string rel, bool duringBake)
+        {
+            var f = c.Find(rel);
+            string p = Path.Combine(dir, rel.Replace('/', '\\'));
+            return new DefenderRemovedException(p, QuarantineGuard.Message(p, f == null ? null : f.Md5, Manifest.AppVersion, duringBake));
+        }
+
+        private static void Remember(string rec, HashSet<string> once, string fullPath, CheckReport rep)
+        {
+            foreach (var cc in rep.Components)
+                foreach (var rel in cc.Result.BadFiles)
+                    if (string.Equals(Path.Combine(cc.Dir, rel.Replace('/', '\\')), fullPath, StringComparison.OrdinalIgnoreCase)) once.Add(QuarantineGuard.Key(cc.Component, rel));
+            QuarantineGuard.SaveRecord(rec, once);
+        }
+
+        private static bool IsFreshExtraction(string dir)
+        {
+            try
+            {
+                string m = Path.Combine(dir, PayloadExtractor.CompleteMarker);
+                return File.Exists(m) && (DateTime.UtcNow - File.GetLastWriteTimeUtc(m)) < TimeSpan.FromMinutes(2);
+            }
+            catch (IOException) { return false; }
         }
 
         // ------------------------------------------------------------------ resolve
@@ -394,6 +566,7 @@ namespace H2GpuLightmapper.Core.Payload
                 BoundsDb = bdb == null ? null : Path.Combine(inst, bdb.Path.Replace('/', '\\')),
                 ScanSceneryPy = instFile("standalone/scan_scenery_bounds.py"),
                 GpuCheckExe = gc == null ? null : Path.Combine(inst, gc.Path.Replace('/', '\\')),
+                FarmRoot = Manifest.FarmsInTemp ? ShellPaths.TempOf(work) : null,
             };
         }
 

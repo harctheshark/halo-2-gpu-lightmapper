@@ -72,6 +72,50 @@ namespace H2GpuLightmapper.Core.Safety
 
         public static string MarkersDir(string work) { return System.IO.Path.Combine(ShellPaths.StandaloneOf(work), MarkersFolder); }
 
+        private static readonly Regex KeepMarkerRx = new Regex(@"^(?<k>install|toolwb)_w(?<w>\d{2,3})\.json$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>0.6.8: the KEEP path of the shell's install marker for worker <paramref name="w"/> (lmw_install --marker). Never in Temp.</summary>
+        public static string InstallMarkerPath(string work, int w) { return System.IO.Path.Combine(MarkersDir(work), "install_w" + w.ToString("D2", CultureInfo.InvariantCulture) + ".json"); }
+        /// <summary>0.6.8: the KEEP marker the shell writes before gpu_bake's tool write-back fallback runs (that engine path keeps its own marker
+        /// in the farm, i.e. in Temp, which the user may delete): it names the set and the _TAGBAK_ui backup made before the bake.</summary>
+        public static string ToolWbMarkerPath(string work, int w) { return System.IO.Path.Combine(MarkersDir(work), "toolwb_w" + w.ToString("D2", CultureInfo.InvariantCulture) + ".json"); }
+
+        public static void WriteToolWbMarker(string work, int w, TagSet set, string uiBackupDir, string runTag, DateTime now)
+        {
+            Directory.CreateDirectory(MarkersDir(work));
+            SafeFs.WriteAllTextAtomic(ToolWbMarkerPath(work, w), Json.Write(new JObj().Add("kind", "tool_writeback").Add("started", now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))
+                .Add("run", runTag).Add("target_dir", set.TagDir).Add("prefix", set.Prefix).Add("ui_backup", uiBackupDir)
+                .Add("note", "gpu_bake's tool write-back fallback is writing this lightmap set; if this file is still here after the app restarts, use Restore previous lightmap"), true));
+        }
+
+        /// <summary>The tool write-back ended and was verified: its KEEP marker is set aside as .done_&lt;ts&gt; (never deleted).</summary>
+        public static bool FinishToolWbMarker(string work, int w, DateTime now)
+        {
+            string p = ToolWbMarkerPath(work, w);
+            if (!File.Exists(p)) return false;
+            try { SafeFs.MoveNoReplace(p, p + ".done_" + now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture)); return true; }
+            catch (IOException) { return false; }
+        }
+
+        private static RecoveryItem ClassifyToolWb(string marker, int w)
+        {
+            var it = new RecoveryItem { Kind = RecoveryKind.ToolWriteBackMarker, Path = marker, Worker = w };
+            try
+            {
+                var j = Json.ParseObj(Json.ReadAllTextShared(marker));
+                it.TargetDir = j.Str("target_dir"); it.Prefix = j.Str("prefix"); it.BackupDir = j.Str("ui_backup");
+                if (it.TargetDir == null || it.Prefix == null) it.Unparsed = true;
+                it.Message = "a tool write-back of " + (it.Prefix ?? "?") + " (farm_w" + w + ", started " + j.Str("started") + ") did not finish -- use 'Restore previous lightmap'"
+                             + (it.Prefix != null ? " for " + it.Prefix : "") + " (a full restore of that set clears this marker)";
+            }
+            catch (Exception e) when (e is IOException || e is FormatException || e is UnauthorizedAccessException)
+            {
+                it.Unparsed = true;
+                it.Message = "unreadable marker " + marker + ": " + e.Message;
+            }
+            return it;
+        }
+
         /// <param name="ownLockContent">The content of a GPU lock THIS caller holds (a TagWriteLease): it does not make the
         /// markers "in use".</param>
         public static List<RecoveryItem> Scan(string work, IProcessProbe probe = null, string ownLockContent = null)
@@ -119,22 +163,36 @@ namespace H2GpuLightmapper.Core.Safety
                 else if (it.Worker > 0 && busyFarms.TryGetValue(it.Worker, out w)) { it.InUse = true; it.InUseWhy = w; }
             };
 
-            for (int w = Guards.FirstWorker; w <= Guards.LastWorker; w++)
-            {
-                if (!Guards.WorkerAllowed(w)) continue;
-                string farm = System.IO.Path.Combine(work, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture));
-                string marker = System.IO.Path.Combine(farm, MarkerName);
-                if (!File.Exists(marker)) continue;
-                var it = Classify(marker, w, false);
-                busy(it);
-                items.Add(it);
-            }
+            // 0.6.8: gpu_bake's own text marker (its tool write-back fallback) is in the farm, which is now in Temp; the 0.6.7 farms in WORK
+            // are still read (one release: an install a 0.6.7 bake left unfinished)
+            foreach (var farmRoot in new[] { work, ShellPaths.TempOf(work) })
+                for (int w = Guards.FirstWorker; w <= Guards.LastWorker; w++)
+                {
+                    if (!Guards.WorkerAllowed(w)) continue;
+                    string farm = System.IO.Path.Combine(farmRoot, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture));
+                    string marker = System.IO.Path.Combine(farm, MarkerName);
+                    if (!File.Exists(marker)) continue;
+                    var it = Classify(marker, w, false);
+                    busy(it);
+                    items.Add(it);
+                }
             string md = MarkersDir(work);
             if (Directory.Exists(md))
             {
                 foreach (var f in Directory.GetFiles(md).Where(f => f.EndsWith(RestoreMarkerSuffix, StringComparison.OrdinalIgnoreCase)).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
                 {
                     var it = Classify(f, 0, true);
+                    busy(it);
+                    items.Add(it);
+                }
+                // 0.6.8: the shell's install markers live in KEEP (install_wNN.json = lmw_install's JSON marker; toolwb_wNN.json = the shell's
+                // record of a running tool write-back fallback), never in Temp: deleting Temp can never hide an unfinished tag write
+                foreach (var f in Directory.GetFiles(md).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                {
+                    var m = KeepMarkerRx.Match(System.IO.Path.GetFileName(f));
+                    if (!m.Success) continue;
+                    int w = int.Parse(m.Groups["w"].Value, CultureInfo.InvariantCulture);
+                    var it = m.Groups["k"].Value.Equals("install", StringComparison.OrdinalIgnoreCase) ? Classify(f, w, false) : ClassifyToolWb(f, w);
                     busy(it);
                     items.Add(it);
                 }

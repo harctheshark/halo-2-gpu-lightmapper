@@ -35,6 +35,7 @@ namespace H2GpuLightmapper.Tests
             yield return T("dry: W2 2004 Exact Vertex Lighting?: unticked plans carry no -ExactVertexLighting; ticked = + it on every gpu_bake argv (after -Responsive), the note, no other step changes", ExactVertexPlan);
             yield return T("dry: Scenery Multi Permutation Fix: unticked plans carry no -SceneryOwnPermutationOnly; ticked = + it last on every gpu_bake argv (after the other two), the note, warnings for AO / probes, no other step changes", SceneryPermPlan);
             yield return T("dry: Scenery Multi Permutation Fix is engine-gated: a payload whose gpu_bake.ps1 lacks the parameter refuses the flag (exit 2, 'Needs engine 0.6.4 or newer.'), never plans it; Custom uses engine_custom's own answer", SceneryPermGate);
+            yield return T("dry 0.6.8: Re-bake speedup (--rebake-hint): GPULM_SKY_HINT=1 on the gpu_bake step of a REUSE bake only, argv unchanged; a fresh capture gets nothing and a warning; off = no env", RebakeHintPlan);
             yield return T("dry: DF64 Compatibility mode: every plan states the precision (JSON + text); --assume-no-fp64 plans Compatibility mode on an engine with it and refuses on one without; --force-compat = GPULM_COMPAT=1 on exactly the GPU steps, argv unchanged, refused (dry too) on an engine without the mode", Df64Plan);
             yield return T("dry: W2 run folder =<ts>_<label <= 20 chars> and the run's install backup is 'tagbak' (the worker's [4b] backup keeps its name)", RunFolderPlan);
             yield return T("dry: X2 live VRAM: a 4090 with <= 3 GiB held by others = today's argv; a game on top shrinks -MaxCallsPerPart with a plain note", LiveVramPlan);
@@ -386,7 +387,7 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(Path.Combine(q.Str("runDir"), "tagbak"), q.Str("installBackupDir"), "Standard + probes: the run's install backup = RUN/tagbak");
             var pr = Plan(r, "--scenario", Tri, "--bsp", "triplicate", "--probe-points", "11", "--dev-probes", "--mode", "probes");
             Assert.Eq(Path.Combine(pr.Str("runDir"), "tagbak"), pr.Str("installBackupDir"), "Lightprobes only: RUN/tagbak");
-            Assert.Eq(Path.Combine(r.Farm(200), "tag_backup_before_writeback"), p.Str("installBackupDir"), "Lightmap Only: [4b]'s worker backup keeps its name");
+            Assert.Eq(Path.Combine(p.Str("runDir"), "tagbak"), p.Str("installBackupDir"), "Lightmap Only: 0.6.8 the run's RUN/tagbak too (never the farm: it is temporary)");
             Assert.True(!Json.Write(q, false).Contains("tag_backup_before_writeback"), "no long run-folder backup name left in the Standard + probes plan");
         }
 
@@ -447,7 +448,9 @@ namespace H2GpuLightmapper.Tests
             var p24 = plan("24138");
             Assert.Seq(baseArgs, Args(Step(p24, "gpu-bake")), "24 GB: the gpu_bake argv is byte-for-byte the production one");
             Func<JObj, string> argv = st => st.Arr("args") == null ? "" : string.Join(" ", Args(st));
-            Assert.Seq(Steps(none).Select(argv).ToList(), Steps(p24).Select(argv).ToList(), "24 GB: every step's argv is unchanged");
+            // 0.6.8: the install argv names the (predicted, time-stamped) run folder -- two dry runs may straddle a second, so it is compared as <RUN>
+            Func<JObj, List<string>> allArgv = pl => Steps(pl).Select(argv).Select(s => s.Replace(pl.Str("runDir"), "<RUN>")).ToList();
+            Assert.Seq(allArgv(none), allArgv(p24), "24 GB: every step's argv is unchanged");
             Assert.Eq(0L, p24.Obj("gpuLimits").Long("maxCallsPerPart"), "24 GB: maxCallsPerPart 0 (not passed)");
             Assert.Eq(0L, p24.Obj("gpuLimits").Long("bufCapMB"), "24 GB: bufCapMB 0 (not passed)");
             // 16 GB: -MaxCallsPerPart n appended after the production argv, nothing else
@@ -494,13 +497,18 @@ namespace H2GpuLightmapper.Tests
             var edge = dry(281, new string[0]);
             Assert.Eq(0, edge.Exit, "281 points still plans: " + edge);
             Assert.True(edge.Json().Arr("warnings").Cast<string>().Any(w => w.Contains("close to the 281")), "but warns that the largest chart shares the buffer");
-            var over = dry(282, new string[0]);
-            Assert.Eq(2, over.Exit, "282 points refused before anything: " + over);
+            // rc069_a2: more than 281 points are baked by the engine in exact batches (a notice, no refusal); only Halo 2's own 1,024 per BSP is refused
+            var batched = dry(282, new string[0]);
+            Assert.Eq(0, batched.Exit, "282 points plans (exact batches): " + batched);
+            Assert.True(batched.Json().Arr("warnings").Cast<string>().Any(w => w.Contains("282 light probe points") && w.Contains("2 batches")), "with a notice that names the batches");
+            Assert.Eq(0, dry(1024, new[] { "--mode", "probes" }).Exit, "Lightprobes only: 1,024 points (Halo 2's own limit) plans");
+            var over = dry(1025, new string[0]);
+            Assert.Eq(2, over.Exit, "1,025 points refused before anything: " + over);
             string why = over.Json().Str("refused");
-            Assert.Contains(why, "282 light probe points", "reason names the count");
-            Assert.Contains(why, "at most 281", "reason names the limit");
+            Assert.Contains(why, "1,025 light probe points", "reason names the count");
+            Assert.Contains(why, "at most 1,024", "reason names the limit");
             Assert.Contains(why, "--mode lightmap", "reason names the alternative");
-            Assert.Eq(2, dry(1024, new[] { "--mode", "probes" }).Exit, "Lightprobes only: 1,024 points refused too");
+            Assert.Eq(2, dry(1025, new[] { "--mode", "probes" }).Exit, "Lightprobes only: 1,025 points refused too");
             Assert.Eq(0, dry(1024, new[] { "--mode", "lightmap" }).Exit, "Lightmap Only bakes no probes: not refused");
         }
 
@@ -614,7 +622,7 @@ namespace H2GpuLightmapper.Tests
             var p = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap");
             // U3: stage-only bake, then the SHELL installs the direct writer's stage with [4b]'s command (Retry); the tool
             // write-back fallback (the production -WriteBack argv) only when there is no stage
-            Assert.Seq(new[] { "backup", "gpu-bake", "stage-or-tool-fallback", "install", "verify" }, Ids(p), "steps");
+            Assert.Seq(new[] { "backup", "gpu-bake", "stage-or-tool-fallback", "copy-final-stage", "install", "verify" }, Ids(p), "steps (0.6.8: the stage is copied to KEEP before the install)");
             Assert.Seq(new[] { "Preflight", "Backup", "Capture", "Derive", "GpuBake", "TagWriter", "Install", "Verify" }, p.Arr("uiSteps").Cast<string>().ToList(), "UI steps");
             var g = Step(p, "gpu-bake");
             Assert.Eq(Path.Combine(C.PwshDir, "pwsh.exe"), g.Str("exe"), "exe = rt pwsh");
@@ -625,17 +633,21 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(true, g.Obj("capture").Bool("fresh"), "a new capture");
             Assert.Eq(200L, p.Long("worker"), "worker 200");
             Assert.Eq("would be allocated", p.Str("workerNote"), "peeked, not allocated");
-            Assert.Eq(Path.Combine(r.Farm(200), "writeback_in_progress.txt"), p.Str("marker"), "marker in the farm");
-            Assert.Eq(Path.Combine(r.Farm(200), "tagw_stage"), p.Str("installStage"), "the shell installs OUT\\tagw_stage");
-            Assert.Eq(Path.Combine(r.Farm(200), "tag_backup_before_writeback"), p.Str("installBackupDir"), "[4b]'s backup dir");
+            string run0 = p.Str("runDir");
+            Assert.Eq(Path.Combine(r.Work, @"standalone\markers\install_w200.json"), p.Str("marker"), "0.6.8: the install marker is in KEEP, never in the farm");
+            Assert.Eq(Path.Combine(run0, "final_stage"), p.Str("installStage"), "0.6.8: the shell installs the KEEP copy RUN\\final_stage");
+            Assert.Eq(Path.Combine(run0, "tagbak"), p.Str("installBackupDir"), "0.6.8: the backup is RUN\\tagbak");
+            var cpf = Step(p, "copy-final-stage").Obj("params");
+            Assert.Eq(Path.Combine(r.Farm(200), "tagw_stage"), cpf.Str("from"), "copied from OUT\\tagw_stage");
+            Assert.Eq(Path.Combine(run0, "final_stage"), cpf.Str("to"), "to RUN\\final_stage");
             var f = Step(p, "stage-or-tool-fallback");
             Assert.Eq(Path.Combine(r.Farm(200), "tagw_stage", "tagw_report.json"), f.Obj("params").Str("report"), "the stage report");
             Assert.Seq(new[] { "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-WriteBack", "-SkipCapture", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct" },
                        f.Obj("params").Arr("fallbackArgs").Cast<string>().ToList(), "fallback = the production -WriteBack argv on this capture");
             var ins = Step(p, "install");
-            Assert.Seq(new[] { Path.Combine(Inst(r), @"engine_v373\v043-tagwriter\lmw_install.py"), "install", "--stage", Path.Combine(r.Farm(200), "tagw_stage"), "--target-dir", r.CycDir,
-                               "--backup-dir", Path.Combine(r.Farm(200), "tag_backup_before_writeback"), "--marker", Path.Combine(r.Farm(200), "writeback_in_progress.txt"),
-                               "--auto-backup-root", Path.Combine(r.Work, "_TAGBAK_auto") }, Args(ins), "lmw_install argv = [4b]'s (argparse: same values)");
+            Assert.Seq(new[] { Path.Combine(Inst(r), @"engine_v373\v043-tagwriter\lmw_install.py"), "install", "--stage", Path.Combine(run0, "final_stage"), "--target-dir", r.CycDir,
+                               "--backup-dir", Path.Combine(run0, "tagbak"), "--marker", Path.Combine(r.Work, @"standalone\markers\install_w200.json") },
+                       Args(ins), "lmw_install argv: the engine's own lmw_install on KEEP inputs, no --auto-backup-root (0.6.8: _TAGBAK_auto retired)");
             Assert.Eq(Path.Combine(C.PyDir, "py.exe"), ins.Str("exe"), "the bundle py (= gpu_bake's `& py`)");
             Assert.Eq(true, ins.Bool("tagWrite"), "install is a tag write");
             var e = p.Obj("env");
@@ -660,19 +672,19 @@ namespace H2GpuLightmapper.Tests
         {
             var r = C.NewRoot();
             var p = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "low", "--no-install");
-            Assert.Seq(new[] { "gpu-bake", "stage-check" }, Ids(p), "steps (R1: the stage-only result is checked)");
+            Assert.Seq(new[] { "gpu-bake", "stage-check", "copy-final-stage" }, Ids(p), "steps (R1: the stage-only result is checked; 0.6.8: then copied to KEEP)");
             Assert.Seq(Pw(r, @"engine_v373\gpu_bake.ps1", "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "low", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct"),
                        Args(Step(p, "gpu-bake")), "stage-only argv (no -WriteBack)");
             Assert.Eq(Path.Combine(r.Farm(200), "tagw_stage", "tagw_report.json"), Step(p, "stage-check").Obj("params").Str("report"), "stage-check reads OUT\\tagw_stage\\tagw_report.json");
             Assert.Eq(false, p.Bool("install"), "no install");
-            Assert.Eq(Path.Combine(r.Farm(200), "tagw_stage"), p.Str("finalStage"), "final stage = OUT\\tagw_stage");
+            Assert.Eq(Path.Combine(p.Str("runDir"), "final_stage"), p.Str("finalStage"), "0.6.8: final stage = the KEEP copy RUN\\final_stage (the farm is temporary)");
         }
 
         private static void LightmapAo()
         {
             var r = C.NewRoot();
             var p = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--ao");
-            Assert.Seq(new[] { "backup", "gpu-bake", "stage-ready", "ao-trace", "ao-apply", "ao-stage", "install", "verify" }, Ids(p), "steps");
+            Assert.Seq(new[] { "backup", "gpu-bake", "stage-ready", "ao-trace", "ao-apply", "ao-stage", "copy-final-stage", "install", "verify" }, Ids(p), "steps");
             Assert.NotContains(string.Join(" ", Args(Step(p, "gpu-bake"))), "-WriteBack ", "the bake is stage-only");
             string drv = Path.Combine(Inst(r), @"_research\ao\gpu_ao.py"), eng = Path.Combine(Inst(r), @"_research\ao\dev_AO"), farm = r.Farm(200);
             var common = new[] { "--farm", farm, "--worker", "200", "--scenario", Cyc, "--bsp", "cyclotron", "--engine", eng };
@@ -685,10 +697,10 @@ namespace H2GpuLightmapper.Tests
                 Assert.Eq(r.Work, Step(p, id).Str("cwd"), id + " cwd");
             }
             string stage = Path.Combine(farm, @"ao\s10e05\tagw_stage");
+            Assert.Eq(stage, Step(p, "copy-final-stage").Obj("params").Str("from"), "the AO layer's stage is copied to KEEP");
             var ins = Step(p, "install");
-            Assert.Seq(new[] { Path.Combine(Inst(r), @"engine_v373\v043-tagwriter\lmw_install.py"), "install", "--stage", stage, "--target-dir", r.CycDir,
-                               "--backup-dir", Path.Combine(p.Str("runDir"), "tagbak"), "--marker", Path.Combine(farm, "writeback_in_progress.txt"),
-                               "--auto-backup-root", Path.Combine(r.Work, "_TAGBAK_auto") }, Args(ins), "lmw_install argv");
+            Assert.Seq(new[] { Path.Combine(Inst(r), @"engine_v373\v043-tagwriter\lmw_install.py"), "install", "--stage", Path.Combine(p.Str("runDir"), "final_stage"), "--target-dir", r.CycDir,
+                               "--backup-dir", Path.Combine(p.Str("runDir"), "tagbak"), "--marker", Path.Combine(r.Work, @"standalone\markers\install_w200.json") }, Args(ins), "lmw_install argv");
             Assert.Eq(true, ins.Bool("tagWrite"), "install is a tag write");
         }
 
@@ -708,11 +720,11 @@ namespace H2GpuLightmapper.Tests
         {
             var r = C.NewRoot();
             var p = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--probe-points", "0");
-            Assert.Seq(new[] { "map-query", "backup", "gpu-bake", "stage-or-tool-fallback", "install", "verify" }, Ids(p), "steps (U3: the shell installs)");
+            Assert.Seq(new[] { "map-query", "backup", "gpu-bake", "stage-or-tool-fallback", "copy-final-stage", "install", "verify" }, Ids(p), "steps (U3: the shell installs)");
             Assert.Eq(false, p.Bool("probePath"), "no probes");
             Assert.Eq(null, p["probeWorker"], "no probe worker");
             Assert.True(!Args(Step(p, "gpu-bake")).Contains("-WriteBack"), "stage-only bake (U3)");
-            Assert.Eq(Path.Combine(r.Farm(200), "tagw_stage"), p.Str("installStage"), "the shell installs the direct writer's stage");
+            Assert.Eq(Path.Combine(p.Str("runDir"), "final_stage"), p.Str("installStage"), "the shell installs the KEEP copy of the direct writer's stage");
             var mq = Step(p, "map-query");
             Assert.Eq(Path.Combine(C.PyDir, "py.exe"), mq.Str("exe"), "map query by the bundle py");
             var ma = Args(mq);
@@ -747,7 +759,7 @@ namespace H2GpuLightmapper.Tests
                                "--bsp", Path.Combine(r.TriDir, "triplicate.scenario_structure_bsp"), "--json", Path.Combine(run, "final_stage_validate.json") }, Args(Step(p, "validate-final")), "lmw_validate argv");
             var ins = Args(Step(p, "install"));
             Assert.Eq(Path.Combine(run, "final_stage"), ins[ins.IndexOf("--stage") + 1], "ONE install of RUN\\final_stage");
-            Assert.Eq(Path.Combine(r.Farm(200), "writeback_in_progress.txt"), ins[ins.IndexOf("--marker") + 1], "marker in farm N");
+            Assert.Eq(Path.Combine(r.Work, @"standalone\markers\install_w200.json"), ins[ins.IndexOf("--marker") + 1], "marker in KEEP (worker N)");
         }
 
         private static void StandardAoProbes()
@@ -776,7 +788,7 @@ namespace H2GpuLightmapper.Tests
                                "--sh", Path.Combine(run, "probes", ltmp), "--probes", Path.Combine(run, @"probes\probes.bin"), "--h2-root", r.Root, "--name", ltmp }, Args(Step(p, "sh-single")), "single argv");
             var ins = Args(Step(p, "install"));
             Assert.Eq(Path.Combine(run, "probe_stage"), ins[ins.IndexOf("--stage") + 1], "ltmp-only install");
-            Assert.Eq(Path.Combine(r.Farm(200), "writeback_in_progress.txt"), ins[ins.IndexOf("--marker") + 1], "marker in the probe farm (recovery scans 200-299)");
+            Assert.Eq(Path.Combine(r.Work, @"standalone\markers\install_w200.json"), ins[ins.IndexOf("--marker") + 1], "marker in KEEP (the probe worker's number; recovery scans the markers folder)");
         }
 
         private static void Custom()
@@ -934,6 +946,27 @@ namespace H2GpuLightmapper.Tests
             if (!Directory.Exists(dir)) return new List<string> { "(absent)" };
             return Directory.GetFileSystemEntries(dir, "*", SearchOption.AllDirectories).OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .Select(x => x + "|" + (File.Exists(x) ? new FileInfo(x).Length + "|" + File.GetLastWriteTimeUtc(x).Ticks : "dir")).ToList();
+        }
+
+        private static void RebakeHintPlan()
+        {
+            var r = C.NewRoot();
+            // a fresh capture: nothing to reuse -> no variable, a warning
+            var fresh = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--rebake-hint");
+            Assert.True(Step(fresh, "gpu-bake").Obj("envExtra").Str("GPULM_SKY_HINT") == null, "fresh capture: no GPULM_SKY_HINT");
+            Assert.True(fresh.Arr("warnings").Cast<string>().Any(w => w.Contains("Re-bake speedup") && w.Contains("no effect")), "fresh capture: the plan warns");
+            // a reuse bake (a dev unrecorded capture in worker 200): the variable on gpu-bake only, the argv unchanged
+            Directory.CreateDirectory(r.Farm(200));
+            File.WriteAllText(Path.Combine(r.Farm(200), "capture_id.json"), "{\"soup_crc32\": \"12345678\"}");
+            string[] reuse = { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--reuse-capture", "--reuse-unrecorded", "--worker", "200" };
+            var off = Plan(r, reuse);
+            var on = Plan(r, reuse.Concat(new[] { "--rebake-hint" }).ToArray());
+            Assert.Eq("1", Step(on, "gpu-bake").Obj("envExtra").Str("GPULM_SKY_HINT"), "reuse: GPULM_SKY_HINT=1 on gpu-bake");
+            Assert.Eq(0, Step(off, "gpu-bake").Obj("envExtra").Count, "unticked: no env");
+            Assert.Seq(Args(Step(off, "gpu-bake")), Args(Step(on, "gpu-bake")), "the gpu_bake argv is unchanged");
+            foreach (var st in Steps(on).Where(s => s.Str("id") != "gpu-bake"))
+                Assert.True(st.Obj("envExtra") == null || st.Obj("envExtra").Str("GPULM_SKY_HINT") == null, st.Str("id") + ": no hint");
+            Assert.True(on.Arr("notes").Cast<string>().Any(n => n.Contains("re-bake speedup on")), "the plan notes it");
         }
 
         private static void ReadOnlyAndReuse()

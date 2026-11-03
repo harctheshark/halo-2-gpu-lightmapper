@@ -226,6 +226,165 @@ namespace H2GpuLightmapper.Core.Util
             return n;
         }
 
+        // ---------------------------------------------------------------- 0.6.8 bounded temp: long-path, link-aware tree removal
+
+        /// <summary>The extended-length spelling (\\?\C:\...) of a drive-absolute path, so a tree deeper than MAX_PATH (a .map overlay of the whole
+        /// kit) can be walked and deleted. A UNC path gets \\?\UNC\.</summary>
+        public static string Long(string path)
+        {
+            if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) return path;
+            string full = Path.GetFullPath(path);
+            if (full.StartsWith(@"\\", StringComparison.Ordinal)) return @"\\?\UNC\" + full.Substring(2);
+            return @"\\?\" + full;
+        }
+
+        /// <summary>The ordinary spelling of a path that may carry the \\?\ prefix.</summary>
+        public static string Short(string path)
+        {
+            if (path.StartsWith(@"\\?\UNC\", StringComparison.Ordinal)) return @"\\" + path.Substring(8);
+            if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) return path.Substring(4);
+            return path;
+        }
+
+        /// <summary>Every reparse point at or below <paramref name="dir"/> (long-path safe), found WITHOUT following any: a reparse point is
+        /// reported and never entered. Ordinary spellings are returned.</summary>
+        public static List<string> FindReparsePointsDeep(string dir, int max = int.MaxValue)
+        {
+            var hits = new List<string>();
+            string top = Long(Norm(dir));
+            if (IsReparsePoint(top)) { hits.Add(Short(top)); return hits; }
+            var stack = new Stack<string>();
+            stack.Push(top);
+            while (stack.Count > 0 && hits.Count < max)
+            {
+                string d = stack.Pop();
+                foreach (var e in new DirectoryInfo(d).EnumerateFileSystemInfos())
+                {
+                    if ((e.Attributes & FileAttributes.ReparsePoint) != 0) { hits.Add(Short(e.FullName)); if (hits.Count >= max) break; continue; }
+                    if ((e.Attributes & FileAttributes.Directory) != 0) stack.Push(e.FullName);
+                }
+            }
+            return hits;
+        }
+
+        /// <summary>
+        /// Removes ONE link (junction, directory or file symbolic link) itself -- RemoveDirectory / DeleteFile on the reparse point, which never
+        /// touches anything the link points at. Refuses a path that is not a reparse point.
+        /// </summary>
+        public static void UnlinkOne(string link)
+        {
+            string lp = Long(link);
+            uint a = GetFileAttributesW(lp);
+            if (a == INVALID_FILE_ATTRIBUTES) return;
+            if ((a & FILE_ATTRIBUTE_REPARSE_POINT) == 0) throw new InvalidOperationException("refused: " + link + " is not a link");
+            bool ok = (a & FILE_ATTRIBUTE_DIRECTORY) != 0 ? RemoveDirectoryW(lp) : DeleteFileW(lp);
+            if (!ok) throw new IOException("could not remove the link " + link + ": " + new Win32Exception(Marshal.GetLastWin32Error()).Message);
+        }
+
+        /// <summary>The target of a junction / directory symbolic link (ordinary spelling), or null when it cannot be read.</summary>
+        public static string LinkTarget(string link)
+        {
+            try
+            {
+                string t;
+                if (DllSlots.Junction.TryGetTarget(Short(link), out t)) return t;
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        /// <summary>
+        /// Removes a tree the CALLER owns (a direct child of <paramref name="allowedParent"/>), long-path safe, with non-recursive calls only.
+        /// Links: with <paramref name="unlinkInside"/> false any reparse point refuses the whole delete BEFORE anything is removed
+        /// (<see cref="RemoveTreeNoReparse"/>). With true, junctions whose target resolves INSIDE <paramref name="dir"/> itself are unlinked
+        /// (the link only; a .map run's skeleton overlay points into its own overlay copy), and ANY other link -- a symbolic link, a junction
+        /// whose target cannot be read or that leads outside the tree (into live tags, another folder) -- refuses the whole delete before
+        /// anything is unlinked or deleted (a tripwire: that link was never made by this app). Returns the number of files deleted.
+        /// </summary>
+        public static int RemoveTree(string dir, string allowedParent, bool unlinkInside, List<string> log = null)
+        {
+            string d = Norm(dir), parent = Norm(allowedParent);
+            if (!string.Equals(Path.GetDirectoryName(d), parent, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("refused: " + d + " is not a direct child of " + parent);
+            if (IsReparsePoint(Long(d))) throw new InvalidOperationException("refused: " + d + " is itself a link; nothing was deleted");
+            if (!Directory.Exists(Long(d))) return 0;
+            var links = FindReparsePointsDeep(d);
+            if (links.Count > 0)
+            {
+                if (!unlinkInside) throw new InvalidOperationException("refused: " + d + " contains a reparse point (" + links[0] + "); nothing was deleted");
+                foreach (var l in links)
+                {
+                    string t = LinkTarget(l);
+                    if (t == null || !IsUnderOrSame(t, d))
+                        throw new InvalidOperationException("refused (tripwire): " + d + " contains a link this app never makes inside it: " + l + " -> " + (t ?? "(unreadable / a symbolic link)") + "; nothing was deleted");
+                }
+                foreach (var l in links) { UnlinkOne(l); if (log != null) log.Add("unlinked " + l); }
+                var again = FindReparsePointsDeep(d, 1);
+                if (again.Count > 0) throw new InvalidOperationException("refused: a reparse point is still inside " + d + " (" + again[0] + ") after the unlink; nothing else was deleted");
+            }
+            var dirs = new List<string>();
+            var stack = new Stack<string>();
+            stack.Push(Long(d));
+            int n = 0;
+            while (stack.Count > 0)
+            {
+                string cur = stack.Pop();
+                dirs.Add(cur);
+                foreach (var e in new DirectoryInfo(cur).EnumerateFileSystemInfos())
+                {
+                    if ((e.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("refused: a reparse point appeared at " + Short(e.FullName));
+                    if ((e.Attributes & FileAttributes.Directory) != 0) { stack.Push(e.FullName); continue; }
+                    if ((e.Attributes & FileAttributes.ReadOnly) != 0) File.SetAttributes(e.FullName, e.Attributes & ~FileAttributes.ReadOnly);
+                    File.Delete(e.FullName);
+                    n++;
+                }
+            }
+            for (int i = dirs.Count - 1; i >= 0; i--) Directory.Delete(dirs[i], false);
+            return n;
+        }
+
+        /// <summary>Unlinks EVERY link at or below <paramref name="dir"/> (the links only, never followed, whatever their target) -- for a
+        /// skeleton overlay (_gpulm_skel\wNN: junctions into the LIVE tags) or a legacy 0.6.7 folder -- then proves none is left. Returns the count.</summary>
+        public static int UnlinkAll(string dir, List<string> log = null)
+        {
+            int n = 0;
+            foreach (var l in FindReparsePointsDeep(dir))
+            {
+                UnlinkOne(l);
+                n++;
+                if (log != null) log.Add("unlinked " + l);
+            }
+            var again = FindReparsePointsDeep(dir, 1);
+            if (again.Count > 0) throw new InvalidOperationException("a link is still inside " + dir + " (" + again[0] + ")");
+            return n;
+        }
+
+        /// <summary>Total bytes of the files at or below <paramref name="dir"/>, links never followed (a link counts 0); unreadable parts are skipped.</summary>
+        public static long DirSize(string dir)
+        {
+            long total = 0;
+            string top;
+            try { top = Long(Norm(dir)); } catch (Exception) { return 0; }
+            if (!Directory.Exists(top) || IsReparsePoint(top)) return 0;
+            var stack = new Stack<string>();
+            stack.Push(top);
+            while (stack.Count > 0)
+            {
+                string d = stack.Pop();
+                try
+                {
+                    foreach (var e in new DirectoryInfo(d).EnumerateFileSystemInfos())
+                    {
+                        if ((e.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                        if ((e.Attributes & FileAttributes.Directory) != 0) { stack.Push(e.FullName); continue; }
+                        try { total += ((FileInfo)e).Length; } catch (Exception) { }
+                    }
+                }
+                catch (Exception) { }
+            }
+            return total;
+        }
+
         /// <summary>A unique, sortable leaf name "base", or "base_2", "base_3"... when one exists under <paramref name="parent"/>.</summary>
         public static string UniqueChild(string parent, string leaf)
         {
@@ -237,7 +396,13 @@ namespace H2GpuLightmapper.Core.Util
         // ---- interop
         private const uint MOVEFILE_REPLACE_EXISTING = 0x1, MOVEFILE_WRITE_THROUGH = 0x8;
         private const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000, OPEN_EXISTING = 3, FILE_ATTRIBUTE_NORMAL = 0x80;
-        private const uint INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF, FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
+        private const uint INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF, FILE_ATTRIBUTE_REPARSE_POINT = 0x400, FILE_ATTRIBUTE_DIRECTORY = 0x10;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool RemoveDirectoryW(string path);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool DeleteFileW(string path);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool MoveFileEx(string src, string dst, uint flags);

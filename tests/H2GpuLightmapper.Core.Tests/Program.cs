@@ -56,6 +56,8 @@ namespace H2GpuLightmapper.Core.Tests
             tests.AddRange(RulesTests.All());
             tests.AddRange(SceneryFixTests.All());
             tests.AddRange(SapienPingTests.All());
+            tests.AddRange(TempJanitorTests.All());      // 0.6.8 bounded temp
+            tests.AddRange(QuarantineTests.All());       // 0.6.8 RC antivirus quarantine re-check
 
             int pass = 0, fail = 0, skip = 0;
             var sw = Stopwatch.StartNew();

@@ -164,9 +164,13 @@ namespace H2GpuLightmapper.Pipeline
         public sealed class ProbeVerdict
         {
             public int Points, CapMB, MaxPoints;
-            /// <summary>Probe points the GQ buffer can hold if the largest lightmap chart is tiny (the hard upper bound).</summary>
+            /// <summary>Batches the probe pass runs in (1 = one pass; 0.6.9 rc069_a2: the engine runs more than <see cref="MaxPoints"/> points as exact batches).</summary>
+            public int Batches = 1;
+            /// <summary>More points than Halo 2 itself allows per BSP (<see cref="HaloMaxProbePoints"/>): refused before anything starts.</summary>
             public bool Refuse;
-            /// <summary>Within <see cref="MarginPoints"/> of the bound: the largest chart's rows are taken from the same buffer.</summary>
+            /// <summary>More points than one GPU pass holds (<see cref="MaxPoints"/>): the engine bakes them in <see cref="Batches"/> exact batches (same result as one pass, takes longer).</summary>
+            public bool Batched;
+            /// <summary>Within <see cref="MarginPoints"/> of one pass's bound: the largest chart's rows are taken from the same buffer.</summary>
             public bool Marginal;
             public string Message;
         }
@@ -178,8 +182,9 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>GQ rows one buffer of capMB holds.</summary>
         public static long CapRows(int capMB) { return (long)capMB * 1048576L / GqBytes; }
 
-        /// <summary>Most probe points one BSP can have before the tail alone fills the GQ buffer: the largest N with
-        /// N x 98,304 &lt; floor(capMB MiB / 68) (the engine's check is tail &gt;= capG). 281 at the default 1,792 MiB.</summary>
+        /// <summary>Most probe points ONE GPU probe pass can hold before the tail alone fills the GQ buffer: the largest N with
+        /// N x 98,304 &lt; floor(capMB MiB / 68) (the engine's check is tail &gt;= capG). 281 at the default 1,792 MiB. Since rc069_a2 the engine
+        /// runs a BSP with more points as several exact batches of at most this many, so this is a batch size, no longer a limit.</summary>
         public static int MaxProbePoints(int capMB)
         {
             long cap = CapRows(capMB);
@@ -188,22 +193,30 @@ namespace H2GpuLightmapper.Pipeline
         }
 
         /// <summary>The probe pass runs with the default cap: gpu_lightprobes.py cannot forward -BufCapMB (the payload driver has no such
-        /// argument), and a cap above D3D11's 2,048 MB ceiling is untested for the probe buffers, so the cap is not raised.</summary>
+        /// argument), and a cap above D3D11's 2,048 MB ceiling is untested for the probe buffers, so the cap is not raised.
+        /// 0.6.9 rc069_a2: only Halo 2's own ceiling (1,024 points per BSP) refuses; a BSP with more points than one pass holds (281 at the
+        /// default cap) is baked by the engine in exact batches (engine_v375: the batched result is byte-identical to a single run).</summary>
         public static ProbeVerdict CheckProbes(int points, int capMB = DefaultBufCapMB)
         {
             var v = new ProbeVerdict { Points = points, CapMB = capMB, MaxPoints = MaxProbePoints(capMB) };
-            if (points > v.MaxPoints)
+            if (points > HaloMaxProbePoints)
             {
                 v.Refuse = true;
-                v.Message = "this BSP has " + points + " light probe points; the GPU probe pass holds at most " + v.MaxPoints + " per BSP at its " + capMB
-                            + " MiB buffer cap (" + ProbeRowsPerPoint.ToString("N0", CultureInfo.InvariantCulture) + " rows per point x " + GqBytes
-                            + " B per row must fit one buffer; Halo 2 itself allows " + HaloMaxProbePoints.ToString("N0", CultureInfo.InvariantCulture)
-                            + "). Nothing was started. Bake with Lightmap Only (CLI: --mode lightmap), which resets this BSP's probes to zero like `tool lightmaps` does";
+                v.Message = "this BSP has " + points.ToString("N0", CultureInfo.InvariantCulture) + " light probe points; Halo 2 itself allows at most "
+                            + HaloMaxProbePoints.ToString("N0", CultureInfo.InvariantCulture) + " per BSP, so the lightmap tag could not hold them. Nothing was started. "
+                            + "Remove some light probe points from the BSP, or bake with Lightmap Only (CLI: --mode lightmap), which resets this BSP's probes to zero like `tool lightmaps` does";
+            }
+            else if (v.MaxPoints > 0 && points > v.MaxPoints)
+            {
+                v.Batched = true;
+                v.Batches = (points + v.MaxPoints - 1) / v.MaxPoints;
+                v.Message = "this BSP has " + points + " light probe points; one GPU probe pass holds " + v.MaxPoints + ", so they are baked in " + v.Batches
+                            + " batches (exact: the result is the same as one pass, it only takes about " + v.Batches + " times as long)";
             }
             else if (points > v.MaxPoints - MarginPoints)
             {
                 v.Marginal = true;
-                v.Message = "this BSP has " + points + " light probe points, close to the " + v.MaxPoints + " the GPU probe pass can hold at its " + capMB
+                v.Message = "this BSP has " + points + " light probe points, close to the " + v.MaxPoints + " one GPU probe pass can hold at its " + capMB
                             + " MiB buffer cap: the rows of the largest lightmap chart share that buffer, so the probe pass may still refuse (BUFCAP exit 10) after the lightmap bake";
             }
             return v;

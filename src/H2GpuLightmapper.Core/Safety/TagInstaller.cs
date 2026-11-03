@@ -82,6 +82,9 @@ namespace H2GpuLightmapper.Core.Safety
         {
             Validate(r);
             var res = new InstallResult { BackupDir = r.BackupDir, TargetDir = r.TargetDir, Marker = r.Marker };
+            // 0.6.8: the marker lives in KEEP (WORK\standalone\markers\install_wNN.json): lmw_install writes it, but does not create its folder
+            string md = Path.GetDirectoryName(Path.GetFullPath(r.Marker));
+            if (!string.IsNullOrEmpty(md)) Directory.CreateDirectory(md);
             int exit; bool cancelled;
             Exec(r.PyExe, InstallArgs(r), r.Work, r.Env, r.TimeoutMs, run, "lmw_install install", res.Lines, out exit, out cancelled);
             Map(res, exit, cancelled, "install");

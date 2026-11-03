@@ -82,6 +82,9 @@ namespace H2GpuLightmapper.Core.Preflight
         public string ScenarioRel, Bsp;
         /// <summary>DLL-slot alias candidates (see ShellPaths); null LocalAppData = the real one.</summary>
         public string AliasLocalAppData, AliasVolumeRoot;
+        /// <summary>0.6.8: the payload keeps the workers in WORK\Temp (safe to delete) (MANIFEST features.farms): the DLL slot names that
+        /// folder (or its alias) and the path budget counts it.</summary>
+        public bool FarmsInTemp;
         /// <summary>The x86 system folder (SysWOW64 on 64-bit Windows); null = the real one.</summary>
         public string SystemX86Dir;
         /// <summary>gpucheck.exe to run (null = skip), or its JSON + exit code already captured.</summary>
@@ -244,9 +247,10 @@ namespace H2GpuLightmapper.Core.Preflight
         {
             try
             {
+                string slotDir = o.FarmsInTemp ? ShellPaths.TempOf(rep.Work) : rep.Work;      // 0.6.8: the DLL writes the workers into Temp
                 var plan = o.AliasLocalAppData == null && o.AliasVolumeRoot == null
-                    ? SlotAliasPlanner.Plan(rep.Work)
-                    : SlotAliasPlanner.Plan(rep.Work, o.AliasLocalAppData ?? ShellPaths.Default().LocalAppData, o.AliasVolumeRoot);
+                    ? SlotAliasPlanner.Plan(slotDir)
+                    : SlotAliasPlanner.Plan(slotDir, o.AliasLocalAppData ?? ShellPaths.Default().LocalAppData, o.AliasVolumeRoot);
                 rep.SlotPlan = plan;
                 rep.Add("path.slot", CheckLevel.Ok, plan.IsAlias ? "the work folder path is long; the estimator DLL will reach it through the short alias " + plan.SlotBase : "the work folder fits the estimator DLL's 60-character path slot", plan.SlotBase);
             }
@@ -258,8 +262,16 @@ namespace H2GpuLightmapper.Core.Preflight
 
         private static void CheckBudget(PreflightReport rep, PreflightOptions o)
         {
-            var e = PathBudget.Estimate(rep.Root, o.InstDirName, o.InstMaxPathLen, o.ScenarioRel, o.Bsp);
-            var l = PathBudget.Longest(e);
+            var e = PathBudget.Estimate(rep.Root, o.InstDirName, o.InstMaxPathLen, o.ScenarioRel, o.Bsp, o.FarmsInTemp);
+            // 0.6.8 RC (F1): only the paths every bake creates can refuse; the tool write-back fallback's backups and the best-effort
+            // failed-run copy only warn (0.6.7's tolerance: 0.6.8 had moved the fallback backup 22 characters deeper, into Temp)
+            var l = PathBudget.LongestRequired(e);
+            var opt = e.Where(x => !x.Required && x.Length >= PathBudget.Limit).OrderByDescending(x => x.Length).ToList();
+            if (opt.Count > 0)
+                rep.Add("path.fallback", CheckLevel.Warn,
+                    "some rarely used paths would reach " + opt[0].Length + " characters (" + string.Join(", ", opt.Select(x => x.What + " " + x.Length)) + "; limit " + PathBudget.Limit
+                    + "): if this map ever needs the tool write-back fallback, that bake stops before it and writes nothing to your tags; a failed bake's stage copy may be skipped. A shorter H2EK path avoids this.",
+                    opt[0].Example);
             bool real = !string.IsNullOrEmpty(o.ScenarioRel) && !string.IsNullOrEmpty(o.Bsp);
             bool instOver = e.Any(x => x.What == "INST extraction" && x.Length >= PathBudget.Limit);
             var level = l.Length < PathBudget.Limit ? CheckLevel.Ok : (real || instOver) ? CheckLevel.Fail : CheckLevel.Warn;

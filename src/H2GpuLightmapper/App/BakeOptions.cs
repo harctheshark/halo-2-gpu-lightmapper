@@ -11,8 +11,10 @@ namespace H2GpuLightmapper.App
     public enum Quality { Low, Super, Custom }
 
     /// <summary>Standard = lightmaps + light probes when the BSP has probe points (the default); Probes = light probes only;
-    /// Lightmap = lightmaps only (on a probe BSP its N probes are reset to zero, as `tool lightmaps` does).</summary>
-    public enum BakeMode { Standard, Probes, Lightmap }
+    /// Lightmap = lightmaps only (on a probe BSP its N probes are reset to zero, as `tool lightmaps` does).
+    /// AoOnly (0.6.8 xc8) = no lighting is baked: the lightmap that is ALREADY in the tags (ours, the stock tool's or Bungie's) gets ambient occlusion added
+    /// (capture for the geometry + the AO trace + ao_existing.py), then it is installed like any other bake (backup first).</summary>
+    public enum BakeMode { Standard, Probes, Lightmap, AoOnly }
 
     /// <summary>What to do when AO was asked for but the bake fell back to the tool writer (no stage to apply AO to).</summary>
     public enum AoFallback { Stop, InstallWithoutAo }
@@ -35,6 +37,8 @@ namespace H2GpuLightmapper.App
         public BakeMode Mode = BakeMode.Standard;
         public bool Ao;
         public double AoStrength = AoStrengthDefault, AoExponent = AoExponentDefault;
+        /// <summary>AO only: apply AO although the install record says this lightmap already has it (it would darken the same places twice). CLI --force / the window asks.</summary>
+        public bool AoForce;
         public bool ReuseCapture;
         /// <summary>Advanced "Stage only (don't write tags)" / CLI --no-install.</summary>
         public bool StageOnly;
@@ -69,6 +73,16 @@ namespace H2GpuLightmapper.App
         /// the window greys the checkbox, the command line and the session refuse -- an unknown parameter is never passed to PowerShell.
         /// The capture is made WITH the option (the engine records the tool's permutation pick in phase 1), so it is part of the capture identity.</summary>
         public bool SceneryPermutationFix;
+        /// <summary>0.6.8 Advanced settings "Re-bake speedup" / CLI --rebake-hint (default OFF): every lightmap gpu_bake of a bake that REUSES its capture
+        /// gets GPULM_SKY_HINT=1, so fullgpu places the photon-cast chain's round-0 windows at the previous bake's exact per-light offsets (the farm's
+        /// skychain_hint.txt, kept by the post-bake slim). Placement only: the relay still verifies every photon, and the engine refuses a hint whose
+        /// S_cast differs from this capture (it then bakes the normal way). A fresh capture never gets it (there is no previous bake of it).</summary>
+        public bool RebakeHint;
+        public const string RebakeHintEnvVar = "GPULM_SKY_HINT";
+        public const string RebakeHintLabel = "Re-bake speedup: reuse the previous bake's cast offsets (same capture only)";
+        public const string RebakeHintNote = "re-bake speedup on (GPULM_SKY_HINT=1: the previous bake's cast offsets of this capture)";
+        public const string RebakeHintTip = "Only for 'Reuse existing capture' bakes: the photon cast starts where the previous bake of the same capture found each light, "
+            + "so re-baking a big map can finish its cast sooner. The lightmap is the same either way; a capture that changed is detected and baked the normal way.";
         public const string SceneryPermutationFixSwitch = "SceneryOwnPermutationOnly";
         public const string SceneryPermutationFixNote = "scenery multi permutation fix on (experimental; differs from the 2004 tool on purpose)";
         public const string SceneryPermutationFixLabel = "Scenery Multi Permutation Fix (Experimental Improvement)";
@@ -157,6 +171,25 @@ namespace H2GpuLightmapper.App
         }
 
         /// <summary>A tags-relative path that cannot leave the tags folder (no rooted path, no ".." / "." / empty parts).</summary>
+        /// <summary>0.6.8 RC (names with spaces): a scenario path or BSP name Halo 2's tool cannot be driven with, as a user-facing refusal, or null.
+        /// A SPACE is fine (gpu_bake quotes the scenario and the BSP on the tool's command line, P17; tool_fast loads a quoted spaced path). Refused:
+        /// a tab / line break, and a space-separated word that is only digits ("map 2"): the capture's farm-worker command line is parsed by the
+        /// estimator DLL, which takes the first two number words after the verb as the worker index and count.</summary>
+        public static string ToolNameProblem(string scenarioRel, string bsp)
+        {
+            foreach (var s in new[] { scenarioRel, bsp })
+            {
+                if (string.IsNullOrEmpty(s)) continue;
+                if (s.IndexOfAny(new[] { '\t', '\r', '\n' }) >= 0)
+                    return "Halo 2's tool cannot bake a scenario or BSP whose name contains a tab or a line break ('" + s.Replace("\t", " ").Replace("\r", " ").Replace("\n", " ") + "'): rename the folder and the tag, then bake again. Nothing was written.";
+                foreach (var w in s.Split(' '))
+                    if (w.Length > 0 && w.All(char.IsDigit) && s.Contains(' '))
+                        return "Halo 2's tool cannot bake a scenario or BSP whose name has a separate number word ('" + w + "' in '" + s + "'): rename the folder and the tag (for example with underscores: '"
+                               + s.Replace(' ', '_') + "'), then bake again. Nothing was written.";
+            }
+            return null;
+        }
+
         public static bool IsPlainTagRel(string rel)
         {
             if (string.IsNullOrWhiteSpace(rel) || rel.IndexOfAny(new[] { ':', '*', '?', '"', '<', '>', '|', '/' }) >= 0 || rel.Trim() != rel) return false;
@@ -164,7 +197,8 @@ namespace H2GpuLightmapper.App
         }
 
         public string QualityToken { get { return Quality.ToString().ToLowerInvariant(); } }
-        public string ModeToken { get { return Mode == BakeMode.Probes ? "probes" : Mode == BakeMode.Lightmap ? "lightmap" : "standard"; } }
+        public string ModeToken { get { return Mode == BakeMode.Probes ? "probes" : Mode == BakeMode.Lightmap ? "lightmap" : Mode == BakeMode.AoOnly ? "ao" : "standard"; } }
+        public bool IsAoOnly { get { return Mode == BakeMode.AoOnly; } }
 
         /// <summary>The trace quality P6's `gpu_ao trace --quality` takes: low -> low, super / custom -> super (ssN 4 = super's cells).</summary>
         public string AoTraceQuality { get { return Quality == Quality.Low ? "low" : "super"; } }
@@ -251,6 +285,8 @@ namespace H2GpuLightmapper.App
             if (string.IsNullOrWhiteSpace(ScenarioRel)) e.Add("no scenario given");
             if (string.IsNullOrWhiteSpace(Bsp)) e.Add("no BSP given");
             else if (Bsp.IndexOfAny(new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' }) >= 0 || Bsp.Trim() != Bsp) e.Add("the BSP name '" + Bsp + "' is not a plain tag name");
+            string np = ToolNameProblem(ScenarioRel, Bsp);
+            if (np != null) e.Add(np);
             if (BspRel != null)
             {
                 if (!IsPlainTagRel(BspRel)) e.Add("the BSP tag path '" + BspRel + "' is not a plain tags-relative path");
@@ -263,6 +299,8 @@ namespace H2GpuLightmapper.App
                 if (Photons < PhotonsMin || Photons > PhotonsMax) e.Add(string.Format(CultureInfo.InvariantCulture, "photons must be {0:N0} - {1:N0} (got {2:N0})", PhotonsMin, PhotonsMax, Photons));
                 if (Rays < RaysMin || Rays > RaysMax) e.Add("gather rays (MC samples) must be " + RaysMin + " - " + RaysMax + " (got " + Rays + ")");
             }
+            if (Mode == BakeMode.AoOnly && !Ao) e.Add("AO only adds ambient occlusion: AO must be on");
+            if (AoForce && Mode != BakeMode.AoOnly) e.Add("--force is only for --mode ao (apply AO again to a lightmap that already has it)");
             if (Ao)
             {
                 if (Mode == BakeMode.Probes) e.Add("ambient occlusion is a lightmap layer: it is not available in Lightprobes mode");
@@ -293,6 +331,7 @@ namespace H2GpuLightmapper.App
                 catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException) { e.Add("not a usable map or output path: " + ex.Message); }
             }
             if (!string.IsNullOrWhiteSpace(Bsp) && (Bsp.IndexOfAny(new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' }) >= 0 || Bsp.Trim() != Bsp)) e.Add("the BSP name '" + Bsp + "' is not a plain tag name");
+            if (Mode == BakeMode.AoOnly) e.Add("AO only changes the lightmap that is already in the tags: it is not available for a .map bake (bake the map with AO on instead)");
             if (Ao && Mode == BakeMode.Probes) e.Add("ambient occlusion is a lightmap layer: it is not available in Lightprobes mode");
             if (Ao)
             {
@@ -326,19 +365,22 @@ namespace H2GpuLightmapper.App
                 if (Responsive) m += "   responsive on";
                 if (ExactVertexLighting) m += "   exact vertex lighting on";
                 if (SceneryPermutationFix) m += "   scenery multi permutation fix on";
+                if (RebakeHint) m += "   re-bake speedup on";
                 if (ForceCompat) m += "   compatibility mode (DF64) FORCED";
                 if (!Fixes) m += "   FIXES OFF (dev)";
                 return m;
             }
             var s = "quality " + QualityToken;
             if (Quality == Quality.Custom) s += string.Format(CultureInfo.InvariantCulture, " (Experimental: {0:N0} photons, MC {1} = {2:N0} rays per gather call)", Photons, Rays, RaysPerCall(Rays));
-            s += "   mode " + ModeToken;
+            s += "   mode " + ModeToken + (IsAoOnly ? " (AO added to the installed lightmap; no lighting is baked)" : "");
             s += "   AO " + (Ao ? string.Format(CultureInfo.InvariantCulture, "on (strength {0}, exponent {1})", AoStrength, AoExponent) : "off");
+            if (AoForce) s += " (again: forced)";
             s += "   capture " + (ReuseCapture ? "reuse" : "new");
             s += "   " + (StageOnly ? "stage only (no tags written)" : "install");
             if (Responsive) s += "   responsive on";
             if (ExactVertexLighting) s += "   exact vertex lighting on";
             if (SceneryPermutationFix) s += "   scenery multi permutation fix on";
+            if (RebakeHint) s += "   re-bake speedup on";
             if (BspRel != null) s += "   BSP from " + BspFolder(BspRel);
             if (ForceCompat) s += "   compatibility mode (DF64) FORCED";
             if (!Fixes) s += "   FIXES OFF (dev)";

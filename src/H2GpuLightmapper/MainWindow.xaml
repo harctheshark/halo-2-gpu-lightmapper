@@ -154,6 +154,8 @@
                                      Content="Lightmap Standard — lightmaps + light probes if this BSP has probes"/>
                         <RadioButton x:Name="MProbes" GroupName="M" Checked="Option_Changed" Content="Lightmap Lightprobes — probes only"/>
                         <RadioButton x:Name="MLightmap" GroupName="M" Checked="Option_Changed" Content="Lightmap Only"/>
+                        <RadioButton x:Name="MAoOnly" GroupName="M" Checked="Option_Changed"
+                                     Content="AO only — add ambient occlusion to the lightmap already in the tags (no lighting is baked)"/>
                         <TextBlock x:Name="ModeNotice" Margin="20,2,0,0" Style="{StaticResource Dim}" Foreground="{StaticResource Warn}" Visibility="Collapsed"/>
                     </StackPanel>
                 </GroupBox>
@@ -195,6 +197,9 @@
                                 <CheckBox x:Name="SceneryPermCheck" Content="Scenery Multi Permutation Fix (Experimental Improvement)" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
                                           ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="30000"
                                           ToolTip="Fallback for scenery that draws more than one shape from one tag, e.g. a rock whose shape changes when you move it, or a lifepod placed with a named variant like 'crashed'. Only the shape the game actually draws casts shadows, ground hidden inside scenery is filled from its surroundings, and a variant's own pieces get lit instead of rendering black. Differs from the 2004 tool on purpose. Most maps never need this: giving each shape its own scenery tag avoids the problem."/>
+                                <!-- 0.6.8: GPULM_SKY_HINT=1 on reuse bakes only (default off; the engine refuses a hint of another capture) -->
+                                <CheckBox x:Name="RebakeHintCheck" Content="Re-bake speedup: reuse the previous bake's cast offsets (same capture only)" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
+                                          ToolTip="Only for 'Reuse existing capture' bakes: the photon cast starts where the previous bake of the same capture found each light, so re-baking a big map can finish its cast sooner. The lightmap is the same either way; a capture that changed is detected and baked the normal way."/>
                             </StackPanel>
                         </GroupBox>
                         <CheckBox x:Name="StageOnlyCheck" Content="Stage only (don't write tags)" Checked="Option_Changed" Unchecked="Option_Changed"/>
@@ -203,6 +208,26 @@
                             <Button x:Name="OpenWorkBtn" DockPanel.Dock="Right" Content="Open" Margin="6,0,0,0" Padding="8,1" Click="OpenWorkBtn_Click"/>
                             <TextBox x:Name="WorkBox" IsReadOnly="True" FontSize="11.5"/>
                         </DockPanel>
+                        <!-- 0.6.8 bounded temp: the app's temporary working root (safe to delete at any time), its size, Open and Clean now -->
+                        <DockPanel Margin="0,4,0,0">
+                            <TextBlock DockPanel.Dock="Left" Style="{StaticResource FieldLabel}" Text="Temp folder"/>
+                            <Button x:Name="CleanTempBtn" DockPanel.Dock="Right" Content="Clean now" Margin="6,0,0,0" Padding="8,1" Click="CleanTempBtn_Click"
+                                    ToolTip="Deletes everything in the temporary folder (folders a running bake holds are kept). Kept captures go too: the next bake of those maps captures again."/>
+                            <Button x:Name="OpenTempBtn" DockPanel.Dock="Right" Content="Open" Margin="6,0,0,0" Padding="8,1" Click="OpenTempBtn_Click"/>
+                            <TextBlock x:Name="TempSizeText" DockPanel.Dock="Right" Margin="6,0,0,0" VerticalAlignment="Center" Style="{StaticResource Dim}" Text=""/>
+                            <TextBox x:Name="TempBox" IsReadOnly="True" FontSize="11.5"
+                                     ToolTip="The workers, kept captures and .map bake folders. Safe to delete at any time, even during a bake: your tags are never written from here."/>
+                        </DockPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <TextBlock Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Text="Keep captures for reuse"/>
+                            <ComboBox x:Name="KeepCapturesCombo" Width="52" Margin="6,0,0,0" SelectionChanged="KeepCaptures_Changed"/>
+                            <TextBlock Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="16,0,0,0" Text="Temp size cap"/>
+                            <TextBox x:Name="TempCapBox" Width="44" Margin="6,0,0,0" LostFocus="TempCap_LostFocus"/>
+                            <TextBlock Style="{StaticResource Dim}" VerticalAlignment="Center" Margin="4,0,0,0" Text="GB"/>
+                        </StackPanel>
+                        <Button x:Name="LegacyCleanBtn" Content="Free space from earlier versions…" Padding="8,1" Margin="0,5,0,0" HorizontalAlignment="Left" Visibility="Collapsed"
+                                Click="LegacyCleanBtn_Click"
+                                ToolTip="Lists the folders earlier versions of this app left in the work folder (with their sizes) and, if you confirm, deletes exactly those."/>
                         <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                             <Button x:Name="UndoInstallBtn" Content="Undo last install" Padding="8,1" Click="UndoInstallBtn_Click"
                                     ToolTip="Put back the files this app's last install of this BSP replaced (lmw_install restore)"/>

@@ -32,27 +32,48 @@ EXE = os.path.join(B, 'exe', 'H2 GPU Lightmapper.exe')
 SPEC = L.load_spec()
 GLW = SPEC['roots']['GLW']
 H2ROOT = SPEC['roots']['H2ROOT']
-SANDBOX = os.path.join(os.environ['TEMP'], 's19')      # short on purpose: WORK\ <= 60 chars -> Direct slot, no junction
+# 0.6.8 RC: the sandbox H2EK root (where the INST -- with the tool loader -- is extracted) lives in the user's Temp - Deletable folder (a
+# Windows Security exclusion of the user's; never AppData / %TEMP%): H2LM_S19_SANDBOX overrides it. Deepest INST path there: 217 characters
+# (incl. the .tmp_ extraction dir) < MAX_PATH. The per-user folders (rt runtimes: pwsh / py / mapbake / notices, no injector) and the DLL-slot
+# alias junction stay in %TEMP%\s19aux: the alias is the one link the shell makes, and Temp - Deletable must hold no links.
+S19_PARENT = os.environ.get('H2LM_S19_PARENT') or os.path.join(SPEC['roots']['GLW'], 'Temp - Deletable (Max 250gbs)')
+SANDBOX = os.environ.get('H2LM_S19_SANDBOX') or os.path.join(S19_PARENT, 's19')
+AUX = os.path.join(os.environ['TEMP'], 's19aux')
 
 # what other steps proved (S1.1/S1.2, S1.3, S1.4, S1.8 PROGRESS / interfaces): the payload must carry exactly these bytes
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '669dcc144a4961043cbb572611d55756'),   # W7 0.6.7 promotion (cefcf497 = 0.6.6); W6 0.6.6 promotion (cabc8449); W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '92ee02265849c266a85c385bc63b0589'),   # W7 0.6.7: dev_AO10 (59d529c5 = dev_AO9, W6 0.6.6): dev_AO9 (dev_AO8 7ff83e05); production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', 'd16ac070fc973e6d43738cc89903670d'),   # 0.6.9 rc069_a2: + P19 (the dev_RB promotion, d16ac070; e976ba73 = rc069_a1); 0.6.8 RC: + P16 ToolLoader (e976ba73; 30c27781 = the dev_XC promotion P15; 669dcc14 = 0.6.7); W7 0.6.7 promotion (cefcf497 = 0.6.6); W6 0.6.6 promotion (cabc8449); W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', 'ff8de832ccace002566a197ccf860af5'),   # 0.6.9 rc069_a3: + P20 (dev_AO14: the -AOOnly loop forwards the sub-chart cut; b34c221e = dev_AO13); 0.6.8 RC: dev_AO11 + P16 (b34c221e; d95fb296 = P15; 92ee0226 = dev_AO10); W7 0.6.7: dev_AO10 (59d529c5 = dev_AO9, W6 0.6.6): dev_AO9 (dev_AO8 7ff83e05); production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
+}
+# 0.6.8: the two gpu_bake.ps1 copies are production (the verified U1 upstream, md5 as above) + the post-upstream series P13 (H2LM_FARMS) + P14
+# (comment only: the shipped comment no longer names the author's test map); path -> (production md5, payload md5)
+EXPECT_POST = {
+    # 0.6.8 RC: production = the dev_XC promotion (P15, which holds P13), post_upstream = P14 only (2f493706 / 5af79701 = the 0.6.7-cast dry run)
+    # + P16 (the tool loader: one $INJ path line, promoted into production; 023d7a55 / 7937c908 = rc068_xc3)
+    # + post-upstream P17 (the four tool command lines quote the scenario and the BSP; bb22f710 / d312fe82 = rc068_xc4)
+    'engine_v373/gpu_bake.ps1': ('d16ac070fc973e6d43738cc89903670d', '1da2c1fffe01c67b4e16877da763255a'),   # 0.6.9 rc069_a2: P17 / P14 / P18 re-made on d16ac070 (rc069_a1: e976ba73 -> fbf47cfc); 0.6.9: + post-upstream P18 (-Rt RT mode + GPULM_FASTNQ; 6140a173 = rc068_xc4..xc9)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('ff8de832ccace002566a197ccf860af5', '8b0e2904bdd593e0bc11f1d76fdf8587'),   # 0.6.9 rc069_a3: P17 / P14 re-made on ff8de832 (rc069_a2: b34c221e -> 4adb7566)
 }
 EXPECT_PATCHED = {
-    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '3634172b52a97b019a905750f2697300'),   # P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
+    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '21958cbdcf2fdd6b122a69d48e77354c'),   # 0.6.8: + P5c (--farm under H2LM_FARMS; P5 + P5b = 3634172b); P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
     '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', 'a8914dc88a0271d73938679ec6511cbe'),   # P6 + P6b + P6c (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
     '_research/ao/ao_seamfix.py': ('93c2fe8c5ce812358b58b7c2073da030', '7b239011f1a9d6becbc11ce593398cd6'),   # N4 (A1 re-make: + stacked-layer rule)
     '_research/ao/ao_denoise.py': ('5da70c2fe14fbb2decd78ce8902b418a', '70522fac1d61f372e6c5af358592e7cf'),   # N4 (A1: ao_denoise.bilateral_raw without scipy)
     # U2 (2026-10-15): the three lmw_tagio.py walkers read SHORT block elements as tool_fast does (patches/tagio/series_tagio.json)
-    'engine_v373/v043-tagwriter/lmw_tagio.py': ('52dc580ef26eaf26e370f03470c14804', 'b79b25cf305a617346ef5f0296f040f6'),
+    'engine_v373/v043-tagwriter/lmw_tagio.py': ('a0326b65fcf81d9432690ec90931e523', 'b069e88ded71f575550b344cbdf912bc'),   # 0.6.9: dev_TW's writer file + U2b (U2 = 52dc580e -> b79b25cf no longer applies)
     '_research/ao/dev_AO/v043-tagwriter/lmw_tagio.py': ('52dc580ef26eaf26e370f03470c14804', 'b79b25cf305a617346ef5f0296f040f6'),   # production source dev_AO2
     'v043-tagwriter/lmw_tagio.py': ('e8aeb703b786b8c995297834abdc73f6', '79673a03383cd0ab9cdfd371dc76598c'),
 }
-EXPECT_BUILT = {'osoyoos/osoy_launch.exe': 'e2dba7afcaf6967a900ade1d59d01f5d'}
-EXPECT_NEW = {'_research/ao/ao_ballgrid.py': '1ef5e617bfd2ab11d3366e018a0259e6', 'standalone/sh_stage.py': None}      # ao_ballgrid: A1 (+ ball_blocks)
+EXPECT_BUILT = {'osoyoos/osoy_launch.exe': 'e2dba7afcaf6967a900ade1d59d01f5d',
+                # 0.6.8 RC (P16): the tool loader built from the unchanged inject.cpp (build	oolloaderuild_toolloader.json, reproducible)
+                'v014-inject-estimator/H2GpuLightmapper.ToolLoader.exe': '43872d6bd93b3e891bca7f2f8908dd8c',
+                # 0.6.9: the native tag-writer helper built from tw_native.cpp with VERSIONINFO + asInvoker manifest (build/twnative/build_twnative.json, reproducible)
+                'engine_v373/v043-tagwriter/bin/tw_native.exe': '6178da9ac4432a42f0be7d4e6e4cebe4'}
+EXPECT_NEW = {'_research/ao/ao_ballgrid.py': '1ef5e617bfd2ab11d3366e018a0259e6', 'standalone/sh_stage.py': None,
+              'standalone/farm_products.json': 'PROJ:src/standalone/farm_products.json',
+              '_research/ao/ao_existing.py': 'PROJ:src/standalone/ao_existing.py'}      # 0.6.8 xc8: AO only      # 0.6.8: the engine-owned product list (shipped from the project tree)      # ao_ballgrid: A1 (+ ball_blocks)
 SHELL_NEEDS = ['engine_v373/gpu_bake.ps1', 'engine_v373/v043-tagwriter/lmw_install.py', 'engine_v373/v014-inject-estimator/gpulm_estimator.dll',
                'engine_v373/v041-fullgpu/fullgpu.exe', '_research/ao/gpu_ao.py', '_research/ao/dev_AO/gpu_bake.ps1',
                '_research/lightprobes/gpu_lightprobes.py', 'standalone/sh_stage.py', 'v043-tagwriter/lmw_tagio.py',
@@ -86,8 +107,12 @@ def inst_component(m=None):
 
 
 def guard_record():
-    """the REAL N3 / T3a record build\\fullgpu_guard\\LATEST.json (never edited by the tests)"""
-    return json.load(open(os.path.join(PROJ, 'build', 'fullgpu_guard', 'LATEST.json'), encoding='utf-8'))
+    """the REAL N3 / T3a record the payload spec names (0.6.9: build\\fullgpu_guard_069\\LATEST.json; never edited by the tests)"""
+    return json.load(open(guard_record_path(), encoding='utf-8'))
+
+
+def guard_record_path():
+    return L.resolve(L.load_spec()['inst']['custom_engine']['latest'], L.load_spec()['roots'])
 
 
 def custom_shipped():
@@ -137,7 +162,7 @@ def t_inst_equals_production():
     """T0: every INST file equals the CURRENT production md5 except the declared P / N / built files, which equal the
     results the S1.1-S1.8 steps tested"""
     c = inst_component()
-    declared = (set(EXPECT_PATCHED) | set(EXPECT_UPSTREAMED) | set(EXPECT_BUILT) | set(EXPECT_NEW) |
+    declared = (set(EXPECT_PATCHED) | set(EXPECT_UPSTREAMED) | set(EXPECT_POST) | set(EXPECT_BUILT) | set(EXPECT_NEW) |
                 {'standalone/gpucheck.exe', 'standalone/gpucheck_plain.exe'})
     rep = stage_report()
     srcmap = {r['path']: r for r in rep['files']}
@@ -150,12 +175,24 @@ def t_inst_equals_production():
             if p == 'engine_custom/v041-fullgpu/fullgpu.exe':
                 check_custom_guard(f['md5'])
                 check(r.get('role') == 'built:N3', '%s role %s' % (p, r.get('role')))
+            elif p == 'engine_custom/v041-fullgpu/fullgpu_rt.exe':
+                # 0.6.9: Custom's RT host = the RT variant with the N3 guard edits (T3a record guard_rt_md5 + gpu_identity_proof_rt), never the plain RT exe
+                lt = guard_record()
+                check(str(lt.get('gpu_identity_proof_rt', '')).upper().startswith('PASS') and f['md5'] == lt.get('guard_rt_md5'),
+                      'engine_custom RT host %s is not the T3a-tested RT guard %s' % (f['md5'], lt.get('guard_rt_md5')))
+                check(r.get('role') == 'built:N3rt' and f['md5'] != twins.get('engine_v373/v041-fullgpu/fullgpu_rt.exe'), '%s role %s' % (p, r.get('role')))
             else:
                 twin = 'engine_v373/' + p[len('engine_custom/'):]
                 check(twin in twins and f['md5'] == twins[twin], '%s differs from its INST twin %s' % (p, twin))
             n_custom += 1
             continue
-        if p in EXPECT_UPSTREAMED:
+        if p in EXPECT_POST:
+            prod, res = EXPECT_POST[p]
+            check(f['md5'] == res, '%s md5 %s != production + post-upstream series %s' % (p, f['md5'], res))
+            check(L.md5_file(r['source']) == prod and r.get('kind') == 'patched' and r.get('role', '').startswith('upstreamed+post:')
+                  and (r.get('upstream') or {}).get('base_md5') == EXPECT_UPSTREAMED[p][0],
+                  '%s: not staged as production %s + the post-upstream series (%s)' % (p, prod, {k: r.get(k) for k in ('kind', 'role')}))
+        elif p in EXPECT_UPSTREAMED:
             base, res = EXPECT_UPSTREAMED[p]
             check(f['md5'] == res == f.get('sourceMd5') == L.md5_file(r['source']), '%s md5 %s != upstreamed production %s' % (p, f['md5'], res))
             check(r.get('kind') == 'prod' and r.get('role', '').startswith('upstreamed:') and (r.get('upstream') or {}).get('base_md5') == base,
@@ -170,6 +207,8 @@ def t_inst_equals_production():
             check(f['md5'] == L.md5_file(os.path.join(PROJ, 'tools', 'scan_scenery_bounds.py')), '%s %s' % (p, f['md5']))
         elif p in EXPECT_NEW:
             want = EXPECT_NEW[p] or L.md5_file(os.path.join(PROJ, 'src', 'standalone', 'sh_stage.py'))
+            if want.startswith('PROJ:'):
+                want = L.md5_file(os.path.join(PROJ, *want[5:].split('/')))
             check(f['md5'] == want, '%s %s != %s' % (p, f['md5'], want))
         elif p.startswith('standalone/gpucheck'):
             rec = json.load(open(os.path.join(PROJ, 'build', 'gpucheck', 'build_gpucheck.json')))
@@ -202,7 +241,10 @@ def t_roles_layout():
     slots = sorted(p for p, f in paths.items() if 'dllslot' in f.get('role', '').split(','))
     nslot = 6 if custom_shipped() else 4          # engine_custom/ adds its own pair (the same two pristine builds)
     check(len(slots) == nslot and all(p.endswith('gpulm_estimator.dll') for p in slots), 'dllslot %s' % slots)
-    check(sorted(paths[p]['md5'] for p in slots) == sorted(['d6147fce6e3979a37178d2e14d092227', '5c6aeea9d1ffbaaaa6351d7ba5e77360'] * (nslot // 2)),   # W3 2026-10-21: the 0.6.4 estimator DLLs (W1: b2370477 / f0fb73ac; was aaf10a0f)
+    want_slots = ['d6147fce6e3979a37178d2e14d092227', '56b774df2fce703a9a63da793aab7c8c', 'd6147fce6e3979a37178d2e14d092227', '5c6aeea9d1ffbaaaa6351d7ba5e77360']      # 0.6.9: engine v014 + the NEW fast-NeuQuant skeleton DLL, the AO engine's 0.6.4 pair
+    if nslot == 6:
+        want_slots += ['d6147fce6e3979a37178d2e14d092227', '56b774df2fce703a9a63da793aab7c8c']
+    check(sorted(paths[p]['md5'] for p in slots) == sorted(want_slots),   # W3 2026-10-21: the 0.6.4 estimator DLLs (W1: b2370477 / f0fb73ac; was aaf10a0f)
           'slot md5s')
     roles = lambda r: [p for p, f in paths.items() if r in f.get('role', '').split(',')]
     check(roles('boundsdb') == ['standalone/h2v_scenery_bounds.db'], 'boundsdb')
@@ -368,15 +410,21 @@ def t_extract_with_shell():
     """the BUILT exe extracts its embedded payload with the real shell code (sandbox H2EK root + per-user folder): the
     quick check and the full md5 of everything pass, the INST slot DLLs hold the sandbox WORK base, the extracted pwsh is
     7.6.6, the extracted py runs numpy 2.2.6 isolated, the extracted gpu_bake.ps1 is the tested one and parses with 0 errors"""
+    unlink_alias()
     if os.path.exists(SANDBOX):
-        L.safe_remove_tree(SANDBOX, os.environ['TEMP'])
-    root, lad = os.path.join(SANDBOX, 'r'), os.path.join(SANDBOX, 'lad')
+        L.safe_remove_tree(SANDBOX, os.path.dirname(SANDBOX))
+    if os.path.exists(AUX):
+        L.safe_remove_tree(AUX, os.environ['TEMP'])
+    root, lad = os.path.join(SANDBOX, 'r'), os.path.join(AUX, 'lad')
     os.makedirs(os.path.join(root, 'tags'))
     os.makedirs(lad)
     work = os.path.join(root, 'GPU Lightmap Work')
-    check(len(work) + 1 <= 60, 'sandbox WORK too long for a Direct slot: %s' % work)
-    rc, o, e, s = run([EXE, '--cli', 'doctor', '--h2ek', root, '--localappdata', lad, '--alias-localappdata', os.path.join(SANDBOX, 'ala'),
-                       '--alias-volume-root', os.path.join(SANDBOX, 'avr'), '--no-gpu', '--repair'], timeout=600)
+    # 0.6.8 RC: the sandbox is no longer short (Temp - Deletable): a farms payload's slot is then the alias under AUX (checked below);
+    # a payload WITHOUT farms would need a Direct slot (WORK <= 60 characters), which this location cannot give
+    check(((manifest().get('features') or {}).get('farms') or {}).get('enabled') is True or len(work) + 1 <= 60,
+          'a payload without farms needs a short sandbox WORK (Direct slot): %s -- set H2LM_S19_SANDBOX' % work)
+    rc, o, e, s = run([EXE, '--cli', 'doctor', '--h2ek', root, '--localappdata', lad, '--alias-localappdata', os.path.join(AUX, 'ala'),
+                       '--alias-volume-root', os.path.join(AUX, 'avr'), '--no-gpu', '--repair'], timeout=600)
     lines = o.splitlines()
     check(any('runtime quick check: ok' in x for x in lines), 'quick check: %s' % o[-1500:])
     check(any('repair (full md5 of everything): ok' in x for x in lines), 'full md5: %s' % o[-1500:])
@@ -390,12 +438,16 @@ def t_extract_with_shell():
             p = os.path.join(d, *f['path'].split('/'))
             if c['target'] == 'inst' and 'dllslot' in f.get('role', ''):
                 b = open(p, 'rb').read()
-                base = (work + '\\').encode('mbcs')
-                check(b.count(L.PRISTINE_SLOT) == 0 and b.count(base) == 2 and len(b) == f['size'], '%s slots' % f['path'])
+                # 0.6.8: with features.farms the slot names WORK\Temp (safe to delete) (Direct when it fits 60 characters, else the alias under
+                # --alias-localappdata\H2GLM\<k6>); without it, WORK as before
+                farms = ((m.get('features') or {}).get('farms') or {}).get('enabled') is True
+                slotdir = os.path.join(work, 'Temp (safe to delete)') if farms else work
+                base = (slotdir + '\\').encode('mbcs') if len(slotdir) + 1 <= 60 else (os.path.join(AUX, 'ala', 'H2GLM') + '\\').encode('mbcs')
+                check(b.count(L.PRISTINE_SLOT) == 0 and b.count(base) == 2 and len(b) == f['size'], '%s slots (want %s)' % (f['path'], base))
             else:
                 check(L.md5_file(p) == f['md5'], '%s/%s md5' % (c['name'], f['path']))
     inst = dirs['engine']
-    check(L.md5_file(os.path.join(inst, 'engine_v373', 'gpu_bake.ps1')) == EXPECT_UPSTREAMED['engine_v373/gpu_bake.ps1'][1], 'gpu_bake')
+    check(L.md5_file(os.path.join(inst, 'engine_v373', 'gpu_bake.ps1')) == EXPECT_POST['engine_v373/gpu_bake.ps1'][1], 'gpu_bake')
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('PYTHON', 'PSMODULEPATH', 'GPULM_', 'H2LM_', 'OSOYOOS_'))}
     pwsh = os.path.join(dirs['pwsh-7.6.6'], 'pwsh.exe')
     env2 = dict(env, H2LM_T1=os.path.join(inst, 'engine_v373', 'gpu_bake.ps1'), H2LM_T2=os.path.join(inst, '_research', 'ao', 'dev_AO', 'gpu_bake.ps1'))
@@ -417,9 +469,19 @@ def t_extract_with_shell():
     check(rc == 0 and pl and pl[-1].split()[1:4] == ['3.10.5', '2.2.6', '1'] and os.path.normcase(pl[-1].split(' ', 4)[4]) == os.path.normcase(py),
           'py: %s %s' % (o[-300:], e[-300:]))
     mk = json.load(open(os.path.join(inst, '.complete'), encoding='utf-8'))
-    check(mk.get('slotBase') == work + '\\' and mk.get('slotKind') == 'Direct', 'INST marker %s' % mk)
-    rp = [os.path.join(dp, n) for dp, dns, fns in os.walk(SANDBOX) for n in dns + fns if L.is_reparse(os.path.join(dp, n))]
-    check(not rp, 'sandbox holds reparse points: %s' % rp)
+    # 0.6.8: a farms payload names WORK\Temp (safe to delete) in the slot; on this sandbox (79 characters) that is the alias under
+    # --alias-localappdata (outside Temp and WORK), the ONLY link the shell may make; without farms: WORK, Direct, no link (as before)
+    farms = ((m.get('features') or {}).get('farms') or {}).get('enabled') is True
+    tempdir = os.path.join(work, 'Temp (safe to delete)')
+    rp = [os.path.join(dp, n) for top in (SANDBOX, AUX) for dp, dns, fns in os.walk(top) for n in dns + fns if L.is_reparse(os.path.join(dp, n))]
+    if farms and len(tempdir) + 1 > 60:
+        ala = os.path.join(AUX, 'ala', 'H2GLM')
+        check(mk.get('slotKind') == 'AliasLocalAppData' and (mk.get('slotBase') or '').lower().startswith(ala.lower() + '\\'), 'INST marker %s' % mk)
+        check(len(rp) == 1 and os.path.dirname(rp[0]).lower() == ala.lower() and os.path.normcase(os.path.realpath(rp[0])) == os.path.normcase(tempdir),
+              'the only link is the slot alias -> the sandbox Temp: %s' % rp)
+    else:
+        check(mk.get('slotBase') == (tempdir if farms else work) + '\\' and mk.get('slotKind') == 'Direct', 'INST marker %s' % mk)
+        check(not rp, 'sandbox holds reparse points: %s' % rp)
     return 'extracted %d components (%.1f s doctor); pwsh 7.6.6, py 3.10.5 + numpy 2.2.6 isolated; slot base %s; gpu_bake x2 parse 0 errors' % (
         len(m['components']), s, work + '\\')
 
@@ -464,14 +526,25 @@ def t_dry_run_h2ekmine():
 def t_custom_engine_gate():
     """--with-custom-engine stages engine_custom/ = engine_v373 + the N3 guard exe ONLY with a T3a PASS record; exercised
     with a TEST record (a copy of LATEST.json marked PASS, never the real one) in build\\s19\\t -- the payload is not built"""
-    real = json.load(open(os.path.join(PROJ, 'build', 'fullgpu_guard', 'LATEST.json'), encoding='utf-8'))
-    gsrc = os.path.join(PROJ, 'build', 'fullgpu_guard', *real['guard_fullgpu'].split('\\'))
+    real = guard_record()
+    gsrc = os.path.join(os.path.dirname(guard_record_path()), *real['guard_fullgpu'].split(chr(92)))
+    prod_fg = L.md5_file(os.path.join(L.resolve_glw(L.load_spec()['roots']['GLW']), 'engine_v373', 'v041-fullgpu', 'fullgpu.exe'))
+    if real.get('production_fullgpu_md5') != prod_fg:
+        # 0.6.8 RC: a promoted fullgpu (dev_XC 3f5acd1b) has no N3 guard build yet (native\fullgpu_guard + gate T3a): nothing to stage
+        return 'SKIPPED: the guard record names production fullgpu %s, production is %s now (rebuild the guard, re-run T3a)' % (str(real.get('production_fullgpu_md5'))[:8], prod_fg[:8])
     if not os.path.isfile(gsrc):
         return 'SKIPPED: no guard exe at %s' % gsrc
     fg = os.path.join(T, 'fg')
     os.makedirs(os.path.join(fg, 'guard'), exist_ok=True)
     shutil.copyfile(gsrc, os.path.join(fg, 'guard', 'fullgpu.exe'))
     lt = dict(real, gpu_identity_proof='PASS (S1.9 TEST RECORD -- not a real T3a result)', guard_fullgpu='guard\\fullgpu.exe')
+    rtsrc = os.path.join(os.path.dirname(guard_record_path()), *real['guard_rt_fullgpu'].split(chr(92))) if real.get('guard_rt_fullgpu') else None
+    if rtsrc and os.path.isfile(rtsrc):
+        os.makedirs(os.path.join(fg, 'guard_rt'), exist_ok=True)
+        shutil.copyfile(rtsrc, os.path.join(fg, 'guard_rt', 'fullgpu_rt.exe'))
+        lt.update(guard_rt_fullgpu='guard_rt\\fullgpu_rt.exe', gpu_identity_proof_rt='PASS (S1.9 TEST RECORD -- not a real T3a result)')
+    else:
+        rtsrc = None
     json.dump(lt, open(os.path.join(fg, 'LATEST.json'), 'w'), indent=1)
     sp = _spec_variant('custom', lambda s: s['inst']['custom_engine'].__setitem__('latest', 'PROJ:' + os.path.relpath(os.path.join(fg, 'LATEST.json'), PROJ).replace('\\', '/')))
     so = os.path.join(T, 'stage_custom')
@@ -481,16 +554,27 @@ def t_custom_engine_gate():
     files = {r['path']: r for r in rep['files']}
     ce = {p: r for p, r in files.items() if p.startswith('engine_custom/')}
     ev = {p: r for p, r in files.items() if p.startswith('engine_v373/')}
-    check(len(ce) == len(ev), 'engine_custom has %d files, engine_v373 %d' % (len(ce), len(ev)))
+    check(len(ce) == len(ev) - (0 if rtsrc else 1), 'engine_custom has %d files, engine_v373 %d (RT guard %s)' % (len(ce), len(ev), bool(rtsrc)))
     for p, r in ce.items():
         twin = ev['engine_v373/' + p[len('engine_custom/'):]]
-        if p.endswith('v041-fullgpu/fullgpu.exe'):
+        if p.endswith('v041-fullgpu/fullgpu_rt.exe'):
+            check(r['md5'] == real['guard_rt_md5'] and r['role'] == 'built:N3rt' and r['sourceMd5'] == twin['md5'], 'RT guard %s' % r)
+        elif p.endswith('v041-fullgpu/fullgpu.exe'):
             check(r['md5'] == real['guard_md5'] and r['role'] == 'built:N3' and r['sourceMd5'] == twin['md5'], 'guard fullgpu %s' % r)
         else:
             check(r['md5'] == twin['md5'], '%s differs from engine_v373' % p)
     slots = [p for p, r in files.items() if r['role'] == 'dllslot']
     check(len(slots) == 6, 'slots %s' % slots)
     check(rep['custom_engine']['shipped'] is True, 'report')
+    if rtsrc:
+        # without the RT proof record the RT host is simply not shipped in engine_custom (the guarded D3D11 fullgpu.exe runs)
+        json.dump({k: v for k, v in lt.items() if k != 'gpu_identity_proof_rt'}, open(os.path.join(fg, 'LATEST.json'), 'w'), indent=1)
+        so3 = os.path.join(T, 'stage_custom3')
+        rc3, o3, e3, _ = run(PY + [os.path.join(TOOLS, 'stage_engine.py'), '--spec', sp, '--with-custom-engine', '--out', so3])
+        check(rc3 == 0, 'custom stage without the RT record exit %d: %s' % (rc3, e3[-400:]))
+        f3 = {r['path'] for r in json.load(open(os.path.join(so3, 'stage_report.json')))['files']}
+        check('engine_custom/v041-fullgpu/fullgpu_rt.exe' not in f3, 'the plain RT exe must never reach engine_custom')
+        json.dump(lt, open(os.path.join(fg, 'LATEST.json'), 'w'), indent=1)
     # a guard built against another production fullgpu is refused
     json.dump(dict(lt, production_fullgpu_md5='0' * 32), open(os.path.join(fg, 'LATEST.json'), 'w'), indent=1)
     _refused(['--spec', sp, '--with-custom-engine', '--out', os.path.join(T, 'stage_custom2')], 'the guard was built against', 'stale guard')
@@ -531,10 +615,80 @@ def t_no_bytecode_in_production():
     return 'none'
 
 
+def unlink_alias():
+    """the DLL-slot alias junction AUX\\ala\\H2GLM\\<k6> (-> the sandbox's Temp): unlink the LINK only (RemoveDirectory on the junction, never
+    followed) when it points inside this test's sandbox; anything else is left for safe_remove_tree to refuse"""
+    ala = os.path.join(AUX, 'ala', 'H2GLM')
+    if os.path.isdir(ala):
+        for k in os.listdir(ala):
+            j = os.path.join(ala, k)
+            if os.lstat(j).st_file_attributes & 0x400 and os.path.realpath(j).lower().startswith(SANDBOX.lower()):
+                os.rmdir(j)
+
+
+def t_tool_args_quoted():
+    """0.6.8 RC (P17): every gpu_bake.ps1 the payload ships builds the four tool command lines with the scenario and the BSP quoted (a name with
+    spaces reaches tool_fast as ONE argument), and none keeps an unquoted form"""
+    q = '`"'
+    want = ['$a = "lightmaps ' + q + '$($o.ScenArg)' + q + ' ' + q + '$Bsp' + q + ' low',
+            '$a = "lightmaps-farm-worker ' + q + '$Scenario' + q + ' ' + q + '$Bsp' + q + ' $capQ',
+            '$aFullOverride = "lightmaps ' + q + '$($ovo.ScenArg)' + q + ' ' + q + '$Bsp' + q + ' low',
+            '$aFull = "lightmaps ' + q + '$Scenario' + q + ' ' + q + '$Bsp' + q + ' low']
+    old = ['$a = "lightmaps $($o.ScenArg) $Bsp', '$a = "lightmaps-farm-worker $Scenario $Bsp', '$aFullOverride = "lightmaps $($ovo.ScenArg) $Bsp', '$aFull = "lightmaps $Scenario $Bsp']
+    n = 0
+    for rel in ('engine_v373/gpu_bake.ps1', 'engine_custom/gpu_bake.ps1', '_research/ao/dev_AO/gpu_bake.ps1'):
+        p = os.path.join(STAGE, 'inst', *rel.split('/'))
+        if not os.path.isfile(p):
+            continue
+        t = open(p, encoding='utf-8', errors='replace').read()
+        for w in want:
+            check(t.count(w) == 1, '%s lacks the quoted tool line %s' % (rel, w))
+        for o in old:
+            check(o not in t, '%s still has the unquoted tool line %s' % (rel, o))
+        n += 1
+    check(n >= 2, 'no gpu_bake.ps1 found in the stage')
+    return '%d gpu_bake.ps1: the four tool command lines quote the scenario and the BSP' % n
+
+
+def t_no_inject_exe():
+    """0.6.8 RC: the tool loader is H2GpuLightmapper.ToolLoader.exe (P16): no shipped file is NAMED inject.exe and no shipped file names it as
+    a PATH (v014-inject-estimator\\inject.exe, either slash, ASCII or UTF-16); the loader is shipped, md5 = its build record. Comments / log
+    texts that only mention the old name in prose are not paths and are allowed."""
+    import re
+    import zipfile
+    pat = re.compile(rb'inject-estimator[\\/]+inject\.exe', re.I)
+    pat16 = re.compile(re.escape('inject-estimator').encode('utf-16-le') + rb'(?:\\\x00|/\x00)+' + re.escape('inject.exe').encode('utf-16-le'), re.I)
+    named, refs, n = [], [], 0
+    for z in sorted(os.listdir(PAYLOAD)):
+        if not z.endswith('.zip'):
+            continue
+        with zipfile.ZipFile(os.path.join(PAYLOAD, z)) as zf:
+            for i in zf.infolist():
+                n += 1
+                if i.filename.replace('\\', '/').split('/')[-1].lower() == 'inject.exe':
+                    named.append('%s!%s' % (z, i.filename))
+                data = zf.read(i)
+                if pat.search(data) or pat16.search(data):
+                    refs.append('%s!%s' % (z, i.filename))
+    for f in (EXE, os.path.join(PAYLOAD, 'MANIFEST.json')):
+        data = open(f, 'rb').read()
+        n += 1
+        if pat.search(data) or pat16.search(data):
+            refs.append(os.path.basename(f))
+    check(not named, 'shipped files named inject.exe: %s' % named)
+    check(not refs, 'shipped files that reference v014-inject-estimator\\inject.exe: %s' % refs[:10])
+    m = manifest()
+    inst = [c for c in m['components'] if c['target'] == 'inst'][0]
+    tl = [f for f in inst['files'] if f['path'] == 'v014-inject-estimator/H2GpuLightmapper.ToolLoader.exe']
+    rec = json.load(open(os.path.join(L.PROJ, 'build', 'toolloader', 'build_toolloader.json'), encoding='utf-8'))['toolloader']
+    check(len(tl) == 1 and tl[0]['md5'] == rec['md5'], 'the tool loader is shipped with its build md5 %s: %s' % (rec['md5'], tl))
+    return '%d files / zip members: none named inject.exe, none referencing its path; ToolLoader %s shipped' % (n, rec['md5'][:8])
+
+
 TESTS = [('manifest_and_zips', t_manifest_and_zips), ('inst_equals_production', t_inst_equals_production), ('roles_layout', t_roles_layout),
          ('refusals', t_refusals), ('extract_with_shell', t_extract_with_shell), ('dry_run_h2ekmine', t_dry_run_h2ekmine),
          ('custom_engine_gate', t_custom_engine_gate), ('ao_driver_defaults', t_ao_driver_defaults), ('determinism', t_determinism),
-         ('no_bytecode_in_production', t_no_bytecode_in_production)]
+         ('no_bytecode_in_production', t_no_bytecode_in_production), ('no_inject_exe', t_no_inject_exe), ('tool_args_quoted', t_tool_args_quoted)]
 START = time.time()
 
 
@@ -565,7 +719,8 @@ def main():
                             'trace': traceback.format_exc()[-2000:]})
             print('FAIL %-26s %5.1fs  %s: %s' % (name, time.time() - t0, type(e).__name__, str(e)[:1500]))
     if not a.keep:
-        for d, under in ((T, B), (SANDBOX, os.environ['TEMP'])):
+        unlink_alias()
+        for d, under in ((T, B), (SANDBOX, os.path.dirname(SANDBOX)), (AUX, os.environ['TEMP'])):
             try:
                 if os.path.exists(d):
                     L.safe_remove_tree(d, under)

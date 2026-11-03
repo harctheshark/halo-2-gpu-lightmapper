@@ -1,0 +1,15 @@
+{
+ "format": "h2lm-farm-products/1",
+ "comment": "0.6.8 bounded temp: the phase-3/4 products of a worker's farm (OUT = farm_wNN) that the shell deletes after a bake when it keeps the farm's capture for 'Reuse existing capture'. ENGINE-OWNED: every name here is a file the engine itself deletes or regenerates before (or during) its phase 3 on EVERY bake, -SkipCapture included, so deleting it afterwards cannot change a later bake: engine_v373 pipeline_guard.py BAKE_PRODUCTS (gpu_bake.ps1 'Guard clean $OUT bake' runs right before phase 3), the per-part product list gpu_bake.ps1 moves into parts\\ ($partMove; parts\\ files are deleted before each part run), re_samp_gpu.bin and cast_cache.bin (deleted before phase 3 / after the main pass), the fullgpu.exe copy (Copy-Item -Force before phase 3), the direct writer's tagw_stage (copied to KEEP RUN\\final_stage by the shell before this runs), the AO layer folder ao\\ (gpu_ao trace / apply / stage re-make it on every AO bake) and *.stale_* (seam lists the engine set aside). Small text logs are not listed (they are copied to RUN\\farm_logs and stay). KEPT: the capture (phase-1 outputs), the derive tables, skeleton\\ (the cached skeleton, keyed), the capture record standalone_capture.json. To be proven byte-identical by a -SkipCapture re-bake after a slim (see docs\\design\\DISK_USAGE_0.6.8.md section 6).",
+ "files": [
+  "atlas_out.bin", "atlas_dir.bin", "atlas_split.bin", "vertex_out.bin", "vertdir.bin",
+  "photon_cull.bin", "photon_map.bin", "photon_nrm.bin",
+  "direct_out.bin", "surface_out.bin", "gather_out.bin", "gather_s1.bin", "fullgpu_key.bin",
+  "skyx_deposits.bin", "sunx_deposits.bin", "sun_cull_mask.bin", "scenery_out.bin",
+  "gate_census.bin", "fullgpu_key_devp.bin", "fullgpu_key_prewalk.bin", "gate_walk.bin",
+  "direct_perlight.bin", "direct_perlight_sub.bin", "sentinel_fill.bin", "sun_cull_mask_multi.bin",
+  "re_samp_gpu.bin", "cast_cache.bin", "cast_cache.bin.tmp", "fullgpu.exe"
+ ],
+ "dirs": ["parts", "tagw_stage", "ao", "aoonly"],
+ "patterns": ["*.stale_*"]
+}
