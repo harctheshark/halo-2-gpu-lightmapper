@@ -365,7 +365,9 @@ never does, so an AO lightmap no longer matches the CPU result. Leave AO off if 
 
 **Why does Windows warn me?** The exe is unsigned. See [Download and first start](#download-and-first-start). If Windows Security removes an engine file, see [Windows Security (Defender)](#windows-security-defender).
 
-**Does it work with Halo 2 Vista?** No. It targets the MCC Halo 2 H2EK `tool_fast` build named above.
+**Does it work with Halo 2 Vista?** Vista maps, yes: a compiled Halo 2 Vista `.map` can be baked and written back as a Vista
+map (see [Baking straight from a .map](#baking-straight-from-a-map-new-in-067)). The bake itself still needs the MCC Halo 2
+H2EK and its `tool_fast` build named above.
 
 ## Building from this repository
 
