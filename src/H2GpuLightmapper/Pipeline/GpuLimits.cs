@@ -33,7 +33,8 @@ namespace H2GpuLightmapper.Pipeline
         public const double BytesPerCall = 228.0 + 2.5 * 52.0;            // 358
         public const double BytesPerPhoton = 42.0;
         public const long DefaultStoredPhotons = 5000000L;
-        public const double DesktopReserveBytes = 1073741824.0;
+        /// <summary>0.6.10: 1.5 GiB for Windows, the desktop and a browser -- the same reserve the engine uses (vram_plan.h kDesktopBytes / kHeadroomBytes; 0.6.9: 1 GiB).</summary>
+        public const double DesktopReserveBytes = 1.5 * 1073741824.0;
         /// <summary>Safety margin on the rows that fit (the fit is +-1.3 GB and the grid slots per call measured 1.44-4.53).</summary>
         public const double RowsMargin = 0.90;
         /// <summary>An adapter reporting less dedicated memory than this (an integrated GPU: its memory is shared system RAM) is not sized.</summary>
@@ -51,6 +52,20 @@ namespace H2GpuLightmapper.Pipeline
         public int BufCapMB;
         /// <summary>Call rows the VRAM holds in one part before the margin (information).</summary>
         public long RowsFit;
+        /// <summary>0.6.10 (Custom quality): the video memory of the photon pass (cast + lattice, ledger peak) = <see cref="CustomPassBaseMiB"/> + <see cref="CustomPassMiBPerMillion"/> x millions of photons;
+        /// fitted on cyclotron at 20 / 50 / 100 M photons (2.75 / 4.24 / 6.65 GiB). A card that cannot hold even this with <see cref="CustomFloorMiB"/> to spare is refused before anything starts.</summary>
+        public const double CustomPassBaseMiB = 1850.0, CustomPassMiBPerMillion = 48.0, CustomFloorMiB = 512.0;
+        public static double CustomPassMiB(long photons) { return CustomPassBaseMiB + CustomPassMiBPerMillion * (photons / 1.0e6); }
+        /// <summary>Most photons whose photon pass fits in the card minus the 1.5 GiB desktop reserve (0 when even the base does not fit).</summary>
+        public static long CustomPhotonsFit(long vramBytes)
+        {
+            double room = vramBytes / 1048576.0 - DesktopReserveBytes / 1048576.0 - CustomPassBaseMiB;
+            return room <= 0 ? 0L : (long)(room / CustomPassMiBPerMillion * 1.0e6);
+        }
+        /// <summary>Custom only: the photon count that fits this card (information; 0 = not computed).</summary>
+        public long CustomPhotonsFitCount;
+        /// <summary>Custom only: non-null when the photon count cannot fit this card at all: the bake is refused with this text before any work.</summary>
+        public string CustomRefusal;
         /// <summary>X2: video memory other programs held when the plan was made (null = not measured).</summary>
         public long? OtherUseBytes;
         /// <summary>X2: the VRAM the parts were sized for when other programs held more than a normal desktop (null = the dedicated figure, i.e. today).</summary>
@@ -78,7 +93,7 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>X2: how much video memory other programs may hold before the part sizing reacts: the 1 GiB the model already assumes for
         /// the desktop plus 2 GiB of slack (a browser, a chat client and a video player are normal). Up to this much, the argv is exactly
         /// today's; every byte beyond it comes off the VRAM the parts are sized for.</summary>
-        public const double NormalOtherUseBytes = DesktopReserveBytes + 2.0 * 1073741824.0;
+        public const double NormalOtherUseBytes = 3.0 * 1073741824.0;   // 0.6.10: fixed at 3 GiB (a normal desktop's 1 GiB + 2 GiB of slack); the part sizing reserve above is 1.5 GiB
 
         /// <summary>X2: the live video memory held by programs other than the bake, in bytes (null = unknown: nothing changes). From
         /// gpucheck: the system-wide GPU Adapter Memory "Dedicated Usage" counter, and what the OS budget (QueryVideoMemoryInfo, LOCAL)
@@ -154,8 +169,28 @@ namespace H2GpuLightmapper.Pipeline
                 g.BufCapMB = Math.Max(d3d, MinBufCapMB);
                 g.Notes.Add("D3D11's documented per-resource limit on " + (dedicated / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB is " + d3d + " MiB, below fullgpu's default " + DefaultBufCapMB + " MiB cap: -BufCapMB " + g.BufCapMB);
             }
+            // 0.6.10 (measured on the stock maps at Super with an 8 GB and a 6 GB card limit): the photon lattice pass no longer allocates the main pass's buffers; it
+            // runs on a small slice of the map and needs about 1.5-3.5 GiB of video memory (the main-pass parts are the larger figure). Both are kept inside the card.
+            // 0.6.10: Custom quality with a very large photon count on a small card. The photon pass (cast + lattice) grows with the photon budget;
+            // measured on cyclotron with an 8 GB card limit and the hard limit on: 20 M photons 2.7 GiB, 50 M 4.1 GiB, 100 M 6.5 GiB (ledger peak of that pass).
+            if (photons > 0)
+            {
+                g.CustomPhotonsFitCount = CustomPhotonsFit(v);
+                double needMiB = CustomPassMiB(photons);
+                double cardMiB = v / 1048576.0;
+                string fitTxt = g.CustomPhotonsFitCount.ToString("N0", CultureInfo.InvariantCulture);
+                if (needMiB > cardMiB - CustomFloorMiB)
+                    g.CustomRefusal = "Custom quality with " + photons.ToString("N0", CultureInfo.InvariantCulture) + " photons needs about " + (needMiB / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)
+                        + " GiB of video memory for the photon pass; this graphics card has " + (cardMiB / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB"
+                        + " (about " + (Math.Max(0.0, cardMiB - DesktopReserveBytes / 1048576.0) / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB usable after Windows and your other programs). "
+                        + "The most this card handles is about " + fitTxt + " photons. Lower the photons to " + fitTxt + " or fewer, or bake with Super quality. Nothing was started.";
+                else if (needMiB > cardMiB - DesktopReserveBytes / 1048576.0)
+                    g.Notes.Add("WARNING Custom quality with " + photons.ToString("N0", CultureInfo.InvariantCulture) + " photons needs about " + (needMiB / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)
+                                + " GiB of video memory for the photon pass, more than the " + ((cardMiB - DesktopReserveBytes / 1048576.0) / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)
+                                + " GiB this card has to spare; it may run slower or stop. About " + fitTxt + " photons fit comfortably.");
+            }
             if (v < (14L << 30))
-                g.Notes.Add("the photon lattice pass (6-14 GiB on the big maps) is its own process and is not sized by the part knob: a map the lattice does not fit is not made to fit");
+                g.Notes.Add("the photon lattice pass runs on a small slice of the map and needs about 1.5-3.5 GiB of video memory at Super (measured on the stock maps); the main pass is cut into parts that fit the card");
             return g;
         }
 

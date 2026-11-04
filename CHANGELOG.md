@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.10 (2026-11-04)
+
+Exe SHA-256 `c5bb627f6678e8445a2ee5c2cf861a4773e1d216c0151e5b76583a09c1a2e9a2`.
+
+- **Bakes now fit graphics cards with 8 GB (and 6 GB) of video memory.** The photon-lattice pass, the first step of a bake, used to need 6-14 GB on its own. It now runs on a small slice of the map and needs about 2-3.5 GiB at Super, with exactly the same result.
+- **The main pass is cut into more parts when the card needs it.** The part sizing now counts all of a part's memory, not just its shading rows. More, smaller parts give the same lightmap; the bake only takes a little longer.
+- **1.5 GiB is kept free** for Windows, your desktop and a browser (it was 1 GiB). On a 24 GB card nothing changes: the lightmap is byte-identical to 0.6.9.
+- **Measured with a pretend card** (the engine pretended to have 8 GB or 6 GB on an RTX 4090 and refused any allocation past the card minus 1.5 GiB; Super quality; every lightmap identical to the 24 GB bake). Most video memory used by the whole bake:
+
+  | Map | 8 GB card (6.5 GiB usable) | 6 GB card (4.5 GiB usable) |
+  |---|---|---|
+  | cyclotron | 4.7 GiB | 3.6 GiB |
+  | headlong | 5.2 GiB | 3.8 GiB |
+  | mainmenu | 5.7 GiB | 3.9 GiB |
+  | earthcity_1 | 5.0 GiB | 3.3 GiB |
+
+- **Custom quality:** on the 8 GB pretend card, up to the maximum of 100 million photons fits on cyclotron and headlong. A Custom photon count the card cannot hold is now refused before anything starts, with the number of photons that fits. Photons are never lowered silently.
+- **Fixed:** after a bake that failed for another reason, the app could wrongly say that Windows Security had removed `fullgpu.exe` from a worker folder. That folder was left from an earlier bake for "Reuse existing capture", and the app's own cleanup had removed the file. Only the worker folders the bake actually ran in are checked now.
+- **Not tested on a real small card.** Everything above was measured on a 24 GB card pretending to be smaller. A real 8 GB or 6 GB card also has driver overhead and other programs, which is what the 1.5 GiB reserve is for. Still needing more memory: a very large lightmap chart that cannot be split, and Custom quality above what the card holds. Cards under 6 GB are untested.
+
 ## 0.6.9 (2026-11-03)
 
 Exe SHA-256 `8fb0a33217bcee8aaafcbbab4b239dc7de81f6c12f2f997f6c311d6fef260af3`.

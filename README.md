@@ -8,7 +8,7 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 0.6.9** (everything since 0.6.6; 0.6.7 and 0.6.8 were never published on their own, see [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 0.6.10** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -45,6 +45,8 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   faster; the engine uses RT only when a short self-check shows it is clearly faster and agrees with the normal tracer, and otherwise bakes
   the old way. Nothing to switch on. Tested on an RTX 4090 only.
 - **Repeatable (0.6.9).** Baking an unchanged map again gives the same lightmap.
+- **8 GB cards (0.6.10).** Bakes are sized to fit 8 GB and 6 GB graphics cards, with the same lightmap (checked with a pretend
+  smaller card; see [Limits](#limits)).
 - **Modes:** Lightmap Standard (lightmaps, plus light probes on a BSP that has probe points), Lightmap Lightprobes (probes
   only), Lightmap Only, and AO only (0.6.8: adds ambient occlusion to the lightmap already in your tags).
 - **Any GPU with Direct3D 11.** NVIDIA and AMD cards bake at full FP64 precision; a GPU without FP64 (Intel, Qualcomm Adreno)
@@ -121,7 +123,8 @@ one PC. Another GPU will be slower or faster; a card much slower than an RTX 409
     testing (on an RTX 4090 with the mode forced on), it may be slower, and it has not been run on a real Intel or Qualcomm GPU
     or on Windows on ARM.
   - On a laptop with two GPUs, the bake must run on the NVIDIA/AMD one (the app tells you how). Only an RTX 4090 with 24 GB has
-    been tested; the app sizes its work to the card's video memory but this is untested below 24 GB (checked with a pretend smaller card only).
+    been tested for real. Since 0.6.10 bakes are sized to fit 8 GB and 6 GB cards; this was checked with a pretend 8 GB and 6 GB card
+    on the RTX 4090 (every tested map fit, with the same lightmap), not on a real one.
 - **The stock MCC Halo 2 Editing Kit (H2EK)** from Steam, with `tool_fast.exe` build 2023.06.20 (md5
   `3a889d370a7be537af47ff8035acd201`). Other builds are refused, because the GPU hooks are address-specific.
 - **The H2EK's own prerequisites** (the app checks them and names any that is missing; it never installs anything): a `data`
@@ -306,7 +309,7 @@ Measurements come from one RTX 4090 PC; anything about other hardware is extrapo
 | Gather rays | Per shading call: Low 72, Super 128, Custom 2 x MC^2 (MC 1-64). | HARD |
 | Lights | Halo 2 allows 500 lights, 500 fixtures, 32 skies per scenario. | HARD |
 | Light probes | Up to 1,024 probe points per BSP (Halo 2's limit). Since 0.6.9 the probe pass runs in batches of up to 281 points and joins the results exactly; above 1,024 the app refuses before anything runs, with a message to use Lightmap Only. Only 11 points were baked for real; 300 were checked in batches. | HARD (Halo 2's) |
-| Video memory | 24 GB held every tested map. Since 0.6.9 the engine reads the card's dedicated memory and sizes the bake's parts and largest buffers to fit (and, since 0.6.3, what other programs are using); on a 24 GB card nothing changes. Checked with a pretend smaller card, not on a real 6, 8 or 12 GB card. The photon lattice pass (6-14 GB on big maps) is not sized. | SOFT, not tested below 24 GB |
+| Video memory | 24 GB held every tested map. The engine reads the card's dedicated memory and sizes the bake's parts and largest buffers to fit, keeping 1.5 GiB free for Windows and your desktop (0.6.10; it was 1 GiB). Since 0.6.10 the photon lattice pass needs about 2-3.5 GiB at Super (it used to need 6-14 GB). With a pretend 8 GB card the most video memory a whole Super bake used was 4.7-5.7 GiB (cyclotron, headlong, earthcity_1, mainmenu; 3.3-3.9 GiB with a pretend 6 GB card), with the same lightmap as on 24 GB. Custom quality above what the card holds is refused before the bake starts. Not tested on a real 6, 8 or 12 GB card. | SOFT, not tested on a real card below 24 GB |
 | Ray tracing | Used automatically on GPUs with RT cores (0.6.9); tested only on an RTX 4090. Other GPUs bake the old way. No setting turns it off. | SOFT |
 | Bake time | Super: 22 s to 17.4 min on the tested maps (RTX 4090). | SOFT |
 | GPU timeout (TDR) | Every long GPU step is paced by measured time and starts with a tiny submission. Since 0.6.5 the photons of the sky chain, the exact sun and the photon cast are resumable (the smallest unit is one trace, not one photon), the photon lattice is resumable (0.6.4), and the exact-sun batch size no longer reads only the dedicated memory of an integrated GPU. None of the tested bakes on the RTX 4090 printed the 1.5 s warning. A GPU much slower than an RTX 4090, or one with shared memory, has not been tried. | SOFT |
@@ -322,10 +325,11 @@ These are open problems in this build.
    been run on that PC or on any GPU other than an RTX 4090**, where nothing changes in the output and the 1.5 s warning never appeared.
    A GPU much slower than a 4090, or a map much denser than the tested ones, has not been tried. If a bake fails with a GPU reset, the
    app says so in plain words; "Keep PC responsive" helps.
-2. **VRAM sizing is untested below 24 GB, and the photon lattice is not sized.** The app sizes its work parts and largest buffers
-   from your card's memory, but this was checked only with a pretend smaller card on the RTX 4090, not on a real 6, 8 or 12 GB
-   card. The photon-lattice step (the first step of a bake, 6-14 GB on big maps) runs as its own process and is not sized by it: on
-   a card where it does not fit, a bake can still stop there (the app prints a notice for cards under 14 GB).
+2. **Cards below 24 GB are tested only with a pretend card.** Since 0.6.10 the photon-lattice step needs about 2-3.5 GiB at Super
+   (it used to need 6-14 GB) and the main pass is cut into parts that fit, with 1.5 GiB kept free for Windows. With a pretend 8 GB
+   or 6 GB card on the RTX 4090 every tested map baked with the same lightmap, but no real 6, 8 or 12 GB card has run it. Still
+   needing more memory: a very large lightmap chart that cannot be split, and Custom quality above what the card holds (refused
+   before the bake, with the number of photons that fits). Cards under 6 GB are untested.
 3. **Compatibility mode (DF64) is new and experimental.** GPUs without FP64 now run the engine's FP32 kernels instead of being
    refused. They matched full precision in testing, but only on an RTX 4090 with the mode forced on: **no real Intel or
    Qualcomm GPU and no Windows on ARM PC has run it**, and it may be slower. Please report what you see.

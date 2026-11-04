@@ -1,0 +1,51 @@
+# title: P22 0.6.10: the lean photon-lattice pre-pass in the AO engine (dev_AO15 = dev_AO14 + the dev_LV port)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: 0a399cda4e2f626c47844cf17d9f8422
+# result-md5: a44611d558c45e8262eddd16014e870a
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -1931,6 +1931,10 @@
+     $partPlan = @(Get-Content "$OUT\part_plan.txt" | Where-Object { $_ -match '^part \d+ ' } | ForEach-Object {
+         $f = $_ -split ' '; [pscustomobject]@{ K = [int]$f[1]; C0 = [uint32]$f[2]; C1 = [uint32]$f[3]; Calls = [uint64]$f[4]; Slots = [uint64]$f[5] } })
+     $nParts = $partPlan.Count
++    # v376 dev_LV: the engine's verdict on the LEAN lattice pre-pass ("lattice <lean> <rows> <modelMiB> <budgetMiB>")
++    $latLean = $false; $latLeanRows = [uint64]1000000
++    $latLine = @(Get-Content "$OUT\part_plan.txt" | Where-Object { $_ -match '^lattice \d' }) | Select-Object -First 1
++    if ($latLine) { $lf = $latLine -split ' '; $latLean = ($lf[1] -eq '1'); $latLeanRows = [uint64]$lf[2] }
+     if ($nParts -lt 1) { throw "PHASE 3: part_plan.txt lists no part" }
+     if ($nParts -gt 1) { Note ("v372 SEG: this map does not fit one pass -- baking in {0} parts (contiguous chart ranges, merged afterwards); plan {1:n1}s" -f $nParts, $swP.Elapsed.TotalSeconds) }
+     else { Write-Host ("      v372 SEG: the whole map fits one pass (plan {0:n1}s)" -f $swP.Elapsed.TotalSeconds) }
+@@ -1947,7 +1951,23 @@
+     $swL = [Diagnostics.Stopwatch]::StartNew()
+     try {
+         $env:GPULM_LATTICE_ONLY = "1"; $env:GPULM_SKIP_GATHER = "1"; $env:GPULM_CC_EXIT_AFTER_RE = "1"
+-        if ($nParts -gt 1) { $env:GPULM_PART_RANGE = "$($partPlan[0].C0):$($partPlan[0].C1)"; Write-Host "      v372 SEG: the lattice pre-pass runs on part 0's charts only (the cast, sun and r.e. lattice do not depend on the texel set)" }
++        $leanP0 = $null
++        if ($latLean -and -not $NoParts -and -not $env:GPULM_PROBES) {   # v376 dev_LV: LEAN pre-pass -- bake a small slice of the soup (the lattice reads no call row)
++            Copy-Item "$OUT\part_plan.txt" "$OUT\part_plan.main.txt" -Force
++            try {
++                $env:GPULM_PART_PLAN_ONLY = "1"; $lim = $latLeanRows; if ($MaxCallsPerPart -gt 0 -and [uint64]$MaxCallsPerPart -lt $lim) { $lim = [uint64]$MaxCallsPerPart }
++                $env:GPULM_PART_MAX_CALLS = "$lim";
++                & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake_partplan_lean.log" | Out-Null
++                $lpx = $LASTEXITCODE
++            } finally { Clear-Gpulm 'GPULM_PART_PLAN_ONLY','GPULM_PART_MAX_CALLS' }
++            if ($lpx -eq 0 -and (Test-Path "$OUT\part_plan.txt")) {
++                $leanP0 = @(Get-Content "$OUT\part_plan.txt" | Where-Object { $_ -match '^part \d+ ' } | ForEach-Object { $f = $_ -split ' '; [pscustomobject]@{ C0 = [uint32]$f[2]; C1 = [uint32]$f[3]; Calls = [uint64]$f[4]; T0 = $(if ($f.Count -gt 6) { [uint32]$f[6] } else { [uint32]0 }); T1 = $(if ($f.Count -gt 7) { [uint32]$f[7] } else { [uint32]0 }) } }) | Select-Object -First 1 }
++            Copy-Item "$OUT\part_plan.main.txt" "$OUT\part_plan.txt" -Force
++            if ($leanP0) { Note ("v376 LEAN lattice pre-pass: the photon lattice needs no shading rows, so it runs on {0} call rows (charts [{1}..{2})) instead of part 0's {3} -- the same lattice, a fraction of the video memory" -f $leanP0.Calls, $leanP0.C0, $leanP0.C1, $partPlan[0].Calls) }
++            else { Note "v376 lean lattice pre-pass: the lean plan failed (exit $lpx) -- using part 0 as planned" }
++        }
++        if ($leanP0) { $env:GPULM_PART_RANGE = "$($leanP0.C0):$($leanP0.C1)"; if ($leanP0.T0 -or $leanP0.T1) { $env:GPULM_PART_TEX = "$($leanP0.T0):$($leanP0.T1)" } }
++        elseif ($nParts -gt 1) { $env:GPULM_PART_RANGE = "$($partPlan[0].C0):$($partPlan[0].C1)"; Write-Host "      v372 SEG: the lattice pre-pass runs on part 0's charts only (the cast, sun and r.e. lattice do not depend on the texel set)" }
+         Remove-Item "$OUT\cast_cache.bin","$OUT\cast_cache.bin.tmp" -ErrorAction SilentlyContinue
+         if (-not $NoCastCache) { $env:GPULM_CAST_CACHE_OUT = "$OUT\cast_cache.bin" }   # v372M
+         if (-not $NoReWin) { $env:GPULM_RE_WIN = "1" }     # v368: the r.e. kernel runs HERE
+@@ -1956,7 +1976,7 @@
+         if ($env:H2LM_DUMP_ENV) { $envLines = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GPULM_*' -or $_.Name -like 'H2*' } | ForEach-Object { "$($_.Name)=$($_.Value)" }); $envLines += "ARGS=$($args2 -join ' ')"; Set-Content -Path "$OUT\lattice_env.txt" -Value $envLines }
+         # -CaseSensitive: "OVERFLOWED" only (the benign "(0 overflowed)" census line must not echo)
+         & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake_lattice.log" |
+-            Select-String -CaseSensitive -Pattern "SURVEY |GPU: \*\*\*|VRAM: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
++            Select-String -CaseSensitive -Pattern "SURVEY |GPU: \*\*\*|VRAM: |VRAMLG: |RESPONSIVE: |RE TDR WARNING|DEVICE REMOVED|FATAL|REFUSING|\*\*\*|SUNX: EXACT|SUNX: status|SUNX: exact sun OK|SUNX: retrying|SKYX: plan|SKYX: round|SKYX: all|SKYX: appended|OVERFLOWED|RE lattice .* ms|RE KX:|RE KXE|PHOTON ORDER|LATTICE FNV1a64|photon-albedo staging|PLK64: (ON|off|scenery)|BUFCAP: v372 cap|GPU CAST v372|v372 analytic census" | ForEach-Object { "      [lattice] $_" }
+         $lx = $LASTEXITCODE
+     } finally {
+         Clear-Gpulm 'GPULM_LATTICE_ONLY','GPULM_CC_EXIT_AFTER_RE','GPULM_RE_WIN','GPULM_CAST_CACHE_OUT','GPULM_PART_RANGE'

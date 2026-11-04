@@ -24,6 +24,8 @@ namespace H2GpuLightmapper.Tests
             yield return T("unit: CLI parsing (strict: unknown option, missing value, --photons without custom)", CliParsing);
             yield return T("unit: gpu_bake argv = run_bake.ps1's production order (+ P2 custom last)", GpuBakeArgs);
             yield return T("unit: X1 GPU limits (VRAM part sizing, 24 GB = production argv, D3D11 cap on small cards) + probe-count limit + gpucheck VRAM + NormalizeRoot", X1Limits);
+            yield return T("unit 0.6.10: 8 GB sizing uses the engine's 1.5 GiB reserve (13,265,749 rows), the lattice notice states the measured need", Lv8GbSizing);
+            yield return T("unit 0.6.10: Custom photon guard: 8 GB allows up to 100 M, 6 GB refuses 100 M saying 57 M fit (warns above that), 4 GB refuses 50 M; Super / 24 GB never", LvCustomPhotonGuard);
             yield return T("unit: capture record + reuse gate rules (crc, quality, P / MC, fixes, binaries, probes, tags)", ReuseGate);
             yield return T("unit: tags fingerprint excludes this BSP's outputs, Sapien auto-backups and the tool's temp_scenario scratch; diff lists changes", Fingerprint);
             yield return T("unit: after our install only the .scenario line is restamped; other changes keep warning", Restamp);
@@ -679,6 +681,40 @@ namespace H2GpuLightmapper.Tests
             o.Fixes = false; o.Quality = Quality.Super;
             Assert.Seq(new[] { "-Scenario", @"scenarios\multi\cyclotron\cyclotron", "-Bsp", "cyclotron", "-Worker", "203", "-Quality", "super", "-WriteBackMode", "direct" },
                        BakePlanner.GpuBakeArgs(o, 203, false, false), "dev no-fixes argv");
+        }
+
+        // 0.6.10: the sizing uses the engine's 1.5 GiB desktop reserve; an 8 GB card gets the engine's own figure (vram_plan.h part_rows_limit: 13,265,749 rows at 8192 MiB)
+        private static void Lv8GbSizing()
+        {
+            Assert.Eq(1.5 * 1073741824.0, GpuLimits.DesktopReserveBytes, "reserve = 1.5 GiB (the engine's)");
+            Assert.Eq(3.0 * 1073741824.0, GpuLimits.NormalOtherUseBytes, "a normal desktop's allowance stays 3 GiB");
+            var g8 = GpuLimits.Compute(8192L << 20, "t", 0);
+            Assert.Eq(13265749L, g8.MaxCallsPerPart, "8192 MiB: the same -MaxCallsPerPart the engine plans on its own");
+            Assert.True(g8.Notes.Any(n => n.Contains("small slice of the map") && n.Contains("1.5-3.5 GiB")), "the lattice note states the measured need");
+            Assert.True(!g8.Notes.Any(n => n.Contains("6-14 GiB")), "the old 6-14 GiB notice is gone");
+            Assert.True(!GpuLimits.Compute(24L << 30, "t", 0).Notes.Any(n => n.Contains("photon lattice")), "a 24 GiB card: no lattice note");
+        }
+
+        // 0.6.10: Custom quality guard -- a photon count the card's memory cannot hold is refused before anything starts, saying what fits; never silently lowered
+        private static void LvCustomPhotonGuard()
+        {
+            foreach (long ph in new[] { 1000000L, 20000000L, 50000000L, 100000000L })
+            {
+                var g8 = GpuLimits.Compute(8192L << 20, "t", ph);
+                Assert.True(g8.CustomRefusal == null, "8 GB card, " + ph + " photons: allowed (measured: 100 M fits)");
+                Assert.True(!g8.Notes.Any(n => n.StartsWith("WARNING Custom")), "8 GB card, " + ph + " photons: no warning");
+            }
+            var g6 = GpuLimits.Compute(6144L << 20, "t", 100000000L);
+            Assert.True(g6.CustomRefusal != null, "6 GB card, 100 M photons: refused");
+            Assert.True(g6.CustomRefusal.Contains("most this card handles is about 57,458,333 photons") && g6.CustomRefusal.EndsWith("Nothing was started."), "says what fits: " + g6.CustomRefusal);
+            Assert.Eq(57458333L, g6.CustomPhotonsFitCount, "fit count");
+            var g6w = GpuLimits.Compute(6144L << 20, "t", 70000000L);
+            Assert.True(g6w.CustomRefusal == null && g6w.Notes.Any(n => n.StartsWith("WARNING Custom quality with 70,000,000 photons")), "6 GB, 70 M: a warning, not a refusal");
+            Assert.True(GpuLimits.Compute(6144L << 20, "t", 50000000L).CustomRefusal == null, "6 GB, 50 M (the default): allowed");
+            Assert.True(GpuLimits.Compute(4096L << 20, "t", 50000000L).CustomRefusal != null, "4 GB, 50 M: refused");
+            Assert.True(GpuLimits.Compute(24L << 30, "t", 100000000L).CustomRefusal == null, "24 GB: never");
+            Assert.True(GpuLimits.Compute(6144L << 20, "t", 0).CustomRefusal == null, "Low / Super (photons 0): never");
+            Assert.True(GpuLimits.Compute(1L << 30, "t", 100000000L).CustomRefusal == null, "an integrated GPU is not sized");
         }
 
         private static void X1Limits()

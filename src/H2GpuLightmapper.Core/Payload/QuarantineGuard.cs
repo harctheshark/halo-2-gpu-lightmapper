@@ -98,13 +98,30 @@ namespace H2GpuLightmapper.Core.Payload
 
         /// <summary>0.6.9 (antivirus): the engine copies fullgpu.exe into the worker folder (farm_wNNullgpu.exe) at the start of phase 3 and runs it from there, so the antivirus can remove THAT copy
         /// (Behavior:Win32/DefenseEvasion.A!ml did, 2026-11-02) while the INST copy is still there. Returns the farm copy's path when phase 3 has started in this worker
-        /// (gpu_bake.log / gpu_bake_lattice.log exist, so the copy had been made) and the copy is missing or blocked now; null otherwise. Call it BEFORE the after-bake cleanup (which deletes the copy).</summary>
-        public static string FarmExeRemoved(string farmDir)
+        /// (gpu_bake.log / gpu_bake_lattice.log exist, so the copy had been made) and the copy is missing or blocked now; null otherwise. Call it BEFORE the after-bake cleanup (which deletes the copy).
+        /// 0.6.10: <paramref name="sinceUtc"/> = when THIS bake started. A phase-3 log counts only when it was written since then: a worker folder kept from an
+        /// EARLIER bake for "Reuse existing capture" was slimmed by that bake's cleanup (fullgpu.exe removed, the logs left), and its old log made the app blame
+        /// the antivirus for the app's own cleanup (seen 2026-11-04, farm_w200 after a failed bake in farm_w232).</summary>
+        public static string FarmExeRemoved(string farmDir, DateTime? sinceUtc = null)
         {
             if (string.IsNullOrEmpty(farmDir) || !Directory.Exists(farmDir)) return null;
-            if (!File.Exists(Path.Combine(farmDir, "gpu_bake.log")) && !File.Exists(Path.Combine(farmDir, "gpu_bake_lattice.log"))) return null;
+            if (!PhaseThreeLogs.Any(l => WrittenSince(Path.Combine(farmDir, l), sinceUtc))) return null;
             string exe = Path.Combine(farmDir, "fullgpu.exe");
             return Probe(exe) == null ? null : exe;
+        }
+
+        /// <summary>The logs fullgpu.exe writes into the worker folder in phase 3 (the part plan runs right after the copy is made).</summary>
+        private static readonly string[] PhaseThreeLogs = { "gpu_bake.log", "gpu_bake_lattice.log", "gpu_bake_partplan.log" };
+
+        private static bool WrittenSince(string path, DateTime? sinceUtc)
+        {
+            try
+            {
+                if (!File.Exists(path)) return false;
+                return sinceUtc == null || File.GetLastWriteTimeUtc(path) >= sinceUtc.Value.AddSeconds(-2);     // 2 s: file-time granularity
+            }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
         }
 
         /// <summary>Can the file be opened for reading? null = yes; "missing" / "blocked" (225/226) / "unreadable" otherwise.</summary>

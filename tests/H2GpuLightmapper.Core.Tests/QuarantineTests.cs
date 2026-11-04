@@ -19,7 +19,7 @@ namespace H2GpuLightmapper.Core.Tests
             yield return T("quarantine (RC): a MISSING INST file and an md5 MISMATCH are re-extracted before the bake; the record is cleared once all verifies", RepairOnce);
             yield return T("quarantine (RC): a re-extracted file that vanishes again during the settle -> DefenderRemovedException before the bake, recorded; the next check refuses WITHOUT extracting; restored -> verifies, record gone", VanishesAgain);
             yield return T("quarantine (RC): a file removed while the bake ran is found after it (FindRemovedAfterBake); the next pre-bake check re-extracts it ONCE; removed again during that bake -> recorded -> the bake after refuses without extracting", AfterBake);
-            yield return T("quarantine (0.6.9): the worker folder's own fullgpu.exe copy removed by the antivirus after phase 3 started is found (before the cleanup deletes it); not claimed before phase 3 or when the copy is there", FarmCopyRemoved);
+            yield return T("quarantine (0.6.9): the worker folder's own fullgpu.exe copy removed by the antivirus after phase 3 started is found (before the cleanup deletes it); not claimed before phase 3 or when the copy is there; 0.6.10: not claimed for a folder whose phase-3 logs are from an earlier bake (the app's own cleanup)", FarmCopyRemoved);
         }
 
         private static void FarmCopyRemoved()
@@ -35,6 +35,20 @@ namespace H2GpuLightmapper.Core.Tests
             string m = QuarantineGuard.Message(Path.Combine(farm, "fullgpu.exe"), null, "0.6.9", true, true);
             Assert.Contains(m, "Windows Security (Defender) removed " + Path.Combine(farm, "fullgpu.exe") + " during the bake", "the message names the farm copy");
             Assert.Contains(m, "Nothing was written.", "nothing written");
+
+            // 0.6.10: a worker folder kept from an EARLIER bake (slimmed: fullgpu.exe removed by the app's own cleanup, the old logs left) is not blamed on the antivirus
+            string old = C.Sb.Dir("farm_q_old");
+            foreach (var l in new[] { "gpu_bake.log", "gpu_bake_lattice.log", "gpu_bake_partplan.log" })
+            {
+                File.WriteAllText(Path.Combine(old, l), "an earlier bake");
+                File.SetLastWriteTimeUtc(Path.Combine(old, l), DateTime.UtcNow.AddHours(-3));
+            }
+            var since = DateTime.UtcNow.AddMinutes(-5);
+            Assert.True(QuarantineGuard.FarmExeRemoved(old, since) == null, "only logs from an earlier bake: the app's own cleanup removed the copy, nothing is claimed");
+            Assert.True(QuarantineGuard.FarmExeRemoved(old) != null, "without the bake's start time the old rule still applies");
+            File.SetLastWriteTimeUtc(Path.Combine(old, "gpu_bake_partplan.log"), DateTime.UtcNow);
+            Assert.True(string.Equals(QuarantineGuard.FarmExeRemoved(old, since), Path.Combine(old, "fullgpu.exe"), StringComparison.OrdinalIgnoreCase),
+                        "this bake's phase 3 wrote a log there (the part plan runs right after the copy) and the copy is gone: claimed");
         }
 
         private static PayloadInstaller NewInst(string tag, out string root)

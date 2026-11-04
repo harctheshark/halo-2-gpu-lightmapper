@@ -561,6 +561,8 @@ namespace H2GpuLightmapper.Pipeline
                         + (other.HasValue ? "; in use by other programs now: " + (other.Value / 1048576L).ToString("N0", CultureInfo.InvariantCulture) + " MiB" : ""));
                     foreach (var ln in _limits.Notes) Say("    " + ln);
                 }
+                // 0.6.10: Custom quality with more photons than this card's memory can hold: refused before anything starts, with the photon count that fits (never silently lowered)
+                if (_limits != null && _limits.CustomRefusal != null) Refuse(_limits.CustomRefusal);
             }
             CheckCancel();
 
@@ -1008,7 +1010,7 @@ namespace H2GpuLightmapper.Pipeline
             string farmExeGone = null;
             if (!_so.DryRun && final == RunState.Failed)
             {
-                try { foreach (var w in new[] { _n, _m }.Where(x => x.HasValue)) { farmExeGone = QuarantineGuard.FarmExeRemoved(BakePlanner.FarmDir(Farms, w.Value)); if (farmExeGone != null) break; } }
+                try { foreach (var w in new[] { _n, _m }.Where(x => x.HasValue)) { farmExeGone = QuarantineGuard.FarmExeRemoved(BakePlanner.FarmDir(Farms, w.Value), started); if (farmExeGone != null) break; } }
                 catch (Exception) { }
             }
             AfterBakeJanitor(run, plan, final == RunState.Done);
