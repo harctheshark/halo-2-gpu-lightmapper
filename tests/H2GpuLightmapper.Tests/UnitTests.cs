@@ -689,7 +689,7 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(1.5 * 1073741824.0, GpuLimits.DesktopReserveBytes, "reserve = 1.5 GiB (the engine's)");
             Assert.Eq(3.0 * 1073741824.0, GpuLimits.NormalOtherUseBytes, "a normal desktop's allowance stays 3 GiB");
             var g8 = GpuLimits.Compute(8192L << 20, "t", 0);
-            Assert.Eq(13265749L, g8.MaxCallsPerPart, "8192 MiB: the same -MaxCallsPerPart the engine plans on its own");
+            Assert.Eq(13265749L, g8.MaxCallsPerPart, "8192 MiB: the same -MaxCallsPerPart the engine plans on its own (0.6.11: unchanged by the engine's +256 MiB envelope constant, a separate per-part check)");
             Assert.True(g8.Notes.Any(n => n.Contains("small slice of the map") && n.Contains("1.5-3.5 GiB")), "the lattice note states the measured need");
             Assert.True(!g8.Notes.Any(n => n.Contains("6-14 GiB")), "the old 6-14 GiB notice is gone");
             Assert.True(!GpuLimits.Compute(24L << 30, "t", 0).Notes.Any(n => n.Contains("photon lattice")), "a 24 GiB card: no lattice note");

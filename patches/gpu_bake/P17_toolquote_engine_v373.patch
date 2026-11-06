@@ -1,7 +1,7 @@
 # title: P17 0.6.8: the four tool command lines quote the scenario and the BSP (names with spaces)
 # source: engine_v373/gpu_bake.ps1
-# base-md5: d7e267e782527f8074710c5a15584aa8
-# result-md5: 18d592e37ee1a3c0ec7a383ec31acf10
+# base-md5: 6db325a2ca6e100dffb63c6234c19006
+# result-md5: d6002ab12d1ee6149eaf05b25b6c8d33
 --- a/engine_v373/gpu_bake.ps1
 +++ b/engine_v373/gpu_bake.ps1
 @@ -954,7 +954,7 @@

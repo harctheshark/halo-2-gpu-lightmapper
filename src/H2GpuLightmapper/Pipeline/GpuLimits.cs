@@ -29,6 +29,9 @@ namespace H2GpuLightmapper.Pipeline
 
         // ---- LIMITS.md 8.1 / 8.2: VRAM of the main pass = 1.39 GiB + 228 B per call row + 52 B per grid slot + 42 B per stored photon
         // (fit on 8 measured peaks, +-1.3 GB), 2.5 grid slots per call, about 5 M stored photons, about 1 GiB used by the desktop.
+        // 0.6.11: the engine's v377 +256 MiB (vram_plan.h kEnvConstB: the surface-direction PDIR buffer) belongs to the engine's separate per-part ENVELOPE check
+        // (part_fits_vram: 245 B/row + 40 B/slot + 2440+256 MiB), which cuts a part that does not fit into more parts and cannot change the output. This class mirrors
+        // part_rows_limit (BaseBytes / BytesPerCall below), which v377 left unchanged, so these constants stay equal to the engine's (13,265,749 rows at 8192 MiB).
         public const double BaseBytes = 1.39 * 1073741824.0;
         public const double BytesPerCall = 228.0 + 2.5 * 52.0;            // 358
         public const double BytesPerPhoton = 42.0;

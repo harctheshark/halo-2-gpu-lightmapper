@@ -21,7 +21,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parents[1]
 DEFAULT_VCVARS = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat"
-ORIGINAL_SRC_MD5 = "4abcc016695b60553caa66db7b63223a"      # dev_TW / dev_069 / engine_v374 v043-tagwriter\native\tw_native.cpp
+ORIGINAL_SRC_MD5 = "73c6c59891483d823c6395213e4af86c"      # 0.6.11: engine_v377 tw_native.cpp (dev_TW 4abcc016 + the tier-1-only instance lookup; TW_INST_TIER2=1 restores the old one)
 NAME = "tw_native.exe"
 CREATE_NO_WINDOW, BELOW_NORMAL = 0x08000000, 0x00004000
 EXPECT_TOOLSET = "14.44"
@@ -99,7 +99,7 @@ def main():
     if not dst.exists():
         shutil.copyfile(e1, dst)
     rec = {"exe": str(dst), "md5": md5(dst), "size": dst.stat().st_size, "source": "native/twnative/tw_native.cpp", "source_md5": src_md5,
-           "source_original": "KEEP dev_TW / engine_v374 v043-tagwriter\\native\\tw_native.cpp (md5 %s)" % ORIGINAL_SRC_MD5,
+           "source_original": "KEEP engine_v377 v043-tagwriter\\native\\tw_native.cpp (md5 %s)" % ORIGINAL_SRC_MD5,
            "rc_md5": md5(HERE / "twnative.rc"), "manifest_md5": md5(HERE / "twnative.manifest"),
            "arch": "x64", "VCToolsVersion": env.get("VCToolsVersion"), "WindowsSDKVersion": env.get("WindowsSDKVersion", "").strip("\\"),
            "vcvars": "vcvarsall x64", "rc": rcl, "cl": cll, "original_cl": "cl /nologo /O2 /fp:strict /EHsc /W3 tw_native.cpp /Fe:tw_native.exe (vcvarsall x64)",

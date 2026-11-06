@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.11 (2026-11-06)
+
+Exe SHA-256 `10fc5ae48fb53c1ff41e4803500ea51710c5f0c48832b005992585232f0a32b9`.
+
+- **The light direction stored per vertex is much closer to the original tool.** This is the direction that drives bump mapping and the shading of lit objects. Average agreement with the original CPU tool's direction for the same vertex (cosine, 1.0 = identical), 0.6.10 -> 0.6.11: High Charity lightmapped objects 0.90 -> 0.96, scenery 0.69 -> 0.81, level geometry (clusters) 0.83 -> 0.90; Cairo Station lightmapped objects 0.93 -> 0.97, clusters 0.89 -> 0.90; Cyclotron lightmapped objects 0.93 -> 0.98. The lightmap colours are unchanged: the lightmap bitmaps and the accuracy score are identical to 0.6.10 on every map tested.
+  - Surface lights (glowing panels, lit decorations) now give the direction of the brightest single light, as the original tool does (this was the cause of the poor High Charity scenery direction).
+  - A lightmapped object's vertex is matched only to a direction sample on its own surface, as the original tool does. The previous fallback to any surface at the same point mixed in perpendicular faces.
+  - The per-vertex direction is built from the samples the bake itself used (after its occlusion checks), including the samples on chart borders; the engine records them in a new per-sample file and the builder reads them. The result no longer depends on the order the GPU wrote them in, so repeated bakes give the same file.
+- **Maps with many sky lights bake much faster.** The sky pass now plans its work in smaller steps. High Charity at Super on an RTX 4090: 25 minutes -> about 6 minutes (about 4 to 5 times faster), with the same result. Other maps are unchanged or slightly quicker.
+- The first (gate) pass submits its work to the GPU in smaller pieces (at most about 250 ms each). The result does not change.
+- The engine counts the extra video memory of the new surface-light pass (up to 256 MiB on big maps) when it decides how to cut the main pass into parts. A pretend 8 GB card on High Charity (two parts) gives exactly the same lightmap as the single-part bake.
+- Custom quality (identical to the normal engine on three maps), light probes (probe data identical to earlier releases), AO and `.map` bakes were run again and work as before.
+- The new per-sample file is removed with the other bake products after every bake, so a kept capture does not grow.
+- **Not tested on real hardware other than one RTX 4090**, including real 8 GB and 6 GB cards.
+
 ## 0.6.10 (2026-11-04)
 
 Exe SHA-256 `c5bb627f6678e8445a2ee5c2cf861a4773e1d216c0151e5b76583a09c1a2e9a2`.

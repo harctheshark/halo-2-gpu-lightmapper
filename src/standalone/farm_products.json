@@ -8,7 +8,7 @@
   "skyx_deposits.bin", "sunx_deposits.bin", "sun_cull_mask.bin", "scenery_out.bin",
   "gate_census.bin", "fullgpu_key_devp.bin", "fullgpu_key_prewalk.bin", "gate_walk.bin",
   "direct_perlight.bin", "direct_perlight_sub.bin", "sentinel_fill.bin", "sun_cull_mask_multi.bin",
-  "re_samp_gpu.bin", "cast_cache.bin", "cast_cache.bin.tmp", "fullgpu.exe"
+  "re_samp_gpu.bin", "cast_cache.bin", "cast_cache.bin.tmp", "fullgpu.exe", "vdsamp.bin"
  ],
  "dirs": ["parts", "tagw_stage", "ao", "aoonly"],
  "patterns": ["*.stale_*"]

@@ -1,7 +1,7 @@
 # title: P17 0.6.8: the four tool command lines quote the scenario and the BSP (AO engine)
 # source: _research/ao/dev_AO/gpu_bake.ps1
-# base-md5: 14e8ee1bb3ab3bc1c7dc9b4d78b37c8b
-# result-md5: 287563a9ec61df3d01f45599709e3825
+# base-md5: 5715208940689bfe57cb7c7a9522b2db
+# result-md5: 4d47718f9f95d11388f1aa7698befd5e
 --- a/_research/ao/dev_AO/gpu_bake.ps1
 +++ b/_research/ao/dev_AO/gpu_bake.ps1
 @@ -938,7 +938,7 @@

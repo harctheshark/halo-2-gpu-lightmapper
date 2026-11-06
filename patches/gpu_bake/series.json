@@ -23,14 +23,16 @@
     "P15_promote068_engine_v373.patch",
     "P16_toolloader_engine_v373.patch",
     "P19_promote069_engine_v373.patch",
-    "P21_promote0610_engine_v373.patch"
+    "P21_promote0610_engine_v373.patch",
+    "P23_vdsamp_engine_v373.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "d7e267e782527f8074710c5a15584aa8",
+    "md5": "6db325a2ca6e100dffb63c6234c19006",
     "prior_md5s": [
+     "d7e267e782527f8074710c5a15584aa8",
      "d16ac070fc973e6d43738cc89903670d",
      "e976ba73600efe0400500c7f08ea48f5",
      "30c277813d04426df76f319ee201a11c",
@@ -54,7 +56,7 @@
   },
   {
    "path": "_research/ao/dev_AO/gpu_bake.ps1",
-   "src": "_research/ao/dev_AO15/gpu_bake.ps1",
+   "src": "_research/ao/dev_AO16/gpu_bake.ps1",
    "src_note": "V1 2026-10-14: the payload keeps INST _research/ao/dev_AO as the AO engine dir name. W1 2026-10-20: the AO engine is now _research/ao/dev_AO4 = the promoted engine_v373 + exactly dev_AO2's AO additions (tests/w1_rebuild_062/make_dev_ao4.py: three-way merge, no P2 custom text); dev_AO2 (bac932e8) is the pre-promotion AO engine and stays as the pinned history. W2 2026-10-20 (0.6.3): the AO engine is now _research/ao/dev_AO5 = the 05:38-promoted engine_v373 + exactly dev_AO4's AO additions (tests/w2_rebuild_063/make_dev_ao5.py); dev_AO4 is the 0.6.2 AO engine. W3 2026-10-21 (0.6.4): the AO engine is now _research/ao/dev_AO6 = the 0.6.4-promoted engine_v373 + exactly dev_AO5's AO additions (tests/w3_rebuild_064/make_dev_ao6.py, then build_ao6.py: CSBLOB for the AO kernel + its two df64 compat twins); dev_AO5 is the 0.6.3 AO engine. W5 2026-10-22 (0.6.5): the production source is now _research/ao/dev_AO8 = the 0.6.5-promoted engine_v373 + exactly dev_AO6's AO additions (tests/w5_release_065/make_dev_ao8.py).",
    "base_md5": "405570d10d890b5b0ca9505904777a05",
    "patches": [
@@ -71,14 +73,16 @@
     "P15_promote068_dev_AO.patch",
     "P16_toolloader_dev_AO.patch",
     "P20_aocut_dev_AO.patch",
-    "P22_lean_dev_AO.patch"
+    "P22_lean_dev_AO.patch",
+    "P24_vdsamp_dev_AO.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "14e8ee1bb3ab3bc1c7dc9b4d78b37c8b",
+    "md5": "5715208940689bfe57cb7c7a9522b2db",
     "prior_md5s": [
+     "14e8ee1bb3ab3bc1c7dc9b4d78b37c8b",
      "ff8de832ccace002566a197ccf860af5",
      "b34c221e14fd8f162d7a4678d033532b",
      "d95fb2960deab1cc00947ef4a70b3d0c",

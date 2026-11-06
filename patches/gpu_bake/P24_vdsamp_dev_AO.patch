@@ -1,0 +1,15 @@
+# title: P24 0.6.11: 'vdsamp.bin' in the AO engine's per-part products (dev_AO16 = dev_AO15 + the same change)
+# source: _research/ao/dev_AO/gpu_bake.ps1
+# base-md5: a44611d558c45e8262eddd16014e870a
+# result-md5: 60fd708c42ffc2f6ffaba381a6ef6229
+--- a/_research/ao/dev_AO/gpu_bake.ps1
++++ b/_research/ao/dev_AO/gpu_bake.ps1
+@@ -2049,7 +2049,7 @@
+     $partMove = @('atlas_out.bin','atlas_split.bin','atlas_dir.bin','gate_census.bin','vertex_out.bin','scenery_out.bin','gather_out.bin','direct_out.bin',
+                   'fullgpu_key.bin','fullgpu_key_devp.bin','fullgpu_key_prewalk.bin','gate_walk.bin','gather_s1.bin','direct_perlight.bin','direct_perlight_sub.bin',
+                   'sentinel_fill.bin','sun_cull_mask.bin','sun_cull_mask_multi.bin','sun_reach_boxes.txt','suncull_status.txt','surfcull_status.txt',
+-                  'sunx_status.txt','skychain_status.txt')
++                  'sunx_status.txt','skychain_status.txt','vdsamp.bin')
+     $mx = 0; $partSec = @(); $partDepth = @(); $gRd = 0
+     # v372 SEG WALK DEPTH. The gate walk's gated-centroid rescue salts its RNG stream with the number of walk rounds the WHOLE RUN needed
+     # (gather.cpp rDone+1), so a part must be told the whole map's value or its rescued texels differ from the single pass. Every part is

@@ -193,6 +193,8 @@ static int cmd_dirs(const char* vdp, const char* jobp, const char* outp) {
     std::vector<const float*> sdat(nsec);
     for (u32 s = 0; s < nsec; s++) { snv[s] = rd.u(); sdat[s] = rd.fp((size_t)snv[s] * 6); }
     std::vector<u8> out;
+    const char* t2env = getenv("TW_INST_TIER2");
+    const bool inst_tier2 = t2env && strcmp(t2env, "1") == 0;
     for (u32 t = 0; t < ntask; t++) {
         u32 kind = rd.u(), sec = rd.u();
         const float* M = rd.fp(13);
@@ -229,7 +231,8 @@ static int cmd_dirs(const char* vdp, const char* jobp, const char* outp) {
                 if (nn > K_NN) { nr[0] = wn[0] / nn; nr[1] = wn[1] / nn; nr[2] = wn[2] / nn; }
                 else { nr[0] = wn[0]; nr[1] = wn[1]; nr[2] = wn[2]; }
                 u32 krow = 0;
-                int tier = vd.lookup(wp, nr, true, false, krow);
+                // 2026-11-05 (v377 dirgap): tier 1 only, as lmw_vertex.inst_dirs (see there); TW_INST_TIER2=1 restores the two-tier lookup
+                int tier = vd.lookup(wp, nr, true, !inst_tier2, krow);
                 float d[3];
                 if (tier && emit_dir(vd.R + (size_t)krow * 11 + 6, d)) { od[j * 3] = d[0]; od[j * 3 + 1] = d[1]; od[j * 3 + 2] = d[2]; st[j] = 0; }
                 else { fallback_half(wn, d); od[j * 3] = d[0]; od[j * 3 + 1] = d[1]; od[j * 3 + 2] = d[2]; st[j] = 1; }
