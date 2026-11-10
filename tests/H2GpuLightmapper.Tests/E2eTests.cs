@@ -492,7 +492,7 @@ namespace H2GpuLightmapper.Tests
         private static void TempLayoutBake()
         {
             var r = C.NewRoot();
-            string temp = Path.Combine(r.Work, "Temp (safe to delete)"), farm = Path.Combine(temp, "farm_w200");
+            string temp = Path.Combine(r.Work, "Temp"), farm = Path.Combine(temp, "farm_w200");
             var res = Ok(DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap"), "Lightmap Only, farms in Temp");
             string run = RunDirOf(res);
             Assert.True(!Directory.Exists(r.Farm(200)), "no farm in WORK");
@@ -508,13 +508,18 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(0, SafeFs.FindReparsePointsDeep(temp).Count, "no link was ever created inside Temp");
             string log = File.ReadAllText(Path.Combine(run, "bake.log"));
             Assert.Contains(log, "temp: farm_w200 slimmed to its capture", "bake.log says the farm was slimmed");
-            // the DLL slot alias: outside Temp, pointing at it (the sandbox WORK + Temp is longer than the 60-character slot)
+            // the DLL slot: WORK\Temp\ itself when it fits the 60-byte slot (0.6.12: "GPU Work\Temp" usually does), else an alias outside Temp pointing at it
             var mj = Core.Payload.PayloadExtractor.ReadMarker(Path.Combine(r.Work, "_runtime", "0.5.0-s25ffff"));
             Assert.True(mj != null, "the INST marker");
             string alias = mj.Str("aliasDir");
-            Assert.True(alias != null && !SafeFs.IsUnderOrSame(alias, temp) && !SafeFs.IsUnderOrSame(alias, r.Work), "the alias exists outside Temp and WORK: " + alias);
-            string at;
-            Assert.True(DllSlots.Junction.TryGetTarget(alias, out at) && DllSlots.Junction.SamePathText(at, temp), "the alias points at Temp: " + at);
+            if ((temp + "\\").Length <= DllSlots.DllSlotPatcher.MaxBaseBytes)
+                Assert.True(alias == null, "a Temp that fits the slot needs no alias: " + alias);
+            else
+            {
+                Assert.True(alias != null && !SafeFs.IsUnderOrSame(alias, temp) && !SafeFs.IsUnderOrSame(alias, r.Work), "the alias exists outside Temp and WORK: " + alias);
+                string at;
+                Assert.True(DllSlots.Junction.TryGetTarget(alias, out at) && DllSlots.Junction.SamePathText(at, temp), "the alias points at Temp: " + at);
+            }
             // reuse from the slimmed farm
             var re = Ok(DfBake(FarmsPayload(), r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--reuse-capture"), "reuse of the kept capture");
             Assert.Contains(File.ReadAllText(Path.Combine(RunDirOf(re), "bake.log")), "-SkipCapture", "the reuse bake ran -SkipCapture on the kept capture");

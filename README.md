@@ -8,7 +8,7 @@ Python, PowerShell or other runtime to install.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 0.6.11** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 0.6.12** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -45,6 +45,11 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   faster; the engine uses RT only when a short self-check shows it is clearly faster and agrees with the normal tracer, and otherwise bakes
   the old way. Nothing to switch on. Tested on an RTX 4090 only.
 - **Repeatable (0.6.9).** Baking an unchanged map again gives the same lightmap.
+- **Many surface lights, large search distance (0.6.12).** A map with thousands of surface lights and a large lightmap search
+  distance bakes in minutes instead of hours (a test map: cancelled after about 2 hours before, about 9 minutes now).
+- **Extra direct light samples (0.6.12, opt-in).** In Custom quality the sun, sky-light and surface-light passes can run several
+  times and be averaged, which smooths grain in direct light (×4 halves it). Off by default: it is not the original tool's noise
+  pattern.
 - **Bump mapping closer to the CPU tool (0.6.11).** The per-vertex light direction (what drives bump mapping) now matches
   the original tool much more closely, especially on maps with surface lights; lightmap colours are unchanged.
 - **8 GB cards (0.6.10).** Bakes are sized to fit 8 GB and 6 GB graphics cards, with the same lightmap (checked with a pretend
@@ -161,7 +166,8 @@ What to do:
 1. Open Windows Security > Virus & threat protection > Protection history, pick the entry, and choose **Restore** (or **Allow on device**).
 2. Bake again. The app also puts back a removed runtime file once by itself before a bake; if it is removed a second time it stops with
    the same message instead of looping.
-3. Optional: add an exclusion for `<H2EK>\GPU Lightmap Work` so it does not happen again. The app never changes Windows Security
+3. Optional: add an exclusion for `<H2EK>\GPU Work` so it does not happen again (an exclusion made for the old name
+   `GPU Lightmap Work` no longer applies). The app never changes Windows Security
    settings itself.
 
 ## How to use
@@ -180,6 +186,7 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
      (1 to 64, default 16). **Only Super's own values (20,000,000 photons, 8 rays) are validated.** Anything else is untested,
      there is no CPU reference for it, and large values mean very long bakes (100,000,000 photons with 64 rays took about
      1.4 hours on cyclotron on an RTX 4090). The window shows an ETA and a note.
+     With **Extra direct light samples** ticked under Advanced settings, a third box, **Direct light samples ×**, appears here.
 
    **Graphics card** (under Quality) shows your GPU and the precision it will bake at: `Precision: Full FP64`, or
    `Precision: Compatibility mode (DF64)` on a GPU without FP64. There is nothing to choose: the app picks it.
@@ -200,12 +207,18 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
    `SceneryFixDependencies.db` and lists the models it added; sky models are skipped; bakes already do this automatically for
    the scenery of their own scenario).
    **Advanced settings** (all off by default except the temp settings):
-   - **Temp folder** (0.6.8): temporary files live in `<H2EK>\GPU Lightmap Work\Temp (safe to delete)\`. You can delete it, or anything in it,
+   - **Temp folder** (0.6.8): temporary files live in `<H2EK>\GPU Work\Temp\`. You can delete it, or anything in it,
      at any time, even during a bake: your tags are never written from it. It trims itself (newest 3 captures kept, 40 GB cap); the
      settings show its size with **Open** and **Clean now**, and **Free space from earlier versions** removes the folders 0.6.7 and older
      left behind.
    - **Re-bake speedup** (0.6.8): with Reuse existing capture, the photon cast starts where the previous bake found each light. Command
      line: `--rebake-hint`.
+   - **Extra direct light samples** (0.6.12, opt-in): shows a **Direct light samples ×** box (1 to 64, default 4) under Custom
+     quality. Every sun, sky-light and surface-light pass then runs that many times with different random numbers and the average is
+     stored, which smooths grain in direct light: ×4 halves it, ×16 quarters it. Those passes take that many times as long (a test
+     map went from 309 s to 479 s at ×4). The brightness does not change, but the result is not the original tool's noise pattern,
+     which is why it is off by default. It does not affect bounce light (raise the Custom gather rays for that). Command line:
+     `--direct-samples K` with `--quality custom`.
    - **Keep PC responsive - Slower Bakes!** Splits the GPU work into short pieces (about 10 ms) and leaves the GPU idle between
      them (busy about 60% of the time), at low priority, so your desktop, videos and games stay smooth while it bakes. The
      lightmap is identical; the bake takes longer (about 1.5-1.8x on the tested maps). Command line: `--responsive`.
@@ -226,7 +239,8 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
 open in another program; the window then offers **Retry**.
 
 The progress row shows Preflight, Back up, Capture, Derive, GPU bake, Tag writer, AO, Probe capture, Probes, Install and Verify,
-with a live log. The logs of every run are in `<H2EK>\GPU Lightmap Work\standalone\runs\`.
+with a progress bar that moves during the long GPU steps, a time-left estimate (0.6.12; rough on the first bake of a map, then
+taken from your earlier bakes of it) and a live log. The logs of every run are in `<H2EK>\GPU Work\standalone\runs\`.
 
 ### Baking straight from a .map (new in 0.6.7)
 
@@ -239,7 +253,8 @@ the lightmap and its bitmap change in the copy. Temporary work files are cleaned
 - **Sky cube map:** compiling a map drops the sky's cube-map reference, and the cube map is what gives the sky its ambient fill.
   For every sky that needs one, a dropdown lists the cube-map bitmaps in your Editing Kit (and any inside the map). A matching
   stock sky's cube map is chosen automatically when there is one; otherwise pick one, or choose **Leave empty** (the bake then
-  lacks that ambient fill and comes out darker).
+  lacks that ambient fill and comes out darker). Since 0.6.12, when your Editing Kit holds the very same sky tag, its own
+  cube-map reference decides, and an empty one stays empty, as a bake from your tags would have it.
 - **Not supported yet:** stock compressed MCC maps (the ones that keep their textures in a separate `textures.dat`).
 - A map with several BSPs asks which BSP to bake.
 
@@ -249,7 +264,7 @@ The same exe works from a terminal, and no window opens.
 
 ```
 "H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --scenario S --bsp B
-      [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap|ao]
+      [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap|ao]
       [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture [--rebake-hint]] [--yes] [--no-install]
 "H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --map FILE.map [--map-out OUT.map] [--bsp B]
       [--sky-cubemap SKY=BITMAP|none|auto] [--vista-out yes|no] [same quality / mode / AO options]
@@ -267,7 +282,8 @@ Example: a Super lightmap of cyclotron with AO, written to the tags after the us
 ```
 
 Add `--dry-run` to print every step without starting or writing anything, and `--no-install` to bake into the work folder
-only. The Advanced settings are `--responsive`, `--exact-vertex-lighting` and `--scenery-permutation-fix`; `--force-compat`
+only. The Advanced settings are `--responsive`, `--exact-vertex-lighting`, `--scenery-permutation-fix` and `--direct-samples K`
+(1 to 64, Custom quality only); `--force-compat`
 runs the Compatibility mode (DF64) kernels on a GPU that has FP64 (for testing). Exit codes: 0 ok, 2 refused before anything
 was written, 3 failed, 4 cancelled.
 
@@ -275,9 +291,9 @@ was written, 3 failed, 4 cancelled.
 ## Safety
 
 - **Nothing touches your tags until the install step.** The GPU bake works in its own work folder
-  (`<H2EK>\GPU Lightmap Work\`), and only the final install writes your lightmap tags. **Stage only** never installs.
+  (`<H2EK>\GPU Work\`), and only the final install writes your lightmap tags. **Stage only** never installs.
 - **Backups.** Before every bake that installs, the BSP's lightmap files are copied to
-  `<H2EK>\GPU Lightmap Work\_TAGBAK_ui\<scenario>_<bsp>_<time>\` and md5-verified. The install keeps a second copy and a
+  `<H2EK>\GPU Work\_TAGBAK_ui\<scenario>_<bsp>_<time>\` and md5-verified. The install keeps a second copy and a
   progress marker.
 - **Restore previous lightmap...** (window) or `--cli restore` puts the newest differing backup back. **Undo last install**
   puts back exactly what the last install replaced. Reload the map in Sapien afterwards.
@@ -287,10 +303,13 @@ was written, 3 failed, 4 cancelled.
 - **Cancel** stops the bake at once, except during a tag write, which is finished and verified first.
 - The app never deletes your files, never changes Windows settings, and never writes the radiance bitmaps.
 
+**Folder names (0.6.12):** the work folder is `GPU Work` (it was `GPU Lightmap Work`) and its temporary folder is `Temp` (it was
+`Temp (safe to delete)`). An existing folder is renamed at the first start, never while a bake is running.
+
 **Temporary files (0.6.8):** the workers, the temporary folders of `.map` bakes and map queries live in
-`<H2EK>\GPU Lightmap Work\Temp (safe to delete)\`. Delete it or anything in it whenever you like, even during a bake: a bake whose
+`<H2EK>\GPU Work\Temp\`. Delete it or anything in it whenever you like, even during a bake: a bake whose
 temporary files disappear stops with "Nothing was written to your tags. Bake again." The app creates no links inside it. Outside it,
-**never delete `GPU Lightmap Work`, a `farm_w...` folder or `_gpulm_skel` with a recursive delete tool** (`rmdir /s`, Windows
+**never delete `GPU Work`, a `farm_w...` folder or `_gpulm_skel` with a recursive delete tool** (`rmdir /s`, Windows
 PowerShell 5.1 `Remove-Item -Recurse`, disk cleaners): a skeleton folder of an earlier version can hold links (junctions) into your
 live `tags` folder. Use **Advanced settings > Free space from earlier versions** or `--cli cleanup --h2ek DIR --legacy` instead; they
 list exactly what this app made and remove links without following them.

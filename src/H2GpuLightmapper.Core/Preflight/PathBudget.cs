@@ -43,8 +43,8 @@ namespace H2GpuLightmapper.Core.Preflight
         public static List<Entry> Estimate(string root, string instDirName, int instMaxPathLen, string scenarioRel = null, string bsp = null, bool farmsInTemp = false)
         {
             root = Path.GetFullPath(root).TrimEnd('\\');
-            string work = root + "\\GPU Lightmap Work";
-            string farms = farmsInTemp ? work + "\\" + Payload.ShellPaths.TempFolderName : work;
+            string work = Payload.ShellPaths.WorkOf(root + "\\");                      // 0.6.12: ROOT\GPU Work (an old-name folder while its move is deferred)
+            string farms = farmsInTemp ? Payload.ShellPaths.TempOf(work) : work;
             string scenDir, leaf;
             if (!string.IsNullOrEmpty(scenarioRel))
             {
@@ -108,14 +108,14 @@ namespace H2GpuLightmapper.Core.Preflight
             root = Path.GetFullPath(root).TrimEnd('\\');
             string s = scenarioRel.Replace('/', '\\').Trim('\\');
             string scenDir = Path.GetDirectoryName(s) ?? "", leaf = Path.GetFileName(s);
-            string ov = root + "\\GPU Lightmap Work\\" + Payload.ShellPaths.TempFolderName + "\\" + MapRunExample + "\\" + MapOverlayRoot;
+            string ov = Payload.ShellPaths.TempOf(Payload.ShellPaths.WorkOf(root + "\\")) + "\\" + MapRunExample + "\\" + MapOverlayRoot;
             return new Entry { What = ".map skeleton overlay", Example = ov + "\\w\\_gpulm_skel\\w200\\tags\\" + scenDir + "\\" + leaf + "_" + bsp + "_lightmap_truecolor_bitmaps.bitmap" };
         }
 
         public static Entry MapOverlay(string root, int kitRel)
         {
             root = Path.GetFullPath(root).TrimEnd('\\');
-            string pre = root + "\\GPU Lightmap Work\\" + Payload.ShellPaths.TempFolderName + "\\" + MapRunExample + "\\" + MapOverlayRoot + "\\tags\\";
+            string pre = Payload.ShellPaths.TempOf(Payload.ShellPaths.WorkOf(root + "\\")) + "\\" + MapRunExample + "\\" + MapOverlayRoot + "\\tags\\";
             return new Entry { What = ".map overlay tag (kit relative path " + kitRel + ")", Example = pre + new string('t', Math.Max(1, kitRel)) };
         }
     }

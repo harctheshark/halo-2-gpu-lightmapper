@@ -128,7 +128,7 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static void LiveMarkers()
         {
-            string work = C.Sb.Dir(@"fx1\GPU Lightmap Work");
+            string work = C.Sb.Dir(@"fx1\GPU Work");
             foreach (var w in new[] { 205, 206, 207 })
                 File.WriteAllText(Path.Combine(Farm(work, w), StartupRecovery.MarkerName), string.Format(ToolText, @"X:\bak", @"X:\tags\a", "b_c_lightmap"));
             string jm = Path.Combine(Farm(work, 208), StartupRecovery.MarkerName);
@@ -161,7 +161,7 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static void Gate()
         {
-            string work = C.Sb.Dir(@"fx2\GPU Lightmap Work");
+            string work = C.Sb.Dir(@"fx2\GPU Work");
             string lp = GpuLock.PathFor(work);
             using (var lease = TagWriteGate.Enter(work, "the test restore"))
             {

@@ -1,7 +1,7 @@
 # title: P14 comment only: the shipped comment no longer names the author's test map (0.6.8 public-text rule; no code change)
 # source: engine_v373/gpu_bake.ps1
-# base-md5: d6002ab12d1ee6149eaf05b25b6c8d33
-# result-md5: 4b31da4f2e942f9df309822b64602d8d
+# base-md5: 8c8624d40f60c57a245ec1323e5616cf
+# result-md5: e5eb40d6e75c429802c57f8ab2c4c95c
 --- a/engine_v373/gpu_bake.ps1
 +++ b/engine_v373/gpu_bake.ps1
 @@ -960,7 +960,7 @@

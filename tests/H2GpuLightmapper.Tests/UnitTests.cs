@@ -327,7 +327,7 @@ namespace H2GpuLightmapper.Tests
             const string Cyc = @"scenarios\multi\cyclotron\cyclotron";
             string tmp = C.Sb.Dir("w2");                // short on purpose: MAX_PATH
             {
-                string work = Path.Combine(tmp, "GPU Lightmap Work");
+                string work = Path.Combine(tmp, "GPU Work");
                 string oldRun = Path.Combine(RunFolder.RunsDir(work), "20261015_101010_cyclotron_cyclotron");
                 string newRun = Path.Combine(RunFolder.RunsDir(work), "20261020_101010_cyclotron_cyclotron");
                 Func<string, string, DateTime, string> mk = (run, sub, started) =>
@@ -778,8 +778,8 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(@"D:\", Core.Payload.ShellPaths.NormalizeRoot(@"D:\"), "D:\\ stays");
             Assert.Eq(@"D:\", Core.Payload.ShellPaths.NormalizeRoot("D:/"), "D:/ -> D:\\");
             Assert.Eq(@"D:\H2EK", Core.Payload.ShellPaths.NormalizeRoot(@"D:\H2EK\"), "a folder loses its trailing backslash");
-            Assert.Eq(@"D:\GPU Lightmap Work", Core.Payload.ShellPaths.WorkOf(@"D:\"), "WORK of a drive root is the drive root plus GPU Lightmap Work");
-            Assert.Eq(@"D:\H2EK\GPU Lightmap Work", Core.Payload.ShellPaths.WorkOf(@"D:\H2EK\"), "WORK of a folder");
+            Assert.Eq(@"D:\GPU Work", Core.Payload.ShellPaths.WorkOf(@"D:\"), "WORK of a drive root is the drive root plus GPU Work");
+            Assert.Eq(@"D:\H2EK\GPU Work", Core.Payload.ShellPaths.WorkOf(@"D:\H2EK\"), "WORK of a folder");
             Assert.Eq(@"D:\tags\scenarios\x", Path.Combine(Core.Payload.ShellPaths.NormalizeRoot(@"D:\"), "tags", @"scenarios\x"), "joins never give 'D:tags'");
             // the scenario normaliser strips the tags prefix at a drive root too
             Assert.Eq(@"scenarios\multi\cyclotron\cyclotron", BakeOptions.NormalizeScenario(@"D:\", @"D:\tags\scenarios\multi\cyclotron\cyclotron.scenario"), "NormalizeScenario at a drive root");

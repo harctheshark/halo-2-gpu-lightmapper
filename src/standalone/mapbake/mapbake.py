@@ -227,6 +227,7 @@ def tree_size(root):
 
 
 MAX_TOOL_PATH = 259      # tool_fast is not long-path aware: a full path of 260+ characters (MAX_PATH incl. the NUL) cannot be opened
+COPY_THREADS = 8         # 0.6.12: parallel file copies of the overlay (I/O bound; the process runs below normal priority)
 
 
 def _mcc_range(f, h, start, length):
@@ -253,35 +254,79 @@ def _mcc_range(f, h, start, length):
     return out if len(out) == length else None
 
 
+STAGE_MAGIC = b'H2LMSTG\x01'
+
+
+def _open_cache(path):
+    """a binary reader of a cache file: the file itself, or -- the temporary MCC form of a Vista map in a .map bake's run folder -- the
+    stage container's content (read on demand; nothing is written)"""
+    if STAGED:
+        try:
+            with open(lp(path), 'rb') as f:
+                head = f.read(len(STAGE_MAGIC))
+        except OSError:
+            head = b''
+        if head == STAGE_MAGIC:
+            import io
+            sys.path.insert(0, HERE)
+            try:
+                import stagecache
+            finally:
+                sys.path.pop(0)
+            return io.BufferedReader(stagecache.StageReader(lp(path), io.open), buffer_size=1 << 16)
+    return open(lp(path), 'rb')
+
+
 def map_tag_names(path):
     """0.6.8 RC: the names of every tag in a cache file (= every tag tool_fast loads for its scenario), lower case without the group
-    extension; None when the table cannot be read (the caller then checks every kit tag). Read in memory only, never written."""
+    extension; None when the table cannot be read (the caller then copies every kit tag). Read in memory only, never written.
+    0.6.12: the table is one NUL-terminated name per tag. The header words beside it are NOT the tag count: 0x2CC of a Vista header is 15065
+    in every map and 0x20 of a retail (compressed) MCC map is 23131, so the old check 'names * 2 >= that count' failed for every Vista and
+    every retail MCC map, and those bakes copied the whole kit. The table is now checked on its own (well formed, printable names) and the
+    caller cross-checks it against the tags read from the map."""
     try:
-        with open(path, 'rb') as f:
+        with _open_cache(path) as f:
             h = f.read(0x800)
             if len(h) < 0x380 or h[:4] != b'daeh':
                 return None
             ver = struct.unpack_from('<I', h, 4)[0]
-            if ver == 13:                                                    # MCC: count / offset / size at 0x20 (offset in the decompressed image)
-                cnt, off, size = struct.unpack_from('<iIi', h, 0x20)
+            if ver == 13:                                                    # MCC: offset / size at 0x24 / 0x28 (offset in the decompressed image)
+                off, size = struct.unpack_from('<Ii', h, 0x24)
                 if struct.unpack_from('<H', h, 0x1C)[0] & 1:
                     buf = _mcc_range(f, h, off, size)
                 else:
                     f.seek(off)
                     buf = f.read(size)
-            elif ver == 8 and len(h) == 0x800:                                                   # Vista: count / buffer offset / size at 0x2CC
-                cnt, off, size = struct.unpack_from('<III', h, 0x2CC)
+            elif ver == 8 and len(h) == 0x800:                                # Vista: buffer offset / size at 0x2D0 / 0x2D4
+                off, size = struct.unpack_from('<II', h, 0x2D0)
                 f.seek(off)
                 buf = f.read(size)
             else:
                 return None
-    except (OSError, struct.error, zlib.error, ValueError, MemoryError):
+    except Exception:                                                              # noqa: BLE001  (unreadable: the caller copies the whole kit)
         return None
-    if not buf or len(buf) != size or cnt <= 0:
+    if not buf or size <= 0 or len(buf) != size or not buf.endswith(b'\0'):
         return None
-    names = set(n.decode('latin-1').strip().lower().replace('/', BS) for n in buf.split(b'\0'))
+    raw = buf[:-1].split(b'\0')
+    if len(raw) < 16 or sum(1 for n in raw if not n or any(c < 0x20 or c == 0x7F for c in n)) > len(raw) // 1000:
+        return None
+    names = set(n.decode('latin-1').strip().lower().replace('/', BS) for n in raw)
     names.discard('')
-    return names if len(names) * 2 >= cnt else None
+    return names or None
+
+
+def overlay_path_check(ov_tags, rels):
+    """0.6.12: the full overlay path of every file the copy WILL hold (rels: paths relative to the overlay's tags folder).
+    -> ([(length, rel)] past MAX_TOOL_PATH, longest first; (longest length, its rel))"""
+    base = len(ov_tags) + 1
+    out, longest = [], (0, '')
+    for r in rels:
+        n = base + len(r)
+        if n > longest[0]:
+            longest = (n, r)
+        if n > MAX_TOOL_PATH:
+            out.append((n, r))
+    return sorted(out, reverse=True), longest
 
 
 def unreachable_overlay_paths(kit_tags, ov_tags, names=None):
@@ -401,11 +446,20 @@ def build_overlay(kit_tags, ext_tags, ov_tags, scan=None, sel=None):
         os.makedirs(lp(os.path.join(ov_tags, d)), exist_ok=True)
     n_kit = 0
     reparse = list(scan['reparse'])
-    for r, _sz in sel['files']:
+    # 0.6.12: COPY_THREADS copies at once (one file at a time ran at ~60 MB/s on an NVMe drive: small files are latency bound); the
+    # progress line 'overlay: i of N kit tags copied' is read by the app's progress bar
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _cp(r):
         shutil.copyfile(lp(os.path.join(kit_tags, r)), lp(os.path.join(ov_tags, r)))
-        n_kit += 1
-        if n_kit % 6000 == 0:
-            say('  overlay: %d kit tags copied (%.0f s)' % (n_kit, time.time() - t0))
+
+    total, t_say = len(sel['files']), time.time()
+    with ThreadPoolExecutor(max_workers=COPY_THREADS) as ex:
+        for _ in ex.map(_cp, (r for r, _sz in sel['files'])):
+            n_kit += 1
+            if time.time() - t_say >= 2.0:
+                t_say = time.time()
+                say('  overlay: %d of %d kit tags copied (%.0f s)' % (n_kit, total, t_say - t0))
     for dp, dn, fn in os.walk(ext_tags):
         rel = os.path.relpath(dp, ext_tags)
         dst_dir = ov_tags if rel == '.' else os.path.join(ov_tags, rel)
@@ -521,22 +575,7 @@ def cmd_prepare(a):
     if free < need:
         raise MapbakeError('not enough free disk space on the drive of %s: the temporary copy needs about %.1f GB, %.1f GB are free' % (run, need / 1e9, free / 1e9))
     rep['kit'] = {'files': n_kit, 'bytes': kit_bytes, 'free': free}
-    # ---- 0.6.8 RC: every kit tag must stay openable by tool_fast inside the overlay, else the bake would silently miss textures
-    # the capture reads root\tags (this is where the textures went missing); the skeleton run reads the same tags through the longer
-    # root\w\_gpulm_skel\w2NN\tags, but a skeleton that differs from the capture is refused by gpu_bake's own soup / key guards
-    # only the kit tags the map uses (its tag-name table = the scenario's whole dependency closure) must fit; if the table cannot be read, all must
-    which = 'tag(s) this map uses' if names is not None else 'kit tag file(s) (the map\'s tag list could not be read, so every kit tag is checked)'
-    far, longest, ignored = unreachable_overlay_paths(kit, os.path.join(root, 'tags'), names)
-    rep['overlay_paths'] = {'longest': longest[0], 'map_tag_names': len(names) if names is not None else None, 'unused_past_limit': ignored}
-    if far:
-        over = far[0][0] - MAX_TOOL_PATH
-        raise MapbakeError('this H2EK is on too long a path for baking from a .map: in the temporary copy of the kit, %d %s would need more than '
-                           '%d characters (the longest, %d characters: %s), which tool_fast cannot open, so the map would bake with missing textures. '
-                           'Move the H2EK to a folder at least %d characters shorter (or shorten those tag folder names), then bake again. Nothing was written.'
-                           % (len(far), which, MAX_TOOL_PATH, far[0][0], far[0][1], over))
-    say('overlay paths: every %s stays within %d characters (longest %d)%s' % (
-        'tag this map uses' if names is not None else 'kit tag', MAX_TOOL_PATH, longest[0],
-        ('; %d kit tag file(s) this map does not use are past it (not needed)' % ignored) if ignored else ''))
+    # 0.6.12: the overlay path check runs after the map is read, on the files the copy will actually hold (see below)
 
     # ---- 1. read ONLY the dependency subset of the map (the lightmapper's closure: visual deps + placed objects)
     ext_report = os.path.join(logs, 'read_report.json')
@@ -594,7 +633,46 @@ def cmd_prepare(a):
         for c in [ch.get('cubemap')] + list(ch.get('candidates') or []):
             if c:
                 extra.add(str(c).replace('/', BS).lower())
+    # 0.6.12: a Vista map is baked through its MCC form, which loads ~1,000 more tags than the Vista table names (the MCC globals' remastered
+    # sounds and vehicles): its own table is added. Unreadable -> the whole kit, as before.
+    names_src = 'map'
+    if names is not None and rep.get('vista_input'):
+        tmp = er.get('source_temp_mcc')
+        mn = map_tag_names(tmp) if tmp and os.path.isfile(lp(tmp)) else None
+        if mn is None:
+            say('the tag list of the map\'s MCC form could not be read: every kit tag is copied')
+            names = None
+        else:
+            names_src = 'map + its MCC form'
+            names = names | mn
+    # 0.6.12: cross-check -- every tag read from the map must be in the table (else the table is not this map's: copy the whole kit)
+    if names is not None:
+        read_names = set(str(t.get('name') or '').replace('/', BS).lower() for t in er.get('tags', [])) - {''}
+        miss = sorted(read_names - names - extra)
+        if len(miss) > max(2, len(read_names) // 100):
+            say('the map\'s tag list misses %d of the %d tags read from it (e.g. %s): every kit tag is copied' % (len(miss), len(read_names), miss[0]))
+            names = None
     sel = select_kit_files(scan, (names | extra) if names is not None else None, scen_dirs, ext_rel)
+    # ---- 0.6.8 RC: every file of the overlay must stay openable by tool_fast, else the bake would silently miss textures
+    # the capture reads root\tags (this is where the textures went missing); the skeleton run reads the same tags through the longer
+    # root\w\_gpulm_skel\w2NN\tags, but a skeleton that differs from the capture is refused by gpu_bake's own soup / key guards.
+    # 0.6.12: checked on the files the copy WILL hold (the kit selection + the tree read from the map), not on kit tags the map never loads
+    ov_tags = os.path.join(root, 'tags')
+    chosen = set(r.lower() for r, _sz in sel['files'])
+    far, longest = overlay_path_check(ov_tags, [r for r, _sz in sel['files']] + sorted(ext_rel))
+    ignored = sum(1 for r, _sz in scan['files'] if r.lower() not in chosen and len(ov_tags) + 1 + len(r) > MAX_TOOL_PATH)
+    rep['overlay_paths'] = {'longest': longest[0], 'map_tag_names': len(names) if names is not None else None, 'names_from': names_src if names is not None else None,
+                            'unused_past_limit': ignored}
+    if far:
+        over = far[0][0] - MAX_TOOL_PATH
+        which = 'tag(s) this map uses' if names is not None else 'kit tag file(s) (the map\'s tag list could not be read, so every kit tag is copied)'
+        raise MapbakeError('this H2EK is on too long a path for baking from a .map: in the temporary copy of the kit, %d %s would need more than '
+                           '%d characters (the longest, %d characters: %s), which tool_fast cannot open, so the map would bake with missing textures. '
+                           'Move the H2EK to a folder at least %d characters shorter (or shorten those tag folder names), then bake again. Nothing was written.'
+                           % (len(far), which, MAX_TOOL_PATH, far[0][0], far[0][1], over))
+    say('overlay paths: every %s stays within %d characters (longest %d)%s' % (
+        'tag this map uses' if names is not None else 'kit tag', MAX_TOOL_PATH, longest[0],
+        ('; %d kit tag file(s) this map does not use are past it (not copied, not needed)' % ignored) if ignored else ''))
     need = int(sel['bytes'] * 1.05) + (3 << 30)
     free = shutil.disk_usage(run).free
     say('overlay: %d kit tags (%.2f GB) will be copied%s; free on the run drive: %.1f GB (need about %.1f GB)' % (

@@ -1,7 +1,7 @@
 # title: P17 0.6.8: the four tool command lines quote the scenario and the BSP (names with spaces)
 # source: engine_v373/gpu_bake.ps1
-# base-md5: 6db325a2ca6e100dffb63c6234c19006
-# result-md5: d6002ab12d1ee6149eaf05b25b6c8d33
+# base-md5: 37e697046b76ad2700d480aaed91caa7
+# result-md5: 8c8624d40f60c57a245ec1323e5616cf
 --- a/engine_v373/gpu_bake.ps1
 +++ b/engine_v373/gpu_bake.ps1
 @@ -954,7 +954,7 @@
@@ -22,7 +22,7 @@
      # ***** dev_XC (2026-10-27): NO CPU CAST IN THE BAKE PATH. 0.6.7 launched the CPU's own photon cast here (the v372W castcpu process, GPULM_CASTONLY) beside
      # the capture for every multi-sun map. That is gone: the GPU reproduces the CPU's cast by itself (fullgpu's exact sky chain over the surface / omni / half-life
      # lights, GPULM_EXACT_*; -NoExactCast restores the 0.6.7 chain WITHOUT the CPU helper = the statistical GPU lottery for the suns behind the first non-sky light).
-@@ -2306,7 +2306,7 @@
+@@ -2309,7 +2309,7 @@
          $tagDir = $ovo.SkDir; $tagPfx = $ovo.Prefix
          $tagsRelT = [IO.Path]::GetRelativePath($ROOT, $ovo.Tags)
          if ($tagsRelT.StartsWith('..') -or [IO.Path]::IsPathRooted($tagsRelT)) { throw "-ToolOverlay: overlay $($ovo.Tags) is not under $ROOT" }
@@ -31,7 +31,7 @@
          $wbBase = "$SKW\wbrun"; New-Item -ItemType Directory -Force -Path $wbBase | Out-Null
          $env:GPULM_BASEDIR = "$wbBase\"
          Note "dev_S -ToolOverlay: the tool write-back runs in the skeleton overlay $($ovo.SkDir), NOT in the live tags; logs in $wbBase"
-@@ -2321,7 +2321,7 @@
+@@ -2324,7 +2324,7 @@
          Write-Host ("      tag backup: {0} file(s) of {1}\{2}* -> {3}" -f $tagFiles.Count, $tagDir, $tagPfx, $tagBak)
      } else { Write-Host "      no existing lightmap tag to back up ($tagDir\$tagPfx*) -- first bake of this BSP" }
      Set-Content "$OUT\writeback_in_progress.txt" ("started {0}; previous tags: {1} ({2} files from {3}\{4}*). Copy them back if the new tag is broken." -f (Get-Date), $tagBak, $tagFiles.Count, $tagDir, $tagPfx)

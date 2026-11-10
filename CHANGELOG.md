@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.12 (2026-11-10)
+
+Exe SHA-256 `7f92279896eadb739b7236003e557daabc4c334b36ad72533aa7240840f87588`.
+
+- **Maps with thousands of surface lights and a large search distance bake in minutes instead of hours.** A lightmap tag with a large search distance (lower / upper bound, for example 4 / 10) on a map with thousands of surface lights sent 0.6.11 down its slowest surface-light path. Test map (3,215 surface lights, 39 sun and sky lights, search distance 4 / 10, Super, RTX 4090): a whole bake through the app with AO was cancelled after about 2 hours on 0.6.11 and takes about 9 minutes now (6.0 minutes of it in the engine). Per step, 0.6.11 -> 0.6.12: sun and sky lights 434 s -> about 45 s; surface lights hours -> about 35 s; bounce light 117 s -> about 7 s; per-vertex light direction 31 s -> 4 s.
+  - Surface lights: the list of candidate lights per texel has no upper limit any more (it was 512, then the slow path). The lists are built in windows and give exactly the same pairs in the same order.
+  - Sun, sky and surface lights: shadow rays search each object's triangles through a tree instead of scanning them in blocks, and each sun or sky light only dispatches the texels it can reach.
+  - Ray tracing on large maps: on a map whose sample table is larger than 32 MiB the ray-tracing path read part of it wrong, failed its own self-check and fell back to the slower tracer. Fixed; the self-check passes on that map now.
+  - Per-vertex light direction: the builder is a native program now. Its output file is byte-identical to the Python one, which remains as the fallback.
+- **New: extra direct light samples (opt-in, Custom quality).** Grain in direct light from wide sky lights and from surface lights comes from the number of random rays the original tool uses per texel, which this app copies. With **Advanced settings > Extra direct light samples** ticked, a box **Direct light samples ×** (1 to 64, default 4) appears under Custom quality; command line `--direct-samples K` with `--quality custom`.
+  - Every sun, sky-light and surface-light pass runs K times with different random numbers; the average is stored. Grain falls with the square root of K (×4 halves it, ×16 quarters it). On the test map above ×4 took the direct-light grain from 6.3 % to 3.2 % and the engine time from 309 s to 479 s; only the direct-light passes repeat. The brightness does not change (measured mean difference 0.005 %).
+  - Off (the default) and ×1 run exactly the previous program: the same tags, bit for bit.
+  - It is not the original tool's noise pattern, which is why it is opt-in. It does not affect bounce light; for grain in bounce light raise the Custom gather rays.
+- **`.map` bakes of Halo 2 Vista maps set up in seconds.** The setup step copies only the tags the map uses. That already worked for maps built with the MCC editing kit; a Vista map was not recognised and got a copy of the whole kit. Test map: 28,355 files / 9.8 GB -> 9,172 files / 0.76 GB, 156 s -> 5 to 7 s. Very long tag paths that the map does not use no longer stop the bake.
+- A sky whose cube map reference is empty in your editing kit stays empty in a `.map` bake (the app used to fill in a guess from a sky with the same model).
+- **Live progress and time left.** The window shows the running step, a progress bar that moves during the long GPU steps (sky lights, bounce light, suns, surface lights, compose) and a time-left estimate per step. The estimate uses the times of earlier bakes of the same map and settings on this PC; a first bake gets a rough estimate.
+- **Shorter work folder names.** `GPU Lightmap Work` is now `GPU Work`, and `Temp (safe to delete)` is now `Temp`. An existing folder is renamed on the first start (not while a bake is running; a dry run never moves anything). Shorter paths leave more room under the Windows path limit. A Windows Security exclusion or a script that names the old folder has to be updated.
+- **Lightmaps against 0.6.11, with the new option off.** Cyclotron and Headlong: lightmap tag and bitmaps identical. Triplicate: 3 of 1,614,296 texels differ, by at most 0.0000025; the bitmaps are identical. Main menu: the truecolor lightmap differs in 3 of 92 million channel values, each by one level of 255; the paletted lightmap gets a freshly trained palette, as after any change of input, and on lit texels differs by 0.11 of a level on average (at most 13), the size of the palette's own rounding (0.07 to 0.09 on average). The causes are last-digit rounding in the engine's numbers and, on Triplicate, the new shadow-ray search no longer accepting a rare stray hit that the old block scan let through.
+- Checked: Custom quality (identical to the normal engine on three maps), light probes, AO and `.map` bakes through the app. A pretend 6 GB and 8 GB card, 47 forced parts and a forced cut on Cyclotron equal the plain bake; the many-surface-light test map on a pretend 8 GB card is cut into 2 parts and equals the single-part bake. Extra direct light samples through the app: ×4 runs with 4 and changes the result, ×1 equals the plain Custom bake.
+- **Not tested:** real 8 GB or 6 GB cards; GPUs other than one RTX 4090; extra direct light samples together with a bake that is cut into parts.
+
 ## 0.6.11 (2026-11-06)
 
 Exe SHA-256 `10fc5ae48fb53c1ff41e4803500ea51710c5f0c48832b005992585232f0a32b9`.

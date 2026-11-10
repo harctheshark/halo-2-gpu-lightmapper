@@ -24,14 +24,16 @@
     "P16_toolloader_engine_v373.patch",
     "P19_promote069_engine_v373.patch",
     "P21_promote0610_engine_v373.patch",
-    "P23_vdsamp_engine_v373.patch"
+    "P23_vdsamp_engine_v373.patch",
+    "P25_progress_engine_v373.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "6db325a2ca6e100dffb63c6234c19006",
+    "md5": "37e697046b76ad2700d480aaed91caa7",
     "prior_md5s": [
+     "6db325a2ca6e100dffb63c6234c19006",
      "d7e267e782527f8074710c5a15584aa8",
      "d16ac070fc973e6d43738cc89903670d",
      "e976ba73600efe0400500c7f08ea48f5",
@@ -56,7 +58,7 @@
   },
   {
    "path": "_research/ao/dev_AO/gpu_bake.ps1",
-   "src": "_research/ao/dev_AO16/gpu_bake.ps1",
+   "src": "_research/ao/dev_AO19/gpu_bake.ps1",
    "src_note": "V1 2026-10-14: the payload keeps INST _research/ao/dev_AO as the AO engine dir name. W1 2026-10-20: the AO engine is now _research/ao/dev_AO4 = the promoted engine_v373 + exactly dev_AO2's AO additions (tests/w1_rebuild_062/make_dev_ao4.py: three-way merge, no P2 custom text); dev_AO2 (bac932e8) is the pre-promotion AO engine and stays as the pinned history. W2 2026-10-20 (0.6.3): the AO engine is now _research/ao/dev_AO5 = the 05:38-promoted engine_v373 + exactly dev_AO4's AO additions (tests/w2_rebuild_063/make_dev_ao5.py); dev_AO4 is the 0.6.2 AO engine. W3 2026-10-21 (0.6.4): the AO engine is now _research/ao/dev_AO6 = the 0.6.4-promoted engine_v373 + exactly dev_AO5's AO additions (tests/w3_rebuild_064/make_dev_ao6.py, then build_ao6.py: CSBLOB for the AO kernel + its two df64 compat twins); dev_AO5 is the 0.6.3 AO engine. W5 2026-10-22 (0.6.5): the production source is now _research/ao/dev_AO8 = the 0.6.5-promoted engine_v373 + exactly dev_AO6's AO additions (tests/w5_release_065/make_dev_ao8.py).",
    "base_md5": "405570d10d890b5b0ca9505904777a05",
    "patches": [
@@ -74,14 +76,16 @@
     "P16_toolloader_dev_AO.patch",
     "P20_aocut_dev_AO.patch",
     "P22_lean_dev_AO.patch",
-    "P24_vdsamp_dev_AO.patch"
+    "P24_vdsamp_dev_AO.patch",
+    "P26_progress_dev_AO.patch"
    ],
    "tokens": [
     "OSOY_LAUNCH_MD5"
    ],
    "upstream": {
-    "md5": "5715208940689bfe57cb7c7a9522b2db",
+    "md5": "c15a00ddc67ec81dd049ac16bfbf9cd4",
     "prior_md5s": [
+     "5715208940689bfe57cb7c7a9522b2db",
      "14e8ee1bb3ab3bc1c7dc9b4d78b37c8b",
      "ff8de832ccace002566a197ccf860af5",
      "b34c221e14fd8f162d7a4678d033532b",
@@ -96,7 +100,7 @@
      "cd4883222df27f1c4c7a1924c5787af1"
     ],
     "base_file": "../base/_research/ao/dev_AO2/gpu_bake.ps1",
-    "note": "U1 2026-10-15: _research\u0007o\\dev_AO2\\gpu_bake.ps1 = P1+P3+F24 on the pinned base. W1 2026-10-20: + P1b + P7 = _research\u0007o\\dev_AO4\\gpu_bake.ps1 (440ce318). prior: 1d58922e = dev_AO2 + P1b (the 0.6.2 candidate), bac932e8 = dev_AO2 as promoted before W2 2026-10-20 (0.6.3): + P8 = _research/ao/dev_AO5/gpu_bake.ps1 (1a0318ac); 440ce318 = dev_AO4 (the 0.6.2 AO engine). W3 2026-10-21 (0.6.4): + P9 = _research/ao/dev_AO6/gpu_bake.ps1 (cd488322); 1a0318ac = dev_AO5 (the 0.6.3 AO engine). W5 2026-10-22 (0.6.5): + P10 = _research/ao/dev_AO8/gpu_bake.ps1 (7ff83e05) = the 0.6.5-promoted gpu_bake + exactly the AO additions (tests/w5_release_065/make_dev_ao8.py). W6 2026-10-22 (0.6.6): + P11 (the 17:24 promotion: relevance-aware Sapien re-save guard, used-set bitmaps/render_models via lmw_usedset.py, triplicate corner-texel fill) = _research/ao/dev_AO9/gpu_bake.ps1 (59d529c5) = the 0.6.6-promoted gpu_bake + exactly the AO additions (tests/w6_release_066/make_dev_ao9.py). 0.6.8 RC (2026-10-29): + P15 (the dev_XC promotion: the GPU computes the exact photon cast itself, no CPU-cast process; P13 H2LM_FARMS is now part of production) = d95fb296 = _research/ao/dev_AO11 (dev_AO10 + the same change, tests/rc068/resolve_ao11.py). Built from the promoted copy build/rc068_glw until production is promoted (tests/rc068/promote_068.py). 0.6.8 RC (later): + P16 (H2GpuLightmapper.ToolLoader.exe; one path line) = b34c221e = _research/ao/dev_AO11 after tests/rc068/promote_p16.py."
+    "note": "U1 2026-10-15: _research\\ao\\dev_AO2\\gpu_bake.ps1 = P1+P3+F24 on the pinned base. W1 2026-10-20: + P1b + P7 = _research\\ao\\dev_AO4\\gpu_bake.ps1 (440ce318). prior: 1d58922e = dev_AO2 + P1b (the 0.6.2 candidate), bac932e8 = dev_AO2 as promoted before W2 2026-10-20 (0.6.3): + P8 = _research/ao/dev_AO5/gpu_bake.ps1 (1a0318ac); 440ce318 = dev_AO4 (the 0.6.2 AO engine). W3 2026-10-21 (0.6.4): + P9 = _research/ao/dev_AO6/gpu_bake.ps1 (cd488322); 1a0318ac = dev_AO5 (the 0.6.3 AO engine). W5 2026-10-22 (0.6.5): + P10 = _research/ao/dev_AO8/gpu_bake.ps1 (7ff83e05) = the 0.6.5-promoted gpu_bake + exactly the AO additions (tests/w5_release_065/make_dev_ao8.py). W6 2026-10-22 (0.6.6): + P11 (the 17:24 promotion: relevance-aware Sapien re-save guard, used-set bitmaps/render_models via lmw_usedset.py, triplicate corner-texel fill) = _research/ao/dev_AO9/gpu_bake.ps1 (59d529c5) = the 0.6.6-promoted gpu_bake + exactly the AO additions (tests/w6_release_066/make_dev_ao9.py). 0.6.8 RC (2026-10-29): + P15 (the dev_XC promotion: the GPU computes the exact photon cast itself, no CPU-cast process; P13 H2LM_FARMS is now part of production) = d95fb296 = _research/ao/dev_AO11 (dev_AO10 + the same change, tests/rc068/resolve_ao11.py). Built from the promoted copy build/rc068_glw until production is promoted (tests/rc068/promote_068.py). 0.6.8 RC (later): + P16 (H2GpuLightmapper.ToolLoader.exe; one path line) = b34c221e = _research/ao/dev_AO11 after tests/rc068/promote_p16.py."
    },
    "post_upstream": [
     "P17_toolquote_dev_AO.patch",

@@ -64,7 +64,7 @@ namespace H2GpuLightmapper.Core.Run
             RunState st;
             if (Enum.TryParse(j.Str("state") ?? "", true, out st)) s.State = st;
             s.Step = j.Str("step"); s.Phase = j.Str("phase"); s.PhaseTitle = j.Str("phaseTitle"); s.Reason = j.Str("reason");
-            s.WaitingFor = j.Str("waitingFor"); s.BackupDir = j.Str("backupDir"); s.InstallBackupDir = j.Str("installBackupDir"); s.Marker = j.Str("marker");
+            s.WaitingFor = j.Str("waitingFor"); s.BackupDir = WorkMigration.Rebase(j.Str("backupDir")); s.InstallBackupDir = WorkMigration.Rebase(j.Str("installBackupDir")); s.Marker = WorkMigration.Rebase(j.Str("marker"));   // 0.6.12: recorded under the old work folder name
             s.InTagWrite = j.Bool("inTagWrite") == true; s.CancelRequested = j.Bool("cancelRequested") == true; s.CancelDeferred = j.Bool("cancelDeferred") == true;
             s.ExitCode = j.Int("exitCode"); s.ShellPid = j.Int("shellPid") ?? 0;
             s.ShellStartTicks = ParseTicks(j.Str("shellStartUtc"));

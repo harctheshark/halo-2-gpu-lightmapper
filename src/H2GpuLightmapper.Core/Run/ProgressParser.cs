@@ -9,7 +9,9 @@ namespace H2GpuLightmapper.Core.Run
     /// <summary>The UI step list (FINAL_DESIGN section 4.9), in order.</summary>
     public enum StepId { Preflight, Backup, Capture, Derive, GpuBake, TagWriter, AO, ProbeCapture, Probes, Install, Verify }
 
-    public enum LineKind { Plain, Phase, Note, GuardFail, Error, Install, Shell }
+    /// <summary>0.6.12: Progress = a "PROGRESS| ..." line gpu_bake.ps1 passes through for the window's progress bar (fullgpu's per-sun %, the
+    /// gather's end): not written to bake.log, not shown in the log list or on the console.</summary>
+    public enum LineKind { Plain, Phase, Note, GuardFail, Error, Install, Shell, Progress }
 
     public sealed class ParsedLine
     {
@@ -69,6 +71,7 @@ namespace H2GpuLightmapper.Core.Run
             string text = LineDecoder.StripAnsi(raw ?? "");
             var p = new ParsedLine { Text = text, IsErr = isErr, Kind = LineKind.Plain, Utc = DateTime.UtcNow };
             string t = text.Trim();
+            if (!isErr && t.StartsWith("PROGRESS| ", StringComparison.Ordinal)) { p.Kind = LineKind.Progress; return p; }      // 0.6.12: the progress bar's input only
             if (t.Length > 0 && DeviceLossLines.Count < 50 && DeviceLoss.IsDeviceLossLine(t)) DeviceLossLines.Add(t);
             if (t.Length > 0)
             {

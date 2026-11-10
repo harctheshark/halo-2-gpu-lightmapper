@@ -1,0 +1,17 @@
+# title: P6d gpu_ao.py (0.6.12b): stage uses the production engine's tag writer (engine_v373\v043-tagwriter: the 0.6.9 native vertex stage + page composites) when it ships beside _research\ao; byte-identical stage to dev_AO's pure-Python copy (tests/rc0612/ao_writer_cmp_0612.py, tests/rc0612/ao_prof_0612.py), ~5x faster; absent = as before
+# source: _research/ao/gpu_ao.py
+# base-md5: a8914dc88a0271d73938679ec6511cbe
+# result-md5: d73740c3ff866dfb2ddcad1043ba9d58
+--- a/_research/ao/gpu_ao.py
++++ b/_research/ao/gpu_ao.py
+@@ -426,6 +426,10 @@
+     if os.path.exists(stage) and not a.overwrite: die('%s exists (use --overwrite)' % stage)
+     sp = scen_paths(a)
+     tw = os.path.join(a.engine, 'v043-tagwriter')
++    # P6d (0.6.12b): the production engine's writer (engine_v373: the 0.6.9 native vertex stage + page composites) when it ships beside this
++    # folder -- a byte-identical stage to the AO engine's pure-Python copy, about 5x faster (111 s on a test map). Absent: the AO engine's own, as before.
++    twp = os.path.join(GLW, 'engine_v373', 'v043-tagwriter')
++    if os.path.isfile(os.path.join(twp, 'lm_tagwriter.py')) and os.path.isfile(os.path.join(twp, 'lmw_native.py')): tw = twp
+     skel = os.path.join(farm, 'skeleton')
+     if not os.path.isdir(skel): die('no %s (the capture-keyed skeleton the bake cached)' % skel)
+     if os.path.isdir(stage): shutil.rmtree(stage)

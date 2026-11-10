@@ -2,7 +2,7 @@ H2 GPU Lightmapper -- third-party notices
 =========================================
 
 H2 GPU Lightmapper.exe carries the components below inside itself and extracts them on first use
-(%LOCALAPPDATA%\H2GpuLightmapper\rt\ and <H2EK>\GPU Lightmap Work\_runtime\). Each component keeps its own license.
+(%LOCALAPPDATA%\H2GpuLightmapper\rt\ and <H2EK>\GPU Work\_runtime\). Each component keeps its own license.
 The full license texts follow, and the original files are also in the licenses\ folder next to this file.
 
 It does NOT carry the Halo 2 Editing Kit (tool_fast.exe, tags, libfbxsdk.dll): those come from your own H2EK install.

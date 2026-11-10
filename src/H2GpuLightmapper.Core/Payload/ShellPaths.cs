@@ -11,7 +11,8 @@ namespace H2GpuLightmapper.Core.Payload
     public sealed class ShellPaths
     {
         public const string AppFolderName = "H2GpuLightmapper";
-        public const string WorkFolderName = "GPU Lightmap Work";
+        /// <summary>0.6.12: "GPU Work" (was "GPU Lightmap Work"; <see cref="WorkMigration"/> moves an existing one on first use).</summary>
+        public const string WorkFolderName = "GPU Work";
         public const string RuntimeFolderName = "_runtime";
         public const string StandaloneFolderName = "standalone";
 
@@ -39,13 +40,15 @@ namespace H2GpuLightmapper.Core.Payload
             return new ShellPaths { LocalAppData = localAppData, AliasLocalAppData = aliasLocalAppData ?? localAppData, AliasVolumeRoot = aliasVolumeRoot };
         }
 
-        /// <summary>WORK = ROOT\GPU Lightmap Work (the REAL path; H2LM_WORK; never the DLL-slot alias). A drive root keeps its
-        /// backslash ("D:" alone would be the drive's CURRENT folder, and "D:" + "GPU Lightmap Work" is drive-relative).</summary>
+        /// <summary>WORK = ROOT\GPU Work (the REAL path; H2LM_WORK; never the DLL-slot alias). A drive root keeps its
+        /// backslash ("D:" alone would be the drive's CURRENT folder, and "D:" + "GPU Work" is drive-relative).
+        /// 0.6.12: an existing ROOT\GPU Lightmap Work is moved to it the first time (<see cref="WorkMigration"/>); while it cannot move (a bake
+        /// runs in it, an unfinished tag write is recorded) the old folder is returned.</summary>
         public static string WorkOf(string root)
         {
             string full = Path.GetFullPath(root);
             string r = IsDriveRoot(full) ? Path.GetPathRoot(full) : full.TrimEnd('\\');
-            return Path.Combine(r, WorkFolderName);
+            return WorkMigration.Resolve(r);
         }
 
         /// <summary>
@@ -80,12 +83,16 @@ namespace H2GpuLightmapper.Core.Payload
 
         /// <summary>0.6.8 bounded temp: the folder name of the app's temporary working root inside WORK. Short on purpose (MAX_PATH headroom
         /// on Steam's default H2EK path); the long explanation is in <see cref="TempReadMeName"/>.</summary>
-        public const string TempFolderName = "Temp (safe to delete)";
+        /// <summary>0.6.12: "Temp" (was "Temp (safe to delete)"); the READ ME inside it says it is safe to delete.</summary>
+        public const string TempFolderName = "Temp";
         public const string TempReadMeName = "READ ME - safe to delete.txt";
-        /// <summary>WORK\Temp (safe to delete): the workers (farm_wNN), the .map bake folders (m&lt;6hex&gt;) and the Vista query scratch
+        /// <summary>WORK\Temp: the workers (farm_wNN), the .map bake folders (m&lt;6hex&gt;) and the Vista query scratch
         /// (q&lt;6hex&gt;). Everything in it may be deleted at any moment (even mid-bake): nothing tag safety depends on lives there, and no
-        /// junction or symbolic link is ever created inside it.</summary>
-        public static string TempOf(string work) { return Path.Combine(work, TempFolderName); }
+        /// junction or symbolic link is ever created inside it. An old-name WORK still in use (its move deferred) keeps its old Temp (safe to delete).</summary>
+        public static string TempOf(string work)
+        {
+            return Path.Combine(work, WorkMigration.IsLegacyWork(work) ? WorkMigration.LegacyTempFolderName : TempFolderName);
+        }
         /// <summary>WORK\standalone\markers: the install markers (0.6.8: KEEP side, never in Temp) and the restore markers.</summary>
         public static string MarkersOf(string work) { return Path.Combine(StandaloneOf(work), "markers"); }
     }

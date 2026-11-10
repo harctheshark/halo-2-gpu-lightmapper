@@ -1,7 +1,7 @@
-# title: N4 ao_seamfix.py: cKDTree.query_ball_point -> ao_ballgrid.ball_pair_keys (no scipy)
+# title: N4 ao_seamfix.py: cKDTree.query_ball_point -> ao_ballgrid.ball_pair_keys (no scipy); 0.6.12b: neighbour_index = a dense memoised (chart, texIdx) -> row table (same answers; AO apply 76.5 -> 59 s on headlong, every output md5-identical)
 # source: _research/ao/ao_seamfix.py
 # base-md5: 93c2fe8c5ce812358b58b7c2073da030
-# result-md5: 7b239011f1a9d6becbc11ce593398cd6
+# result-md5: 94e85d76a4acc7abda904fab5caab8cb
 --- a/_research/ao/ao_seamfix.py
 +++ b/_research/ao/ao_seamfix.py
 @@ -15,7 +15,7 @@
@@ -13,7 +13,45 @@
  
  NB8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1))
  
-@@ -81,19 +81,10 @@
+@@ -44,12 +44,32 @@
+ def neighbour_index(ord_, tix, W, H):
+     """-> nb(dx, dy): atlas row of the grid neighbour (or -1). Grid = the chart's own texel grid (texIdx = y * W + x)."""
+     w = W[ord_]; x = tix % w; y = tix // w
+-    key = ord_.astype(np.int64) * 100000000 + tix; order = np.argsort(key, kind='stable'); ks = key[order]
++    # 0.6.12b: a DENSE (chart, texIdx) -> row table instead of a searchsorted per call, and each (dx, dy) answered once (donor_occ asks the
++    # same 8 offsets on every hop). Same answers: the smallest row of a duplicated key (the stable argsort's first), -1 where absent.
++    Wl = np.asarray(W, dtype=np.int64); Hl = np.asarray(H, dtype=np.int64)
++    base = np.zeros(len(Wl) + 1, dtype=np.int64); base[1:] = np.cumsum(Wl * Hl)
++    g = base[ord_] + tix
++    if len(g) and (int(tix.min()) < 0 or bool((tix >= (Wl * Hl)[ord_]).any()) or base[-1] >= 2 ** 31):
++        key = ord_.astype(np.int64) * 100000000 + tix; order = np.argsort(key, kind='stable'); ks = key[order]   # the original path
++        def nb_slow(dx, dy):
++            k2 = ord_.astype(np.int64) * 100000000 + (y + dy) * w + (x + dx)
++            inb = (x + dx >= 0) & (x + dx < w) & (y + dy >= 0) & (y + dy < H[ord_])
++            j = np.searchsorted(ks, k2); j[j >= len(ks)] = 0
++            ok = inb & (ks[j] == k2); return np.where(ok, order[j], -1)
++        return nb_slow, x, y
++    table = np.full(int(base[-1]), -1, dtype=np.int64)
++    o = np.argsort(g, kind='stable'); gs = g[o]
++    first = np.ones(len(gs), dtype=bool); first[1:] = gs[1:] != gs[:-1]
++    table[gs[first]] = o[first]
++    rowbase = base[ord_]; Hr = Hl[ord_]; cache = {}
+     def nb(dx, dy):
+-        k2 = ord_.astype(np.int64) * 100000000 + (y + dy) * w + (x + dx)
+-        inb = (x + dx >= 0) & (x + dx < w) & (y + dy >= 0) & (y + dy < H[ord_])
+-        j = np.searchsorted(ks, k2); j[j >= len(ks)] = 0
+-        ok = inb & (ks[j] == k2); return np.where(ok, order[j], -1)
++        r = cache.get((dx, dy))
++        if r is None:
++            inb = (x + dx >= 0) & (x + dx < w) & (y + dy >= 0) & (y + dy < Hr)
++            r = np.where(inb, table[np.where(inb, rowbase + (y + dy) * w + (x + dx), 0)], -1)
++            r.flags.writeable = False
++            cache[(dx, dy)] = r
++        return r
+     return nb, x, y
+ 
+ 
+@@ -81,19 +101,10 @@
  def seam_pairs(ord_, x, y, P, nrm, has, ts, prm, edge=None):
      """the coupled pairs (a < b), sorted by (a, b): -> a, b, w_ab (weight of b in a's sum), w_ba (weight of a in b's sum). Candidates: texels with a sample."""
      ok = np.flatnonzero(has)

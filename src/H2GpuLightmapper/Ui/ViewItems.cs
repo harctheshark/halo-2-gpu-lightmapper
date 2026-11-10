@@ -41,12 +41,22 @@ namespace H2GpuLightmapper.Ui
     public sealed class StepChip : INotifyPropertyChanged
     {
         private ChipState _state;
+        private string _detail = "";
         public StepId Step { get; set; }
         public string Name { get; set; }
+        /// <summary>0.6.12: the progress model's stage key (a StepId name, or MapRead / MapCopy / MapWrite of a .map bake).</summary>
+        public string Key { get; set; }
+        /// <summary>0.6.12: the line under the name: the time a finished step took, "~3 min left" on the running one, "~2 min" (last bake) on later ones.</summary>
+        public string Detail
+        {
+            get { return _detail; }
+            set { if (value == _detail) return; _detail = value ?? ""; var h = PropertyChanged; if (h != null) { h(this, new PropertyChangedEventArgs("Detail")); h(this, new PropertyChangedEventArgs("HasDetail")); } }
+        }
+        public System.Windows.Visibility HasDetail { get { return _detail.Length > 0 ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed; } }
         public ChipState State
         {
             get { return _state; }
-            set { _state = value; var h = PropertyChanged; if (h != null) { h(this, new PropertyChangedEventArgs("Fill")); h(this, new PropertyChangedEventArgs("Edge")); h(this, new PropertyChangedEventArgs("Text")); } }
+            set { if (value == _state) return; _state = value; var h = PropertyChanged; if (h != null) { h(this, new PropertyChangedEventArgs("Fill")); h(this, new PropertyChangedEventArgs("Edge")); h(this, new PropertyChangedEventArgs("Text")); } }
         }
         public Brush Fill { get { return _state == ChipState.Active ? Palette.ActiveFill : _state == ChipState.Done ? Palette.DoneFill : _state == ChipState.Failed ? Palette.BadFill : Palette.Clear; } }
         public Brush Edge { get { return _state == ChipState.Active ? Palette.Accent : _state == ChipState.Done ? Palette.Good : _state == ChipState.Failed ? Palette.Bad : Palette.Edge; } }

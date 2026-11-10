@@ -44,10 +44,13 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static void PathBudgetFallbackWarns()
         {
-            // the 0.6.8 GPU validation's root inside the user's Temp folder (95 characters) was refused on triplicate: farm install backup 251
-            string root = @"D:\" + new string('h', 92);        // the same length as that root
-            Assert.Eq(95, root.Length, "the validation root length");
-            string scen = @"scenarios\multi\triplicate\triplicate", bsp = "triplicate";
+            // the 0.6.8 GPU validation's root inside the user's Temp folder (95 characters) was refused on triplicate: farm install backup 251.
+            // 0.6.12: GPU Work\Temp is 26 characters shorter than GPU Lightmap Work\Temp (safe to delete), the KEEP side only 9, so the fallback-only
+            // farm backup is now just (21 - leaf - bsp) characters longer than the required UI backup (triplicate: 1). A short-named map at a
+            // 126-character root keeps the case: the fallback overflows, every required path fits.
+            string root = @"D:\" + new string('h', 123);
+            Assert.Eq(126, root.Length, "the root length");
+            string scen = @"scenarios\multi\tri\tri", bsp = "tri";
             var e = PathBudget.Estimate(root, "0.6.8-12345678", 66, scen, bsp, true);      // the RC INST: maxPathLen 66
             var fb = e.First(x => x.What == "farm install backup");
             Assert.True(fb.FallbackOnly && !fb.Required && fb.Length >= PathBudget.Limit, "the farm install backup is fallback-only and over the limit here: " + fb.Length);
@@ -60,14 +63,14 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.True(PathBudget.FallbackOver(@"C:\Program Files (x86)\Steam\steamapps\common\H2EK", scen, bsp, true) == null, "Steam's default path: the fallback fits");
             // preflight: a warning (path.fallback), the budget itself OK
             string sb = C.Short.Dir("rcf1");
-            string deepRoot = sb + "\\" + new string('r', Math.Max(1, 95 - sb.Length - 1));
+            string deepRoot = sb + "\\" + new string('r', Math.Max(1, 126 - sb.Length - 1));
             Directory.CreateDirectory(deepRoot);
-            Assert.Eq(95, deepRoot.Length, "a 95-character sandbox root");
+            Assert.Eq(126, deepRoot.Length, "a 126-character sandbox root");
             var o = new PreflightOptions { ProbeWrite = false, RunToolSmoke = false, InstDirName = "0.1.0-12345678", InstMaxPathLen = 66, ScenarioRel = scen, Bsp = bsp,
                                            FarmsInTemp = true, AliasLocalAppData = C.Short.Dir("PL"), AliasVolumeRoot = C.Short.Dir("PV") };
             var rep = PreflightChecks.Run(deepRoot, o);
             var b = rep.Get("path.budget");
-            Assert.Eq(CheckLevel.Ok, b.Level, "95-character root + triplicate: the budget passes (" + b.Message + ")");
+            Assert.Eq(CheckLevel.Ok, b.Level, "126-character root + a short-named map: the budget passes (" + b.Message + ")");
             var w = rep.Get("path.fallback");
             Assert.True(w != null && w.Level == CheckLevel.Warn && w.Message.Contains("writes nothing to your tags"), "the fallback paths are a warning: " + (w == null ? "none" : w.Message));
             // a truly deep root is still refused by the required paths
@@ -117,7 +120,7 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static string NewWork(string tag)
         {
-            string work = C.Sb.Dir(tag + @"\GPU Lightmap Work");
+            string work = C.Sb.Dir(tag + @"\GPU Work");
             TempJanitor.EnsureTemp(work);
             return work;
         }
@@ -254,7 +257,7 @@ namespace H2GpuLightmapper.Core.Tests
             File.WriteAllBytes(Path.Combine(farm, @"skeleton\skel.bin"), new byte[100]);
             File.WriteAllText(Path.Combine(farm, "gpu_bake.log"), "log line");
             string mapFarm = Farm(work, 253, false);
-            string run = C.Sb.Dir(@"ab\GPU Lightmap Work\standalone\runs\20261029_010000_ab_x");
+            string run = C.Sb.Dir(@"ab\GPU Work\standalone\runs\20261029_010000_ab_x");
             Final(run);
             var rep = TempJanitor.AfterBake(new AfterBakeRequest
             {
@@ -577,18 +580,18 @@ namespace H2GpuLightmapper.Core.Tests
             string steam = @"C:\Program Files (x86)\Steam\steamapps\common\H2EK";
             var e = PathBudget.Estimate(steam, "0.6.8-12345678", 120, @"scenarios\multi\a_32_character_scenario_folder_x\a_16_char_leaf_x", "a_16_char_bsp_xx", true);
             var farm = e.First(x => x.What == "farm AO stage");
-            Assert.Contains(farm.Example, @"\Temp (safe to delete)\farm_w200\", "the farm is in Temp");
+            Assert.Contains(farm.Example, @"\GPU Work\Temp\farm_w200\", "the farm is in Temp (0.6.12: GPU Work\\Temp)");
             var all = e.OrderByDescending(x => x.Length).ToList();
             Assert.True(all[0].Length < PathBudget.Limit, "every 0.6.8 scenario-bake path fits " + PathBudget.Limit + " on Steam's default path: longest " + all[0].What + " " + all[0].Length);
-            Assert.Eq(farm.Length - 22, PathBudget.Estimate(steam, "0.6.8-12345678", 120, @"scenarios\multi\a_32_character_scenario_folder_x\a_16_char_leaf_x", "a_16_char_bsp_xx", false)
-                                         .First(x => x.What == "farm AO stage").Length, "the farm moved into Temp costs exactly 22 characters");
+            Assert.Eq(farm.Length - 5, PathBudget.Estimate(steam, "0.6.8-12345678", 120, @"scenarios\multi\a_32_character_scenario_folder_x\a_16_char_leaf_x", "a_16_char_bsp_xx", false)
+                                         .First(x => x.What == "farm AO stage").Length, "the farm moved into Temp costs exactly 5 characters (0.6.12: \\Temp; it was 22 with Temp (safe to delete))");
             var sk = PathBudget.MapSkeleton(steam, @"scenarios\multi\a_32_character_scenario_folder_x\a_16_char_leaf_x", "a_16_char_bsp_xx");
             string old067 = steam + @"\GPU Lightmap Work\_mapbake\m20261028-134231\root\w\_gpulm_skel\w200\tags\scenarios\multi\a_32_character_scenario_folder_x\a_16_char_leaf_x_a_16_char_bsp_xx_lightmap_truecolor_bitmaps.bitmap";
-            Assert.True(sk.Length < 260 && sk.Length == old067.Length + 1, ".map skeleton " + sk.Length + " (0.6.7: " + old067.Length + "; Temp (safe to delete)/m<6hex>/r is ONE character longer than _mapbake/m<time>/root) stays under MAX_PATH");
+            Assert.True(sk.Length < 260 && sk.Length == old067.Length - 25, ".map skeleton " + sk.Length + " (0.6.7: " + old067.Length + "; 0.6.12 GPU Work/Temp/m<6hex>/r is 25 characters shorter than GPU Lightmap Work/_mapbake/m<time>/root) stays under MAX_PATH");
             var p99 = PathBudget.MapOverlay(steam, PathBudget.KitRelP99);
             var max = PathBudget.MapOverlay(steam, PathBudget.KitRelMax);
-            Assert.Eq(106 + PathBudget.KitRelP99, p99.Length, "the overlay prefix is 106 characters on Steam's default path");
-            Assert.Eq(106 + PathBudget.KitRelMax, max.Length, ".map overlay worst case");
+            Assert.Eq(80 + PathBudget.KitRelP99, p99.Length, "the overlay prefix is 80 characters on Steam's default path (0.6.12; 106 with GPU Lightmap Work\\Temp (safe to delete))");
+            Assert.Eq(80 + PathBudget.KitRelMax, max.Length, ".map overlay worst case");
             Console.WriteLine("    MAX_PATH figures (Steam default): " + string.Join("; ", all.Select(x => x.What + " " + x.Length)) + "; .map skeleton " + sk.Length + " (0.6.7 " + old067.Length + "); .map overlay p99 " + p99.Length + ", max " + max.Length);
         }
     }

@@ -84,6 +84,10 @@ namespace H2GpuLightmapper.Pipeline
         public CubemapItem Selected;
         /// <summary>Shown under the dropdown when the preselection is "Leave empty" because no automatic match exists; null otherwise.</summary>
         public string Warning;
+        /// <summary>0.6.12: the kit holds this very sky (same tag path) and ITS cube map reference is empty, so the automatic choice IS "Leave empty" (no warning; <see cref="Info"/> says why).</summary>
+        public bool KitSaysEmpty;
+        /// <summary>A plain (not warning) note under the dropdown; null when there is none.</summary>
+        public string Info;
         public CubemapItem AutoItem { get { return Items.FirstOrDefault(i => i.Kind == CubemapKind.Automatic); } }
         public CubemapItem EmptyItem { get { return Items.First(i => i.Kind == CubemapKind.LeaveEmpty); } }
         public string SkyLeaf { get { int i = Sky.LastIndexOf('\\'); return i < 0 ? Sky : Sky.Substring(i + 1); } }
@@ -161,6 +165,7 @@ namespace H2GpuLightmapper.Pipeline
         public const string LeaveEmptyLabel = "Leave empty (no cube map)";
         public const string NoAutoWarning = "No automatic match for this sky, so it is left empty: the bake will lack the sky's ambient fill (about 30% darker on headlong). "
             + "If you know the cube map this map was made with, pick it from the list.";
+        public const string KitEmptyInfo = "Automatic: your editing kit's copy of this sky has no cube map, so it is left empty, as a bake from your tags would have it.";
 
         public static string Norm(string tagPath)
         {
@@ -182,11 +187,15 @@ namespace H2GpuLightmapper.Pipeline
                 var c = new SkyChoice { Sky = sky.Name, RenderModel = sky.RenderModel };
                 c.Items.Add(new CubemapItem { Kind = CubemapKind.LeaveEmpty, Label = LeaveEmptyLabel });
                 string auto = Norm(sky.AutoCubemap);
+                // rule "kit" (0.6.12): the kit has this very sky -> its own reference decides, empty included; rule "A": another kit sky with the same sky model
+                bool byKit = string.Equals(sky.AutoRule, "kit", StringComparison.OrdinalIgnoreCase);
+                c.KitSaysEmpty = byKit && string.IsNullOrEmpty(auto);
                 if (!string.IsNullOrEmpty(auto))
                     c.Items.Add(new CubemapItem
                     {
                         Kind = CubemapKind.Automatic, Path = auto,
-                        Label = auto + "   (automatic match: the kit's sky with the same sky model uses it" + (inMap.Contains(auto) && !kit.Contains(auto) ? "; it is in this .map" : "") + ")",
+                        Label = auto + (byKit ? "   (automatic: your kit's copy of this sky uses it" : "   (automatic match: the kit's sky with the same sky model uses it")
+                                + (inMap.Contains(auto) && !kit.Contains(auto) ? "; it is in this .map" : "") + ")",
                     });
                 foreach (var k in kit.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                 {
@@ -199,7 +208,8 @@ namespace H2GpuLightmapper.Pipeline
                     c.Items.Add(new CubemapItem { Kind = CubemapKind.InMap, Path = MapCase(q, m), Label = MapCase(q, m) + "   (in this .map)" });
                 }
                 c.Selected = c.AutoItem ?? c.EmptyItem;
-                if (c.AutoItem == null) c.Warning = NoAutoWarning;
+                if (c.KitSaysEmpty) c.Info = KitEmptyInfo;
+                else if (c.AutoItem == null) c.Warning = NoAutoWarning;
                 res.Add(c);
             }
             return res;
@@ -235,7 +245,8 @@ namespace H2GpuLightmapper.Pipeline
                 if (v.Equals("none", StringComparison.OrdinalIgnoreCase)) { c.Selected = c.EmptyItem; c.Warning = null; continue; }
                 if (v.Equals("auto", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (c.AutoItem == null) errs.Add("--sky-cubemap: the sky '" + c.Sky + "' has no automatic cube map match (use a bitmap tag path or none)");
+                    if (c.KitSaysEmpty) { c.Selected = c.EmptyItem; c.Warning = null; c.Info = KitEmptyInfo; }
+                    else if (c.AutoItem == null) errs.Add("--sky-cubemap: the sky '" + c.Sky + "' has no automatic cube map match (use a bitmap tag path or none)");
                     else { c.Selected = c.AutoItem; c.Warning = null; }
                     continue;
                 }
@@ -254,7 +265,8 @@ namespace H2GpuLightmapper.Pipeline
             foreach (var c in model)
             {
                 if (c.Selected.Kind == CubemapKind.LeaveEmpty)
-                    l.Add("sky cube map: " + c.Sky + " -> LEFT EMPTY" + (c.Warning != null ? "  -- WARNING: " + c.Warning : " (your choice)"));
+                    l.Add("sky cube map: " + c.Sky + " -> LEFT EMPTY" + (c.Warning != null ? "  -- WARNING: " + c.Warning
+                                                                        : c.KitSaysEmpty ? " (automatic: the kit's copy of this sky has no cube map)" : " (your choice)"));
                 else
                     l.Add("sky cube map: " + c.Sky + " -> " + c.Selected.Path + (c.Selected.Kind == CubemapKind.Automatic ? " (automatic match)" : c.Selected.Kind == CubemapKind.InMap ? " (from the map)" : " (your choice)"));
             }

@@ -29,7 +29,7 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static void Interrupted()
         {
-            string work = C.Sb.Dir(@"rec1\GPU Lightmap Work");
+            string work = C.Sb.Dir(@"rec1\GPU Work");
             string runDir = Path.Combine(RunFolder.RunsDir(work), "20261014_010000_fake_fake");
             Directory.CreateDirectory(runDir);
             var st = new RunStatus { RunDir = runDir, RunTag = "20261014_010000_fake_fake", State = RunState.Running, Phase = "3", PhaseTitle = "GPU BAKE - x" };
@@ -83,7 +83,7 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static void MarkersAndLocks()
         {
-            string work = C.Sb.Dir(@"rec3\GPU Lightmap Work");
+            string work = C.Sb.Dir(@"rec3\GPU Work");
             string m = Path.Combine(work, "farm_w206", StartupRecovery.MarkerName);
             Directory.CreateDirectory(Path.GetDirectoryName(m));
             File.WriteAllText(m, "started 10/14/2026 02:00:00; previous tags: X:\\bak (3 files from X:\\tags\\a\\b_c_lightmap*). Copy them back if the new tag is broken.");

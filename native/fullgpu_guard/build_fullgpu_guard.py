@@ -120,7 +120,14 @@ def run(cmd, env=None, cwd=None, timeout=None):
 def msvc_env(vcvars):
     base = {k: v for k, v in os.environ.items() if k.upper() not in ("CL", "_CL_", "LINK", "_LINK_")}
     # a STRING command line: list2cmdline would backslash-escape the quotes, which cmd.exe does not understand
-    rc, out, err = run('cmd.exe /d /s /c ""%s" x64 >nul 2>&1 && set"' % vcvars, env=base)
+    # 2026-11-09: run vcvarsall from its own folder -- from the builder's work dir it failed ("The system cannot find the path specified",
+    # exit 1 / 255) in this session; the working folder does not enter the captured environment.
+    vcwd = os.path.dirname(vcvars) if os.path.isdir(os.path.dirname(vcvars)) else None
+    rc, out, err = run('cmd.exe /d /s /c ""%s" x64 >nul 2>&1 && set"' % vcvars, env=base, cwd=vcwd)
+    if rc != 0 and not any(k.upper() in ("CL", "_CL_", "LINK", "_LINK_") for k in os.environ):
+        # an explicit env block failed in the same session while the INHERITED environment worked; with no CL/LINK override set,
+        # `base` IS os.environ, so inheriting is the same environment.
+        rc, out, err = run('cmd.exe /d /s /c ""%s" x64 >nul 2>&1 && set"' % vcvars, env=None, cwd=vcwd)
     if rc != 0:
         raise SystemExit("vcvarsall failed (%s): %s" % (rc, err))
     env = {}

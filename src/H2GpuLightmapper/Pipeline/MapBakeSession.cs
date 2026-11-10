@@ -532,7 +532,7 @@ namespace H2GpuLightmapper.Pipeline
             Phased("Snapshotting the live tags ...");
             var sa = RunMapbake("snap", new[] { "--tags", tagsDir, "--out", snapA }, SnapTimeoutMs);
             if (sa.ExitCode != 0) throw new StepFailedException("the live-tag snapshot failed: " + (LastMapbakeLine(sa) ?? "exit " + sa.ExitCode));
-            Phased("Reading the map's dependency subset and building the overlay (this copies only the kit tags this map uses: usually about 15 seconds) ...");
+            Phased("Reading the map's dependency subset and building the overlay (this copies only the kit tags this map uses: usually under a minute) ...");
             var pa = new List<string> { "--map", _mapPath, "--kit", tagsDir, "--tool-root", _root, "--run", _runDir, "--report", Path.Combine(logs, "prepare_report.json") };
             if (Layout068) { pa.Add("--root-name"); pa.Add(OverlayRootName); }
             foreach (var c in _skies) { pa.Add("--sky-cubemap"); pa.Add(c.Sky + "=" + c.Selected.Value); }
@@ -734,8 +734,8 @@ namespace H2GpuLightmapper.Pipeline
             if (_o.SkyCubemaps.Count > 0)
                 foreach (var kv in _o.SkyCubemaps) sb.AppendLine("  sky cubemap " + kv.Key + " = " + kv.Value + "   (checked against the map's skies and the kit's cube-map bitmaps by a real run)");
             else
-                sb.AppendLine("  sky cubemap for every sky with cube map power scale > 0 and no cube map reference (compiled maps lose it): the automatic match (the kit's sky with the same sky model), "
-                              + "else LEFT EMPTY with a warning (the bake then lacks the sky's ambient fill, about 30% darker on headlong); override with --sky-cubemap <sky>=<bitmap tag path | none>");
+                sb.AppendLine("  sky cubemap for every sky with cube map power scale > 0 and no cube map reference (compiled maps lose it): the automatic choice (your kit's own copy of that sky decides, "
+                              + "none included; else the kit's sky with the same sky model), else LEFT EMPTY with a warning (the bake then lacks the sky's ambient fill, about 30% darker on headlong); override with --sky-cubemap <sky>=<bitmap tag path | none>");
             sb.AppendLine("  temp folder " + (Layout068 ? ShellPaths.TempOf(_realWork) + "\\m<6 hex>   (the map's files + overlay; deleted at the end, the logs are kept in the run folder; safe to delete at any time)"
                                                     : Path.Combine(_realWork, TempFolder) + "\\m<time>" + "   (the map's files + overlay; deleted at the end, the logs stay)"));
             sb.AppendLine("  cleanup     the worker's derived geometry / texture files are deleted at the end, a crashed run's leftovers at the next start");

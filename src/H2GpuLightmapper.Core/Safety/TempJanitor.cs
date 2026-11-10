@@ -206,7 +206,7 @@ namespace H2GpuLightmapper.Core.Safety
             "bakes from a .map (m...) and map queries (q...).\r\n\r\n" +
             "It is SAFE TO DELETE at any time, even while a bake runs:\r\n" +
             "  * your tags are never written from here; the install source, the install marker and every tag backup live\r\n" +
-            "    elsewhere (GPU Lightmap Work\\standalone and GPU Lightmap Work\\_TAGBAK_ui);\r\n" +
+            "    elsewhere (GPU Work\\standalone and GPU Work\\_TAGBAK_ui);\r\n" +
             "  * a bake whose folder disappears stops and tells you that nothing was written to your tags; just bake again;\r\n" +
             "  * the only thing lost is a kept capture: the next bake of that map captures again (\"Reuse existing capture\" is unavailable).\r\n\r\n" +
             "The app also keeps it small by itself: after every bake only a few captures are kept for reuse (Advanced settings:\r\n" +

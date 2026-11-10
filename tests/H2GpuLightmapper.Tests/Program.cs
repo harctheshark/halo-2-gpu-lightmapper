@@ -20,6 +20,8 @@ namespace H2GpuLightmapper.Tests
 
         private static int Main(string[] args)
         {
+            // 0.6.12: the tests read the production H2EK (--mine): never move its real work folder
+            H2GpuLightmapper.Core.Payload.WorkMigration.Disabled = true;
             var c = new Ctx();
             string filter = null;
             var skips = new List<string>();
@@ -52,6 +54,7 @@ namespace H2GpuLightmapper.Tests
             tests.AddRange(SceneryFixTests.All());
             tests.AddRange(MapBakeTests.All());
             tests.AddRange(AoOnlyTests.All());          // 0.6.8 xc8: AO only (--mode ao)
+            tests.AddRange(ProgressTests.All());        // 0.6.12: the live progress bar / time left
 
             int pass = 0, fail = 0, skip = 0;
             var sw = Stopwatch.StartNew();

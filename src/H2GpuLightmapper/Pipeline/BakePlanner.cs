@@ -387,7 +387,24 @@ namespace H2GpuLightmapper.Pipeline
                 if (fb != null) fb.Params.Add("fallbackEnv", GpuCheck.CompatEnvVar + "=1");
             }
             ApplyRebakeHint(o, p, pi.ReuseLightmap);        // 0.6.8 Advanced "Re-bake speedup" (off: nothing added)
+            ApplyDirectSamples(o, p);                        // 0.6.12 Advanced "Extra direct light samples" + the Custom box (off / x1: nothing added)
             return p;
+        }
+
+        /// <summary>0.6.12 "Extra direct light samples" (the Advanced opt-in + Custom's "Direct light samples ×" box / --direct-samples N): GPULM_DIRECT_SAMPLE_MUL=N on
+        /// the gpu_bake steps of a CUSTOM-quality bake. The engine then runs each sun / sky-light pass and the surface-light class N times with different seeds and
+        /// averages them. Off, N = 1, or another quality: nothing is set (the argv and the environment are exactly as before). A tick without Custom quality is
+        /// reported as a warning, never silently dropped.</summary>
+        public static void ApplyDirectSamples(BakeOptions o, BakePlan p)
+        {
+            if (!o.DirectSamplesOptIn) return;
+            if (o.Quality != Quality.Custom) { p.Warnings.Add(BakeOptions.DirectSamplesLabel + " has no effect: it applies to Custom quality only"); return; }
+            int k = o.DirectSamplesEffective;
+            if (k <= 1) return;
+            int n = 0;
+            foreach (var s in p.Steps)
+                if (s.Kind == PlanStepKind.Process && s.Id == StepIds.GpuBake) { s.EnvExtra[BakeOptions.DirectSamplesEnvVar] = k.ToString(System.Globalization.CultureInfo.InvariantCulture); n++; }
+            if (n > 0) p.Notes.Add(o.DirectSamplesNote);
         }
 
         /// <summary>0.6.8 "Re-bake speedup" (--rebake-hint, default off): GPULM_SKY_HINT=1 on the gpu_bake steps of a bake that reuses its lightmap

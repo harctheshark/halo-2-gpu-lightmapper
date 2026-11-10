@@ -21,6 +21,8 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static int Main(string[] args)
         {
+            // 0.6.12: the tests read the production H2EK (--mine): never move its real work folder; only WorkMigrationTests turn it on, in the sandbox
+            H2GpuLightmapper.Core.Payload.WorkMigration.Disabled = true;
             var c = new Ctx();
             string filter = null;
             for (int i = 0; i < args.Length; i++)
@@ -58,6 +60,7 @@ namespace H2GpuLightmapper.Core.Tests
             tests.AddRange(SapienPingTests.All());
             tests.AddRange(TempJanitorTests.All());      // 0.6.8 bounded temp
             tests.AddRange(QuarantineTests.All());       // 0.6.8 RC antivirus quarantine re-check
+            tests.AddRange(WorkMigrationTests.All());    // 0.6.12 GPU Lightmap Work -> GPU Work
 
             int pass = 0, fail = 0, skip = 0;
             var sw = Stopwatch.StartNew();

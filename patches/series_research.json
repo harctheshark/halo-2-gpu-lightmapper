@@ -19,7 +19,8 @@
    "patches": [
     "P6_gpu_ao.patch",
     "P6b_gpu_ao_exactvl.patch",
-    "P6c_gpu_ao_splitbsp.patch"
+    "P6c_gpu_ao_splitbsp.patch",
+    "P6d_gpu_ao_nativetw.patch"
    ],
    "tokens": []
   }

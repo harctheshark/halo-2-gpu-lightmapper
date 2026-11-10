@@ -1,0 +1,34 @@
+# title: P25 0.6.12: fullgpu's progress lines (per-sun %, the sun count, the gather's end) pass through as 'PROGRESS| ...' for the app's progress bar; engine_v378
+# source: engine_v373/gpu_bake.ps1
+# base-md5: 4f25458b87dd83dc54d6c74a58a445fe
+# result-md5: dc6c62118ca25ecfe7577265db16cfb3
+--- a/engine_v373/gpu_bake.ps1
++++ b/engine_v373/gpu_bake.ps1
+@@ -1997,6 +1997,9 @@
+ if (-not $NoSunWalk) { $env:GPULM_SUN_WALK = "1" }
+ if (-not $NoLightWalk) { $env:GPULM_ANA_WALK = "1"; $env:GPULM_SURF_WALK = "1" }
+ Clear-Gpulm 'GPULM_RE_WIN'      # the main pass never runs the r.e. kernel (GPULM_RE=0); the pre-pass had it
++# 0.6.12: the app's progress bar reads these fullgpu lines (the per-sun %, the sun count, the gather's end); the main pass passes them through as
++# "PROGRESS| ..." and the app keeps them out of the log list and bake.log
++$progPat = 'DIRECT: SUN \d+ progress|DIRECT: SUN \d+ tiles:|DIRECT: lights\.bin|dispatch done:|GATEFIRST: (pre-pass:|segment \d+:|single gather done)'
+ # v372M the main pass loads the pre-pass's photon cast (identical inputs -> identical cloud; fullgpu checks an input fingerprint and
+ # casts itself on any mismatch, printing a *** line)
+ if ((-not $NoCastCache) -and (-not $UseLattice) -and (Test-Path "$OUT\cast_cache.bin")) { $env:GPULM_CAST_CACHE_IN = "$OUT\cast_cache.bin" }
+@@ -2006,7 +2009,7 @@
+ try {
+   if ($nParts -le 1) {
+     & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$OUT\gpu_bake.log" |
+-        Select-String -CaseSensitive -Pattern $mainPat | ForEach-Object { "      $_" }
++        Select-String -CaseSensitive -Pattern "$mainPat|$progPat" | ForEach-Object { if ($_.Line -cmatch $progPat) { "      PROGRESS| " + $_.Line } else { "      $_" } }
+     $mx = $LASTEXITCODE
+   } else {
+     # ***** v372 SEG: one fullgpu run per part (a chart range), serially (one GPU job at a time). Each part's products are moved to
+@@ -2044,7 +2047,7 @@
+         Write-Host ("      --- v372 SEG PART {0}/{1}: charts [{2}..{3}){4}, <= {5:n0} call rows ---" -f ($pk + 1), $nParts, $pp.C0, $pp.C1, $(if ($pp.T0 -or $pp.T1) { " (texel cuts $($pp.T0):$($pp.T1))" } else { "" }), $pp.Calls) -ForegroundColor Cyan
+         $swPk = [Diagnostics.Stopwatch]::StartNew()
+         & ".\fullgpu.exe" @args2 2>&1 | Tee-Object -FilePath "$pdir\gpu_bake.log" |
+-            Select-String -CaseSensitive -Pattern $mainPat | ForEach-Object { "      [p$pk] $_" }
++            Select-String -CaseSensitive -Pattern "$mainPat|$progPat" | ForEach-Object { if ($_.Line -cmatch $progPat) { "      PROGRESS| [p$pk] " + $_.Line } else { "      [p$pk] $_" } }
+         $mx = $LASTEXITCODE
+         $partSec += $swPk.Elapsed.TotalSeconds
+         Write-Host ("      --- part {0}/{1} exit {2}  {3:n1}s" -f ($pk + 1), $nParts, $mx, $swPk.Elapsed.TotalSeconds)

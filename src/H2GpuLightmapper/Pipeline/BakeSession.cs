@@ -416,6 +416,7 @@ namespace H2GpuLightmapper.Pipeline
             _work = _so.Overlay != null ? _so.Overlay.RealWork : ShellPaths.WorkOf(_root);
             string bad = PathTextProblem(_root);
             if (bad != null) Refuse(bad);
+            foreach (var m in WorkMigration.TakeMessages()) Say("  " + m);      // 0.6.12: GPU Lightmap Work -> GPU Work
             Say("H2 GPU Lightmapper " + _host.AppVersion + (dry ? "   DRY RUN" : "") + "   " + _o.Summary());
             Say("  map " + rel + " / " + _o.Bsp + "   root " + _root);
             if (_so.Overlay != null) foreach (var pl in _so.Overlay.PreLines) Say(pl);

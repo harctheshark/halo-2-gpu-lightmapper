@@ -52,7 +52,7 @@ namespace H2GpuLightmapper.Tests
                 var a = new List<string> { "--payload-dir", dev ? guarded : C.PayloadDir, "--localappdata", C.Lad, "--alias-volume-root", C.Vol, "--rt-pwsh", C.PwshDir, "--rt-py", C.PyDir,
                                            "--h2ek", r.Root, "--scenario", @"scenarios\multi\triplicate\triplicate", "--bsp", "triplicate",
                                            "--dev-ui-snapshot", png, "--dev-ui-snapshot-delay-ms", "6000" };
-                if (dev) a.AddRange(new[] { "--dev-probes", "--dev-ui-preset", "custom,ao,advanced,lightmap,responsive" });
+                if (dev) a.AddRange(new[] { "--dev-probes", "--dev-ui-preset", "custom,ao,advanced,lightmap,responsive,directsamples" });   // 0.6.12: + the direct-samples opt-in (its Custom box is then shown)
                 var res = C.Run(a, 120000);
                 Assert.Eq(0, res.Exit, "the window exited cleanly: " + res);
                 Assert.True(!File.Exists(png + ".error.txt"), "snapshot error: " + (File.Exists(png + ".error.txt") ? File.ReadAllText(png + ".error.txt") : ""));

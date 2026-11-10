@@ -154,7 +154,7 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static void LockInRun()
         {
-            string work = C.Sb.Dir(@"lockrun\GPU Lightmap Work");
+            string work = C.Sb.Dir(@"lockrun\GPU Work");
             string lp = GpuLock.PathFor(work);
             File.WriteAllText(lp, "RESEARCH BAKE tie_A scenarios\\solo\\x 2026-10-14T07:00:00 pid 4242");
             var run = BakeRun.Start(new RunSpec { Work = work, ScenarioRel = @"scenarios\multi\fake\fake", Bsp = "fake", Worker = 205 });

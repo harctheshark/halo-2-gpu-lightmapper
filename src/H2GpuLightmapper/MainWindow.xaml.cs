@@ -80,7 +80,7 @@ namespace H2GpuLightmapper
             _settings = _host.LoadSettings();
             Title = "H2 GPU Lightmapper " + _host.AppVersion;
             LogList.ItemsSource = _log;
-            foreach (var kv in StepChip.Names) _chips.Add(new StepChip { Step = kv.Key, Name = kv.Value });
+            foreach (var kv in StepChip.Names) _chips.Add(new StepChip { Step = kv.Key, Name = kv.Value, Key = kv.Key.ToString() });
             StepList.ItemsSource = _chips;
             _scenarioView = CollectionViewSource.GetDefaultView(_scenarios);
             _scenarioView.Filter = o => _scenarioFilter.Length == 0 || ((string)o).IndexOf(_scenarioFilter, StringComparison.OrdinalIgnoreCase) >= 0;
@@ -138,6 +138,7 @@ namespace H2GpuLightmapper
                         case "exactvertex": ExactVertexCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "sceneryperm": SceneryPermCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "rebakehint": RebakeHintCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
+                        case "directsamples": DirectSamplesCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                     }
                 }
                 UpdateOptionUi();
@@ -184,6 +185,23 @@ namespace H2GpuLightmapper
                 enc.Frames.Add(BitmapFrame.Create(bmp));
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
                 using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write)) enc.Save(fs);
+                // 0.6.12 (UI test only): the WHOLE options panel beside it (<snapshot>.options.png), because the options scroll and the window shot only shows their top
+                var opts = OptionsScroll != null ? OptionsScroll.Content as FrameworkElement : null;
+                if (opts != null && opts.ActualWidth > 0 && opts.ActualHeight > 0)
+                {
+                    var b2 = new RenderTargetBitmap((int)Math.Ceiling(opts.ActualWidth * dpi.DpiScaleX), (int)Math.Ceiling(opts.ActualHeight * dpi.DpiScaleY),
+                                                    96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+                    var dv2 = new DrawingVisual();
+                    using (var dc = dv2.RenderOpen())
+                    {
+                        dc.DrawRectangle(Background, null, new Rect(0, 0, opts.ActualWidth, opts.ActualHeight));
+                        dc.DrawRectangle(new VisualBrush(opts), null, new Rect(0, 0, opts.ActualWidth, opts.ActualHeight));
+                    }
+                    b2.Render(dv2);
+                    var e2 = new PngBitmapEncoder();
+                    e2.Frames.Add(BitmapFrame.Create(b2));
+                    using (var fs = new FileStream(path + ".options.png", FileMode.Create, FileAccess.Write)) e2.Save(fs);
+                }
             }
             catch (Exception ex) { try { File.WriteAllText(path + ".error.txt", ex.ToString()); } catch { } }
         }
@@ -248,6 +266,7 @@ namespace H2GpuLightmapper
             DetachView();
             _root = root;
             _work = ShellPaths.WorkOf(root);
+            foreach (var m in Core.Payload.WorkMigration.TakeMessages()) Log(Palette.Dim, m);      // 0.6.12: GPU Lightmap Work -> GPU Work
             _rt = null; _env = null; _runtimeReady = false; _mapInfo = null; _mapQuery = null;
             WorkBox.Text = _work;
             TempBox.Text = ShellPaths.TempOf(_work); TempSizeText.Text = "";
@@ -745,6 +764,14 @@ namespace H2GpuLightmapper
             o.ExactVertexLighting = ExactVertexCheck.IsChecked == true;        // W2 (0.6.3): "2004 Exact Vertex Lighting?" -> gpu_bake -ExactVertexLighting
             o.SceneryPermutationFix = SceneryPermCheck.IsChecked == true && SceneryPermCheck.IsEnabled;     // engine-gated: a greyed box is never passed on
             o.RebakeHint = RebakeHintCheck.IsChecked == true;        // 0.6.8: GPULM_SKY_HINT=1, reuse bakes only (BakePlanner.ApplyRebakeHint)
+            // 0.6.12: the opt-in direct sample multiplier (Custom quality only; BakePlanner.ApplyDirectSamples). Unticked = the box is hidden and never read.
+            o.DirectSamplesOptIn = DirectSamplesCheck.IsChecked == true;
+            if (o.DirectSamplesOptIn)
+            {
+                int ds;
+                if (int.TryParse((DirectSamplesBox.Text ?? "").Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ds)) o.DirectSamples = ds;
+                else if (o.Quality == Quality.Custom) { errors.Add("direct light samples: not a whole number"); o.DirectSamples = -1; }
+            }
             if (IsMapSource) ApplyMapOptions(o);        // milestone 2: the .map source replaces the scenario fields
             return o;
         }
@@ -789,6 +816,19 @@ namespace H2GpuLightmapper
             var o = ReadOptions(out perr);
             MarkBox(PhotonsBox, custom && (o.Photons < BakeOptions.PhotonsMin || o.Photons > BakeOptions.PhotonsMax));
             MarkBox(RaysBox, custom && (o.Rays < BakeOptions.RaysMin || o.Rays > BakeOptions.RaysMax));
+            // 0.6.12: the "Direct light samples ×" row exists only while the Advanced opt-in is ticked
+            {
+                bool dsOn = DirectSamplesCheck.IsChecked == true;
+                var dsVis = dsOn ? Visibility.Visible : Visibility.Collapsed;
+                DirectSamplesLabel.Visibility = dsVis; DirectSamplesBox.Visibility = dsVis; DirectSamplesRange.Visibility = dsVis; DirectSamplesLine.Visibility = dsVis;
+                bool dsBad = o.DirectSamples < BakeOptions.DirectSamplesMin || o.DirectSamples > BakeOptions.DirectSamplesMax;
+                MarkBox(DirectSamplesBox, custom && dsOn && dsBad);
+                if (dsOn)
+                    DirectSamplesLine.Text = dsBad ? "Direct light samples must be 1 – 64."
+                        : o.DirectSamples == 1 ? "×1: direct light is sampled once, as in every other quality."
+                        : string.Format(CultureInfo.InvariantCulture, "×{0}: sun, sky-light and surface-light passes run {0} times; their grain falls to about {1:0.##} of normal and they take {0}× as long.",
+                                        o.DirectSamples, 1.0 / Math.Sqrt(o.DirectSamples));
+            }
             MarkBox(AoStrengthBox, o.Ao && !(o.AoStrength >= BakeOptions.AoStrengthMin && o.AoStrength <= BakeOptions.AoStrengthMax));
             MarkBox(AoExponentBox, o.Ao && !(o.AoExponent >= BakeOptions.AoExponentMin && o.AoExponent <= BakeOptions.AoExponentMax));
             if (custom)
@@ -875,8 +915,9 @@ namespace H2GpuLightmapper
             }
             catch (Exception ex) { Log(Palette.Warn, "settings.json not saved: " + ex.Message); }
             var s = new BakeSession(_host, o, new SessionOptions { SkipPreflight = _g.SkipPreflight, SkipGpuCheck = _g.SkipGpuCheck });
-            s.Info += m => Enqueue(new LogItem { Text = m, Brush = m.StartsWith("REFUSED", StringComparison.Ordinal) ? Palette.Bad : Palette.Dim });
-            s.Line += l => Enqueue(new LogItem { Text = l.IsErr ? "ERR| " + l.Text : l.Text, Brush = Palette.ForLine(l) });
+            var prog = StartProgress(false, o);           // 0.6.12: the live progress model (before the events are hooked: they feed it)
+            s.Info += m => { prog.OnLine(m, DateTime.UtcNow); Enqueue(new LogItem { Text = m, Brush = m.StartsWith("REFUSED", StringComparison.Ordinal) ? Palette.Bad : Palette.Dim }); };
+            s.Line += l => { prog.OnLine(l.Text, l.Utc); if (l.Kind != LineKind.Progress) Enqueue(new LogItem { Text = l.IsErr ? "ERR| " + l.Text : l.Text, Brush = Palette.ForLine(l) }); };
             s.StatusChanged += st => Dispatcher.BeginInvoke(new Action(() => OnRunStatus(st)));
             s.Planned += p => Dispatcher.BeginInvoke(new Action(() => OnPlanned(p)));
             s.Ask = AskOnUi;
@@ -886,9 +927,6 @@ namespace H2GpuLightmapper
             string basis;
             _eta = o.Quality == Quality.Custom ? History.CustomEta(hist, o.ScenarioRel, o.Bsp, o.Photons, o.Rays, out basis) : History.PlainEta(hist, o.ScenarioRel, o.Bsp, o.QualityToken);
             _planSteps = null;
-            foreach (var c in _chips) c.State = ChipState.Pending;
-            _chips[0].State = ChipState.Active;
-            Bar.Value = 0;
             SetBusy(true);
             SetStatus(Palette.Fg, "Preparing: preflight, runtime check, map query…");
             Task.Run(() => s.Execute()).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => OnBakeDone(s, t.Status == TaskStatus.RanToCompletion ? t.Result : 3, t.Exception))));
@@ -907,18 +945,106 @@ namespace H2GpuLightmapper
         private void OnPlanned(BakePlan p)
         {
             _planSteps = p.UiSteps;
-            foreach (var c in _chips) if (!_planSteps.Contains(c.Step)) c.State = ChipState.Skipped;
+            if (_prog != null) { _prog.OnPlan(_planSteps); RefreshProgress(); return; }
+            foreach (var c in _chips) if (c.Key == c.Step.ToString() && !_planSteps.Contains(c.Step)) c.State = ChipState.Skipped;
+        }
+
+        // ================================================================== 0.6.12 live progress (BakeProgress)
+
+        private BakeProgress _prog;
+        private string _progKey, _progRatesKey;
+        private DispatcherTimer _progTimer;
+
+        /// <summary>A bake starts: the progress model (this map's last stage times from stage_times.json), the step chips rebuilt from its
+        /// stages (a .map bake adds Read map / Copy tags / Write map), and the 1-second timer that moves the bar and the times.</summary>
+        private BakeProgress StartProgress(bool map, BakeOptions o)
+        {
+            string mode = o.Mode.ToString() + (o.Quality == Quality.Custom ? "_" + o.Photons.ToString(CultureInfo.InvariantCulture) + "_" + o.Rays.ToString(CultureInfo.InvariantCulture) : "");
+            _progKey = StageTimes.Key(map, map ? Path.GetFileName(o.MapPath ?? "") : o.ScenarioRel, map ? "" : o.Bsp, o.QualityToken, mode, o.Ao);
+            Dictionary<string, double> hist = null, rates = null;
+            _progRatesKey = o.QualityToken + "|" + mode + "|" + (o.Ao ? "ao" : "noao");   // 0.6.12b: this PC's speed per lattice slot, any map
+            try { if (_work != null) { hist = StageTimes.Load(_work, _progKey); rates = StageTimes.LoadRates(_work, _progRatesKey); } } catch (Exception) { }
+            var p = new BakeProgress(map, hist, DateTime.UtcNow, rates);
+            _prog = p;
+            _chips.Clear();
+            foreach (var st in p.Stages)
+            {
+                StepId id;
+                _chips.Add(new StepChip { Key = st.Key, Name = st.Name, Step = Enum.TryParse(st.Key, out id) ? id : StepId.Preflight });
+            }
+            if (_progTimer == null)
+            {
+                _progTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+                _progTimer.Tick += (a, b) => RefreshProgress();
+            }
+            _progTimer.Start();
+            StageLine.Visibility = Visibility.Visible;
+            RefreshProgress();
+            return p;
+        }
+
+        private void RefreshProgress()
+        {
+            var p = _prog;
+            if (p == null) return;
+            var v = p.Snapshot(DateTime.UtcNow);
+            Bar.Value = Math.Round(1000 * v.Bar);
+            EtaText.Text = v.Elapsed + (v.TotalLeft.HasValue ? "  ·  ~" + BakeProgress.Dur(v.TotalLeft.Value) + " left" : "");
+            StageLine.Text = v.Line ?? "";
+            foreach (var c in _chips)
+            {
+                StageState s;
+                if (c.Key != null && v.States.TryGetValue(c.Key, out s))
+                    c.State = s == StageState.Active ? ChipState.Active : s == StageState.Done ? ChipState.Done : s == StageState.Failed ? ChipState.Failed : s == StageState.Skipped ? ChipState.Skipped : ChipState.Pending;
+                string d;
+                c.Detail = c.Key != null && v.Detail.TryGetValue(c.Key, out d) ? d : "";
+            }
+        }
+
+        /// <summary>The bake ended: final view, and this map's stage times saved for the next bake's estimates (the stages that ran to their end).</summary>
+        private void EndProgress(bool ok)
+        {
+            var p = _prog;
+            if (p == null) return;
+            p.Finish(ok, DateTime.UtcNow);
+            RefreshProgress();
+            if (_progTimer != null) _progTimer.Stop();
+            try
+            {
+                if (_work != null)
+                {
+                    var dur = p.Durations();
+                    StageTimes.Save(_work, _progKey, dur, DateTime.UtcNow);
+                    if (ok && _progRatesKey != null) StageTimes.SaveRates(_work, _progRatesKey, dur, p.MSlots, DateTime.UtcNow);
+                }
+            }
+            catch (Exception) { }
+            _prog = null;
+            var v = p.Snapshot(DateTime.UtcNow);
+            EtaText.Text = v.Elapsed;
+            StageLine.Text = ok ? "Finished in " + v.Elapsed + "." : "Stopped after " + v.Elapsed + ".";
         }
 
         private void OnRunStatus(RunStatus st)
         {
             StepId cur;
+            if (_prog != null)
+            {
+                // 0.6.12: the progress model owns the chips, the bar and the times (RefreshProgress, every second)
+                if (st.Step != null && Enum.TryParse(st.Step, out cur)) _prog.OnStep(cur, DateTime.UtcNow);
+                if (st.State == RunState.Waiting) SetStatus(Palette.Warn, "Waiting for " + (st.WaitingFor ?? "the GPU lock") + " …");
+                else if (!st.IsFinal) SetStatus(Palette.Fg, (st.CancelRequested ? (st.CancelDeferred ? "Cancelling after the tag write finishes… " : "Cancelling… ") : "")
+                                                  + (st.Step ?? "") + (st.Phase != null ? "  [" + st.Phase + "] " + st.PhaseTitle : ""));
+                RefreshProgress();
+                return;
+            }
             if (st.Step != null && Enum.TryParse(st.Step, out cur))
             {
                 // the step list follows the StepId order: plan steps before the current one are done (a fast phase may never
                 // have been observed as current), later ones pending, steps outside the plan skipped
                 foreach (var c in _chips)
                 {
+                    if (c.Key != null && c.Key != c.Step.ToString()) continue;      // a .map stage chip (Read map / Copy tags / Write map)
                     if (_planSteps != null && !_planSteps.Contains(c.Step) && c.Step != cur) c.State = ChipState.Skipped;
                     else if (c.Step < cur) c.State = ChipState.Done;
                     else if (c.Step == cur) c.State = st.IsFinal && st.State != RunState.Done ? ChipState.Failed : ChipState.Active;
@@ -943,10 +1069,14 @@ namespace H2GpuLightmapper
             string word = CliMain.ResultWord(code);
             string msg = word + (s.Reason != null ? ": " + s.Reason : "") + (ex != null ? " (" + ex.GetBaseException().Message + ")" : "");
             SetStatus(code == 0 ? Palette.Good : code == 4 ? Palette.Warn : Palette.Bad, msg);
-            foreach (var c in _chips)
+            if (_prog != null) EndProgress(code == 0);
+            else
             {
-                if (c.State == ChipState.Active) c.State = code == 0 ? ChipState.Done : ChipState.Failed;
-                else if (code == 0 && c.State == ChipState.Pending) c.State = ChipState.Done;
+                foreach (var c in _chips)
+                {
+                    if (c.State == ChipState.Active) c.State = code == 0 ? ChipState.Done : ChipState.Failed;
+                    else if (code == 0 && c.State == ChipState.Pending) c.State = ChipState.Done;
+                }
             }
             if (code == 0) Bar.Value = 1000;
             Log(code == 0 ? Palette.Good : Palette.Bad, "RESULT " + msg + (s.Run != null ? "   (run folder " + s.Run.RunDir + ")" : ""));

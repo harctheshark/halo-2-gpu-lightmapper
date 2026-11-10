@@ -51,7 +51,7 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.Eq(CheckLevel.Ok, r.Get("fs.ntfs").Level, "NTFS");
             Assert.Eq(CheckLevel.Ok, r.Get("path.ascii").Level, "ASCII");
             Assert.Eq(SlotBaseKind.Direct, r.SlotPlan.Kind, "ProdRoot WORK fits the slot");
-            Assert.Eq(DllSlotPatcher.PristineBase, r.SlotPlan.SlotBase, "slot base == the pristine string (no-op patch)");
+            Assert.Eq(Path.Combine(C.MineRoot, ShellPaths.WorkFolderName) + "\\", r.SlotPlan.SlotBase, "slot base == WORK (0.6.12: GPU Work, a patch; the pristine string named GPU Lightmap Work)");
             // SF1 2026-10-20: the live DB has since been extended by the scenery scanner (no longer the shipped 6814f29a); an existing
             // DB is kept as is and reported as Info, which is the rule under test
             bool shippedDb = SafeFs.Md5File(Path.Combine(C.MineRoot, "h2v_scenery_bounds.db")).StartsWith("6814f29a", StringComparison.Ordinal);
@@ -141,7 +141,7 @@ namespace H2GpuLightmapper.Core.Tests
             // review fix (finding 23): an H2EK at a drive root is refused (read-only checks of C:\ itself)
             string sysDrive = Path.GetPathRoot(Environment.SystemDirectory);
             Assert.True(ShellPaths.IsDriveRoot(sysDrive) && ShellPaths.IsDriveRoot(sysDrive.TrimEnd('\\') + @"\") && !ShellPaths.IsDriveRoot(C.MineRoot), "IsDriveRoot");
-            Assert.Eq(Path.Combine(sysDrive, "GPU Lightmap Work"), ShellPaths.WorkOf(sysDrive), "WorkOf keeps the drive root's backslash (never the relative 'C:GPU Lightmap Work')");
+            Assert.Eq(Path.Combine(sysDrive, "GPU Work"), ShellPaths.WorkOf(sysDrive), "WorkOf keeps the drive root's backslash (never the relative 'C:GPU Work')");
             var dr = PreflightChecks.Run(sysDrive, ReadOnly());
             Assert.True(dr.Get("path.root") != null && dr.Get("path.root").Level == CheckLevel.Fail, "a drive-root H2EK is refused: " + string.Join(" | ", dr.Items));
             // X1: a payload whose gpu_bake has the P1b handling (features.driveRoot) lets the same root through (an info, not a failure)
@@ -168,7 +168,8 @@ namespace H2GpuLightmapper.Core.Tests
             var o2 = ReadOnly();
             o2.ScenarioRel = @"scenarios\multi\cyclotron\cyclotron"; o2.Bsp = "cyclotron";
             Assert.Eq(CheckLevel.Ok, PreflightChecks.Run(C.MineRoot, o2).Get("path.budget").Level, "cyclotron on ProdRoot fits");
-            string mid = C.Short.Dir("warnroot_" + new string('m', 34));   // nominal map names overflow, INST still fits (W2 0.6.3: was 12; the shorter run folder saves 20 characters)
+            string mid = C.Short.Dir("warnroot_" + new string('m', 43));   // 0.6.12: +9 (GPU Work is 9 characters shorter than GPU Lightmap Work)
+              // nominal map names overflow, INST still fits (W2 0.6.3: was 12; the shorter run folder saves 20 characters)
             var w = PreflightChecks.Run(mid, ReadOnly()).Get("path.budget");
             Assert.Eq(CheckLevel.Warn, w.Level, "without a scenario an overrun is a warning (" + w.Message + ")");
             var o3 = ReadOnly();
@@ -183,7 +184,7 @@ namespace H2GpuLightmapper.Core.Tests
             o.ProbeWrite = true;
             var r = PreflightChecks.Run(root, o);
             Assert.Eq(CheckLevel.Ok, r.Get("fs.writable").Level, "writable");
-            Assert.True(!File.Exists(Path.Combine(root, "GPU Lightmap Work", ".write_probe")), "probe removed");
+            Assert.True(!File.Exists(Path.Combine(root, "GPU Work", ".write_probe")), "probe removed");
         }
 
         private static void BoundsDb()
@@ -211,7 +212,7 @@ namespace H2GpuLightmapper.Core.Tests
         private static int OldRunBackupLength(string root, string leaf, string bsp)
         {
             string truecolor = leaf + "_" + bsp + "_lightmap_truecolor_bitmaps.bitmap";
-            return (root.TrimEnd('\\') + "\\GPU Lightmap Work" + "\\standalone\\runs\\" + "20261014_120000" + "_" + leaf + "_" + bsp + "\\tag_backup_before_writeback\\" + truecolor).Length;
+            return (root.TrimEnd('\\') + "\\GPU Work" + "\\standalone\\runs\\" + "20261014_120000" + "_" + leaf + "_" + bsp + "\\tag_backup_before_writeback\\" + truecolor).Length;
         }
 
         private static void W2PathBudgetRunBackup()
@@ -497,7 +498,7 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.Eq(CheckLevel.Ok, t.Level, "smoke ok: " + t.Message);
             Assert.Eq(1, t.ExitCode, "the usage exit code");
             Assert.Contains(t.Output, "usage: tool_fast.exe verb", "usage printed");
-            string smoke = Path.Combine(root, "GPU Lightmap Work", "standalone", "smoke");
+            string smoke = Path.Combine(root, "GPU Work", "standalone", "smoke");
             Assert.True(!File.Exists(Path.Combine(root, "debug.txt")) && !Directory.Exists(Path.Combine(root, "reports")), "nothing written into ROOT");
             Assert.True(File.Exists(Path.Combine(smoke, "debug.txt")) && Directory.Exists(Path.Combine(smoke, "reports")), "the tool's debug.txt / reports\\ went to WORK\\standalone\\smoke");
             var o = ReadOnly();

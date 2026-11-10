@@ -314,7 +314,7 @@ namespace H2GpuLightmapper.Core.Run
             lock (_lock)
             {
                 p = parser.Feed(raw, isErr);
-                if (_log != null) _log.WriteLine(isErr ? "ERR| " + p.Text : p.Text);
+                if (_log != null && p.Kind != LineKind.Progress) _log.WriteLine(isErr ? "ERR| " + p.Text : p.Text);      // 0.6.12: progress lines stay out of bake.log
             }
             Ring.Add(p);
             var h = Line; if (h != null) { try { h(p); } catch { } }

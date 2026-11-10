@@ -212,15 +212,19 @@ namespace H2GpuLightmapper
                 head.SetResourceReference(TextBlock.StyleProperty, "FieldLabel");
                 var box = new ComboBox { ItemsSource = c.Items, SelectedItem = c.Selected, MaxDropDownHeight = 320, Tag = c };
                 box.ToolTip = "Compiled maps lose the sky's cube map reference. Pick the cube map the map was made with, or leave it empty (the bake then lacks the sky's ambient fill).";
-                var warn = new TextBlock { Text = c.Warning ?? "", TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = Palette.Warn, Margin = new Thickness(0, 2, 0, 0) };
-                warn.Visibility = c.Warning == null ? Visibility.Collapsed : Visibility.Visible;
+                // 0.6.12: a kit-confirmed empty cube map is the automatic choice -> a plain note, not the warning
+                string note0 = c.Warning ?? c.Info;
+                var warn = new TextBlock { Text = note0 ?? "", TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = c.Warning != null ? Palette.Warn : Palette.Dim, Margin = new Thickness(0, 2, 0, 0) };
+                warn.Visibility = note0 == null ? Visibility.Collapsed : Visibility.Visible;
                 box.SelectionChanged += (s, e) =>
                 {
                     var it = box.SelectedItem as CubemapItem;
                     if (it == null) return;
                     c.Selected = it;
                     bool empty = it.Kind == CubemapKind.LeaveEmpty;
-                    warn.Text = empty ? (c.AutoItem == null ? CubemapModel.NoAutoWarning : "Left empty on purpose: the bake will lack the sky's ambient fill (about 30% darker on headlong).") : "";
+                    warn.Text = !empty ? "" : c.KitSaysEmpty ? CubemapModel.KitEmptyInfo
+                              : (c.AutoItem == null ? CubemapModel.NoAutoWarning : "Left empty on purpose: the bake will lack the sky's ambient fill (about 30% darker on headlong).");
+                    warn.Foreground = empty && c.KitSaysEmpty ? Palette.Dim : Palette.Warn;
                     warn.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
                 };
                 _skyBoxes.Add(box);
@@ -252,23 +256,21 @@ namespace H2GpuLightmapper
                                                                   : "\nThis is a Vista map: it is converted to MCC form for the bake; the result stays an MCC map (not converted back).") : "")
                                     + (File.Exists(o.MapOutPath) ? "\nThe existing output is set aside as .old_<time> first." : "")
                                     + (skyLines.Count > 0 ? "\n\n" + string.Join("\n", skyLines) : "")
-                                    + "\n\nTemporary work files are written while it runs (about 8 GB of free disk space are needed; the exact figure is checked first) and deleted afterwards.",
+                                    + "\n\nTemporary work files are written while it runs (a few GB of free disk space are needed; the exact figure is checked first) and deleted afterwards.",
                                     "H2 GPU Lightmapper", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
             }
             var s = new MapBakeSession(_host, o, new SessionOptions { SkipPreflight = _g.SkipPreflight, SkipGpuCheck = _g.SkipGpuCheck });
-            s.Info += m => Enqueue(new LogItem { Text = m, Brush = m.StartsWith("REFUSED", StringComparison.Ordinal) ? Palette.Bad : m.StartsWith("==", StringComparison.Ordinal) ? Palette.Accent : Palette.Dim });
-            s.Line += l => Enqueue(new LogItem { Text = l.IsErr ? "ERR| " + l.Text : l.Text, Brush = Palette.ForLine(l) });
+            var prog = StartProgress(true, o);            // 0.6.12: Read map / Copy tags / the bake's steps / Write map, with times
+            s.Info += m => { prog.OnLine(m, DateTime.UtcNow); Enqueue(new LogItem { Text = m, Brush = m.StartsWith("REFUSED", StringComparison.Ordinal) ? Palette.Bad : m.StartsWith("==", StringComparison.Ordinal) ? Palette.Accent : Palette.Dim }); };
+            s.Line += l => { prog.OnLine(l.Text, l.Utc); if (l.Kind != LineKind.Progress) Enqueue(new LogItem { Text = l.IsErr ? "ERR| " + l.Text : l.Text, Brush = Palette.ForLine(l) }); };
             s.StatusChanged += st => Dispatcher.BeginInvoke(new Action(() => OnRunStatus(st)));
             s.Planned += p => Dispatcher.BeginInvoke(new Action(() => OnPlanned(p)));
-            s.Phase += p => Dispatcher.BeginInvoke(new Action(() => SetStatus(Palette.Fg, p)));
+            s.Phase += p => { prog.OnMapPhase(p, DateTime.UtcNow); Dispatcher.BeginInvoke(new Action(() => SetStatus(Palette.Fg, p))); };
             s.Ask = AskOnUi;
             _mapSession = s;
             _bakeStarted = DateTime.UtcNow;
             _eta = null;
             _planSteps = null;
-            foreach (var c in _chips) c.State = ChipState.Pending;
-            _chips[0].State = ChipState.Active;
-            Bar.Value = 0;
             SetBusy(true);
             SetStatus(Palette.Fg, "Preparing: reading the map …");
             Task.Run(() => s.Execute()).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => OnMapBakeDone(s, t.Status == TaskStatus.RanToCompletion ? t.Result : 3, t.Exception))));
@@ -281,10 +283,14 @@ namespace H2GpuLightmapper
             string word = CliMain.ResultWord(code);
             string msg = word + (s.Reason != null ? ": " + s.Reason : "") + (ex != null ? " (" + ex.GetBaseException().Message + ")" : "");
             SetStatus(code == 0 ? Palette.Good : code == 4 ? Palette.Warn : Palette.Bad, msg);
-            foreach (var c in _chips)
+            if (_prog != null) EndProgress(code == 0);
+            else
             {
-                if (c.State == ChipState.Active) c.State = code == 0 ? ChipState.Done : ChipState.Failed;
-                else if (code == 0 && c.State == ChipState.Pending) c.State = ChipState.Done;
+                foreach (var c in _chips)
+                {
+                    if (c.State == ChipState.Active) c.State = code == 0 ? ChipState.Done : ChipState.Failed;
+                    else if (code == 0 && c.State == ChipState.Pending) c.State = ChipState.Done;
+                }
             }
             if (code == 0) Bar.Value = 1000;
             Log(code == 0 ? Palette.Good : Palette.Bad, "RESULT " + msg + (s.Run != null ? "   (run folder " + s.Run.RunDir + ")" : ""));

@@ -1,7 +1,7 @@
 # title: P14 comment only: the shipped comment no longer names the author's test map (0.6.8 public-text rule; no code change)
 # source: _research/ao/dev_AO/gpu_bake.ps1
-# base-md5: 4d47718f9f95d11388f1aa7698befd5e
-# result-md5: 282af45244cd1f84383ae3d576d34b3c
+# base-md5: f699e6544ed6073739a8fcbcceca2780
+# result-md5: 888dccb7f3a29449af9489d6abb458ff
 --- a/_research/ao/dev_AO/gpu_bake.ps1
 +++ b/_research/ao/dev_AO/gpu_bake.ps1
 @@ -944,7 +944,7 @@

@@ -37,6 +37,7 @@ namespace H2GpuLightmapper.Tests
             yield return T("dry: Scenery Multi Permutation Fix is engine-gated: a payload whose gpu_bake.ps1 lacks the parameter refuses the flag (exit 2, 'Needs engine 0.6.4 or newer.'), never plans it; Custom uses engine_custom's own answer", SceneryPermGate);
             yield return T("dry 0.6.8: Re-bake speedup (--rebake-hint): GPULM_SKY_HINT=1 on the gpu_bake step of a REUSE bake only, argv unchanged; a fresh capture gets nothing and a warning; off = no env", RebakeHintPlan);
             yield return T("dry: DF64 Compatibility mode: every plan states the precision (JSON + text); --assume-no-fp64 plans Compatibility mode on an engine with it and refuses on one without; --force-compat = GPULM_COMPAT=1 on exactly the GPU steps, argv unchanged, refused (dry too) on an engine without the mode", Df64Plan);
+            yield return T("dry 0.6.12: direct light samples (--direct-samples K): GPULM_DIRECT_SAMPLE_MUL=K on the gpu_bake step of a CUSTOM bake only, argv unchanged; x1 and off = no env; refused without --quality custom and out of 1-64", DirectSamplesPlan);
             yield return T("dry: W2 run folder =<ts>_<label <= 20 chars> and the run's install backup is 'tagbak' (the worker's [4b] backup keeps its name)", RunFolderPlan);
             yield return T("dry: X2 live VRAM: a 4090 with <= 3 GiB held by others = today's argv; a game on top shrinks -MaxCallsPerPart with a plain note", LiveVramPlan);
             yield return T("dry: X1 light-probe preflight refuses a BSP past the GPU probe pass's limit (282+) before anything runs", ProbePreflight);
@@ -557,14 +558,14 @@ namespace H2GpuLightmapper.Tests
                 Assert.Eq(0, res.Exit, "drive root planned with features.driveRoot: " + res);
                 var p = res.Json();
                 Assert.Eq(drive, p.Str("root"), "root keeps its backslash");
-                Assert.Eq(drive + "GPU Lightmap Work", p.Str("work"), "work");
+                Assert.Eq(drive + "GPU Work", p.Str("work"), "work");
                 var e = p.Obj("env");
                 Assert.Eq(drive, e.Str("H2LM_ROOT"), "H2LM_ROOT = D:\\ (what P1b accepts)");
-                Assert.Eq(drive + "GPU Lightmap Work", e.Str("H2LM_WORK"), "H2LM_WORK");
+                Assert.Eq(drive + "GPU Work", e.Str("H2LM_WORK"), "H2LM_WORK");
                 var g = Step(p, "gpu-bake");
-                Assert.Eq(drive + "GPU Lightmap Work", g.Str("cwd"), "cwd");
-                Assert.Contains(string.Join(" ", Args(g)), drive + @"GPU Lightmap Work\_runtime\", "the script is under WORK");
-                Assert.True((p.Str("out") ?? "").StartsWith(drive + @"GPU Lightmap Work\farm_w", StringComparison.OrdinalIgnoreCase), "OUT: " + p.Str("out"));
+                Assert.Eq(drive + "GPU Work", g.Str("cwd"), "cwd");
+                Assert.Contains(string.Join(" ", Args(g)), drive + @"GPU Work\_runtime\", "the script is under WORK");
+                Assert.True((p.Str("out") ?? "").StartsWith(drive + @"GPU Work\farm_w", StringComparison.OrdinalIgnoreCase), "OUT: " + p.Str("out"));
                 string all = Core.Util.Json.Write(p, false).Replace(@"\\", @"\");
                 // no drive-relative path ("Y:tags") and no doubled separator ("Y:\\tags") anywhere in the plan
                 var rel = System.Text.RegularExpressions.Regex.Matches(all, "(?i)\\b" + letter + @":[^\\/:]");
@@ -967,6 +968,37 @@ namespace H2GpuLightmapper.Tests
             foreach (var st in Steps(on).Where(s => s.Str("id") != "gpu-bake"))
                 Assert.True(st.Obj("envExtra") == null || st.Obj("envExtra").Str("GPULM_SKY_HINT") == null, st.Str("id") + ": no hint");
             Assert.True(on.Arr("notes").Cast<string>().Any(n => n.Contains("re-bake speedup on")), "the plan notes it");
+        }
+
+        private static void DirectSamplesPlan()
+        {
+            var r = C.NewRoot();
+            string[] cust = { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "custom", "--dev-custom-unguarded" };
+            var off = Plan(r, cust);
+            var on = Plan(r, cust.Concat(new[] { "--direct-samples", "4" }).ToArray());
+            var one = Plan(r, cust.Concat(new[] { "--direct-samples", "1" }).ToArray());
+            Assert.Eq("4", Step(on, "gpu-bake").Obj("envExtra").Str("GPULM_DIRECT_SAMPLE_MUL"), "custom + --direct-samples 4: GPULM_DIRECT_SAMPLE_MUL=4 on gpu-bake");
+            Assert.Eq(0, Step(off, "gpu-bake").Obj("envExtra").Count, "not given: no env");
+            Assert.Eq(0, Step(one, "gpu-bake").Obj("envExtra").Count, "x1: no env (exactly the plain custom bake)");
+            Assert.Seq(Args(Step(off, "gpu-bake")), Args(Step(on, "gpu-bake")), "the gpu_bake argv is unchanged");
+            foreach (var st in Steps(on).Where(s => s.Str("id") != "gpu-bake"))
+                Assert.True(st.Obj("envExtra") == null || st.Obj("envExtra").Str("GPULM_DIRECT_SAMPLE_MUL") == null, st.Str("id") + ": no multiplier");
+            Assert.True(on.Arr("notes").Cast<string>().Any(n => n.Contains("direct light samples ×4")), "the plan notes it");
+            Assert.True(!off.Arr("notes").Cast<string>().Any(n => n.Contains("direct light samples")), "off: no note");
+            // only Custom quality takes it; out-of-range values are refused; nothing is ever passed silently
+            var sup = C.DryJson(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--direct-samples", "4");
+            Assert.Eq(2, sup.Exit, "Super + --direct-samples refused: " + sup);
+            Assert.Contains(sup.Json().Str("refused"), "only valid with --quality custom", "reason");
+            foreach (var bad in new[] { "0", "65", "-3" })
+            {
+                var res = C.DryJson(r, cust.Concat(new[] { "--direct-samples", bad }).ToArray());
+                Assert.Eq(2, res.Exit, "--direct-samples " + bad + " refused: " + res);
+                Assert.Contains(res.Json().Str("refused"), "direct light samples must be 1 - 64", "reason for " + bad);
+            }
+            // the top of the range is passed as is
+            var res64 = C.DryJson(r, cust.Concat(new[] { "--direct-samples", "64" }).ToArray());
+            Assert.Eq(0, res64.Exit, "--direct-samples 64 accepted: " + res64);
+            Assert.Eq("64", Step(res64.Json(), "gpu-bake").Obj("envExtra").Str("GPULM_DIRECT_SAMPLE_MUL"), "64 on gpu-bake");
         }
 
         private static void ReadOnlyAndReuse()

@@ -15,7 +15,7 @@ H2 GPU Lightmapper.exe   (one file, WPF on .NET Framework 4.8, window and --cli 
  |
  |  first start unpacks to
  |    %LOCALAPPDATA%\H2GpuLightmapper\rt\          runtimes, shared and immutable (md5-checked before every bake)
- |    <H2EK>\GPU Lightmap Work\_runtime\<ver>\     the engine, per H2EK
+ |    <H2EK>\GPU Work\_runtime\<ver>\     the engine, per H2EK
  |
  |  a bake is a chain of child processes (a Windows job object: cancelling kills the whole tree)
  |    shell -> bundled pwsh -> gpu_bake.ps1 -> osoy_launch -> tool_fast (+ hook DLLs) ; Python (bundled) ; fullgpu.exe

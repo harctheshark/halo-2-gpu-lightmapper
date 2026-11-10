@@ -8,10 +8,11 @@
    "pristine_md5": "93c2fe8c5ce812358b58b7c2073da030",
    "base_file": "patches/base/_research/ao/ao_seamfix.py",
    "patch": "ao_seamfix.py.patch",
-   "patch_md5": "1ec73db712e74ceae2787abe332d03f0",
-   "patched_md5": "7b239011f1a9d6becbc11ce593398cd6",
-   "hunks": 2,
-   "apply": "strict: exact context at the stated lines, no fuzz, no offset; CRLF kept"
+   "patch_md5": "071e6fef6bbed7fa29c58fcb18557dbc",
+   "patched_md5": "94e85d76a4acc7abda904fab5caab8cb",
+   "hunks": 3,
+   "apply": "strict: exact context at the stated lines, no fuzz, no offset; CRLF kept",
+   "note_0612b": "neighbour_index dense memoised table (tests/rc0612/ao_apply_bench_0612.py: apply outputs md5-identical on headlong)"
   },
   {
    "path": "_research/ao/ao_denoise.py",

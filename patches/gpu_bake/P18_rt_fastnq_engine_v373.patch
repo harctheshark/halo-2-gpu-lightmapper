@@ -1,7 +1,7 @@
 # title: P18 0.6.9: -Rt (RT mode: fullgpu_rt.exe when shipped, auto/on/off/cmp/cmp12) + GPULM_FASTNQ=1 for the skeleton run (dev_069; applies AFTER P17+P14)
 # source: engine_v373/gpu_bake.ps1
-# base-md5: 4b31da4f2e942f9df309822b64602d8d
-# result-md5: 9fc1fb4cb45526caca9b194f1265b933
+# base-md5: e5eb40d6e75c429802c57f8ab2c4c95c
+# result-md5: b37959a9e895ebaf001ada2827ecabaa
 --- a/engine_v373/gpu_bake.ps1
 +++ b/engine_v373/gpu_bake.ps1
 @@ -391,7 +391,10 @@
@@ -51,7 +51,7 @@
          $lx = $LASTEXITCODE
      } finally {
          Clear-Gpulm 'GPULM_LATTICE_ONLY','GPULM_CC_EXIT_AFTER_RE','GPULM_RE_WIN','GPULM_CAST_CACHE_OUT','GPULM_PART_RANGE','GPULM_PART_TEX'
-@@ -2002,7 +2017,7 @@
+@@ -2005,7 +2020,7 @@
  if ((-not $NoCastCache) -and (-not $UseLattice) -and (Test-Path "$OUT\cast_cache.bin")) { $env:GPULM_CAST_CACHE_IN = "$OUT\cast_cache.bin" }
  elseif (-not $NoCastCache -and -not $UseLattice) { Write-Host "      *** v372M: the pre-pass wrote no cast_cache.bin -- the main pass casts again" -ForegroundColor Yellow }
  if ($RescueSalt -gt 0) { $env:GPULM_WALK_RDONE = "$RescueSalt"; Write-Host "      -RescueSalt $($RescueSalt) (default since 2026-10-08, validated on high_10 / mainmenu / Needle): the gate-walk rescue's RNG salt is the constant $($RescueSalt+1) (single and part bakes alike), not the whole-run walk depth + 1 -- NOT the default's draw for the rescued texels" }

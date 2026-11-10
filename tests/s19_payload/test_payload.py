@@ -44,8 +44,8 @@ AUX = os.path.join(os.environ['TEMP'], 's19aux')
 # U1 (2026-10-15): production gpu_bake.ps1 HOLDS the series (P1->P3->P2->F24 / P1->P3->F24, pin E2DBA7AF): (pre-upstream base, production
 # md5 = the shipped bytes); the builder stages them as verified PRISTINE copies (kind prod, role upstreamed:...)
 EXPECT_UPSTREAMED = {
-    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '6db325a2ca6e100dffb63c6234c19006'),   # 0.6.11 rc0611: + P23 ('vdsamp.bin' in $partMove; engine_v377, 6db325a2; d7e267e7 = 0.6.10); 0.6.10 rc0610: + P21 (the dev_LV promotion, d7e267e7; d16ac070 = 0.6.9); 0.6.9 rc069_a2: + P19 (the dev_RB promotion, d16ac070; e976ba73 = rc069_a1); 0.6.8 RC: + P16 ToolLoader (e976ba73; 30c27781 = the dev_XC promotion P15; 669dcc14 = 0.6.7); W7 0.6.7 promotion (cefcf497 = 0.6.6); W6 0.6.6 promotion (cabc8449); W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', '5715208940689bfe57cb7c7a9522b2db'),   # 0.6.11 rc0611: + P24 (dev_AO16: 'vdsamp.bin' in $partMove; 14e8ee1b = dev_AO15, 0.6.10); 0.6.10 rc0610: + P22 (dev_AO15: the lean lattice pre-pass; ff8de832 = dev_AO14); 0.6.9 rc069_a3: + P20 (dev_AO14: the -AOOnly loop forwards the sub-chart cut; b34c221e = dev_AO13); 0.6.8 RC: dev_AO11 + P16 (b34c221e; d95fb296 = P15; 92ee0226 = dev_AO10); W7 0.6.7: dev_AO10 (59d529c5 = dev_AO9, W6 0.6.6): dev_AO9 (dev_AO8 7ff83e05); production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
+    'engine_v373/gpu_bake.ps1': ('eb8e6bf2d26fc3efa3a42b24560fd9ed', '37e697046b76ad2700d480aaed91caa7'),   # 0.6.12 rc0612: + P25 (fullgpu progress lines as PROGRESS| ...; engine_v378, 37e69704; 6db325a2 = 0.6.11); 0.6.11 rc0611: + P23 ('vdsamp.bin' in $partMove; engine_v377, 6db325a2; d7e267e7 = 0.6.10); 0.6.10 rc0610: + P21 (the dev_LV promotion, d7e267e7; d16ac070 = 0.6.9); 0.6.9 rc069_a2: + P19 (the dev_RB promotion, d16ac070; e976ba73 = rc069_a1); 0.6.8 RC: + P16 ToolLoader (e976ba73; 30c27781 = the dev_XC promotion P15; 669dcc14 = 0.6.7); W7 0.6.7 promotion (cefcf497 = 0.6.6); W6 0.6.6 promotion (cabc8449); W5 2026-10-22: the 0.6.5 promotion (W3: 7a033e06; W2: f13328c7, 15771590, fe88bd8b)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('405570d10d890b5b0ca9505904777a05', 'c15a00ddc67ec81dd049ac16bfbf9cd4'),   # 0.6.12 rc0612: + P26 (dev_AO17, c15a00dd; 57152089 = 0.6.11); 0.6.11 rc0611: + P24 (dev_AO16: 'vdsamp.bin' in $partMove; 14e8ee1b = dev_AO15, 0.6.10); 0.6.10 rc0610: + P22 (dev_AO15: the lean lattice pre-pass; ff8de832 = dev_AO14); 0.6.9 rc069_a3: + P20 (dev_AO14: the -AOOnly loop forwards the sub-chart cut; b34c221e = dev_AO13); 0.6.8 RC: dev_AO11 + P16 (b34c221e; d95fb296 = P15; 92ee0226 = dev_AO10); W7 0.6.7: dev_AO10 (59d529c5 = dev_AO9, W6 0.6.6): dev_AO9 (dev_AO8 7ff83e05); production source _research/ao/dev_AO8 (W5 0.6.5; W3: dev_AO6 cd488322; W2: dev_AO5 1a0318ac; was dev_AO4 440ce318, dev_AO2 bac932e8)
 }
 # 0.6.8: the two gpu_bake.ps1 copies are production (the verified U1 upstream, md5 as above) + the post-upstream series P13 (H2LM_FARMS) + P14
 # (comment only: the shipped comment no longer names the author's test map); path -> (production md5, payload md5)
@@ -53,13 +53,13 @@ EXPECT_POST = {
     # 0.6.8 RC: production = the dev_XC promotion (P15, which holds P13), post_upstream = P14 only (2f493706 / 5af79701 = the 0.6.7-cast dry run)
     # + P16 (the tool loader: one $INJ path line, promoted into production; 023d7a55 / 7937c908 = rc068_xc3)
     # + post-upstream P17 (the four tool command lines quote the scenario and the BSP; bb22f710 / d312fe82 = rc068_xc4)
-    'engine_v373/gpu_bake.ps1': ('6db325a2ca6e100dffb63c6234c19006', '9fc1fb4cb45526caca9b194f1265b933'),   # 0.6.11 rc0611: P17 / P14 / P18 re-made on 6db325a2 (0.6.10: d7e267e7 -> 530a0702); 0.6.10 rc0610: P17 / P14 / P18 re-made on d7e267e7 (0.6.9: d16ac070 -> 1da2c1ff); 0.6.9 rc069_a2: P17 / P14 / P18 re-made on d16ac070 (rc069_a1: e976ba73 -> fbf47cfc); 0.6.9: + post-upstream P18 (-Rt RT mode + GPULM_FASTNQ; 6140a173 = rc068_xc4..xc9)
-    '_research/ao/dev_AO/gpu_bake.ps1': ('5715208940689bfe57cb7c7a9522b2db', '282af45244cd1f84383ae3d576d34b3c'),   # 0.6.11 rc0611: P17 / P14 re-made on 57152089 (0.6.10: 14e8ee1b -> 9a202fb3); 0.6.10 rc0610: P17 / P14 re-made on 14e8ee1b (0.6.9: ff8de832 -> 8b0e2904); 0.6.9 rc069_a3: P17 / P14 re-made on ff8de832 (rc069_a2: b34c221e -> 4adb7566)
+    'engine_v373/gpu_bake.ps1': ('37e697046b76ad2700d480aaed91caa7', 'b37959a9e895ebaf001ada2827ecabaa'),   # 0.6.12 rc0612: P17 / P14 / P18 re-made on 37e69704 (0.6.11: 6db325a2 -> 9fc1fb4c); 0.6.11 rc0611: P17 / P14 / P18 re-made on 6db325a2 (0.6.10: d7e267e7 -> 530a0702); 0.6.10 rc0610: P17 / P14 / P18 re-made on d7e267e7 (0.6.9: d16ac070 -> 1da2c1ff); 0.6.9 rc069_a2: P17 / P14 / P18 re-made on d16ac070 (rc069_a1: e976ba73 -> fbf47cfc); 0.6.9: + post-upstream P18 (-Rt RT mode + GPULM_FASTNQ; 6140a173 = rc068_xc4..xc9)
+    '_research/ao/dev_AO/gpu_bake.ps1': ('c15a00ddc67ec81dd049ac16bfbf9cd4', '888dccb7f3a29449af9489d6abb458ff'),   # 0.6.12 rc0612: P17 / P14 re-made on c15a00dd (0.6.11: 57152089 -> 282af452); 0.6.11 rc0611: P17 / P14 re-made on 57152089 (0.6.10: 14e8ee1b -> 9a202fb3); 0.6.10 rc0610: P17 / P14 re-made on 14e8ee1b (0.6.9: ff8de832 -> 8b0e2904); 0.6.9 rc069_a3: P17 / P14 re-made on ff8de832 (rc069_a2: b34c221e -> 4adb7566)
 }
 EXPECT_PATCHED = {
     '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '21958cbdcf2fdd6b122a69d48e77354c'),   # 0.6.8: + P5c (--farm under H2LM_FARMS; P5 + P5b = 3634172b); P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
-    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', 'a8914dc88a0271d73938679ec6511cbe'),   # P6 + P6b + P6c (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
-    '_research/ao/ao_seamfix.py': ('93c2fe8c5ce812358b58b7c2073da030', '7b239011f1a9d6becbc11ce593398cd6'),   # N4 (A1 re-make: + stacked-layer rule)
+    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', 'd73740c3ff866dfb2ddcad1043ba9d58'),   # P6 + P6b + P6c + P6d (0.6.12b: stage via the production native tag writer; P6..P6c = a8914dc8) (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
+    '_research/ao/ao_seamfix.py': ('93c2fe8c5ce812358b58b7c2073da030', '94e85d76a4acc7abda904fab5caab8cb'),   # 0.6.12b: + the dense neighbour table (7b239011 before);   # N4 (A1 re-make: + stacked-layer rule)
     '_research/ao/ao_denoise.py': ('5da70c2fe14fbb2decd78ce8902b418a', '70522fac1d61f372e6c5af358592e7cf'),   # N4 (A1: ao_denoise.bilateral_raw without scipy)
     # U2 (2026-10-15): the three lmw_tagio.py walkers read SHORT block elements as tool_fast does (patches/tagio/series_tagio.json)
     'engine_v373/v043-tagwriter/lmw_tagio.py': ('a0326b65fcf81d9432690ec90931e523', 'b069e88ded71f575550b344cbdf912bc'),   # 0.6.9: dev_TW's writer file + U2b (U2 = 52dc580e -> b79b25cf no longer applies)
@@ -418,7 +418,7 @@ def t_extract_with_shell():
     root, lad = os.path.join(SANDBOX, 'r'), os.path.join(AUX, 'lad')
     os.makedirs(os.path.join(root, 'tags'))
     os.makedirs(lad)
-    work = os.path.join(root, 'GPU Lightmap Work')
+    work = os.path.join(root, 'GPU Work')   # 0.6.12 rename (a fresh root gets GPU Work)
     # 0.6.8 RC: the sandbox is no longer short (Temp - Deletable): a farms payload's slot is then the alias under AUX (checked below);
     # a payload WITHOUT farms would need a Direct slot (WORK <= 60 characters), which this location cannot give
     check(((manifest().get('features') or {}).get('farms') or {}).get('enabled') is True or len(work) + 1 <= 60,
@@ -441,7 +441,7 @@ def t_extract_with_shell():
                 # 0.6.8: with features.farms the slot names WORK\Temp (safe to delete) (Direct when it fits 60 characters, else the alias under
                 # --alias-localappdata\H2GLM\<k6>); without it, WORK as before
                 farms = ((m.get('features') or {}).get('farms') or {}).get('enabled') is True
-                slotdir = os.path.join(work, 'Temp (safe to delete)') if farms else work
+                slotdir = os.path.join(work, 'Temp') if farms else work
                 base = (slotdir + '\\').encode('mbcs') if len(slotdir) + 1 <= 60 else (os.path.join(AUX, 'ala', 'H2GLM') + '\\').encode('mbcs')
                 check(b.count(L.PRISTINE_SLOT) == 0 and b.count(base) == 2 and len(b) == f['size'], '%s slots (want %s)' % (f['path'], base))
             else:
@@ -472,7 +472,7 @@ def t_extract_with_shell():
     # 0.6.8: a farms payload names WORK\Temp (safe to delete) in the slot; on this sandbox (79 characters) that is the alias under
     # --alias-localappdata (outside Temp and WORK), the ONLY link the shell may make; without farms: WORK, Direct, no link (as before)
     farms = ((m.get('features') or {}).get('farms') or {}).get('enabled') is True
-    tempdir = os.path.join(work, 'Temp (safe to delete)')
+    tempdir = os.path.join(work, 'Temp')
     rp = [os.path.join(dp, n) for top in (SANDBOX, AUX) for dp, dns, fns in os.walk(top) for n in dns + fns if L.is_reparse(os.path.join(dp, n))]
     if farms and len(tempdir) + 1 > 60:
         ala = os.path.join(AUX, 'ala', 'H2GLM')

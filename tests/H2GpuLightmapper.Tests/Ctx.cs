@@ -289,7 +289,7 @@ namespace H2GpuLightmapper.Tests
             // 0.6.8 RC (F1): a root of an exact length (padded leaf), for the path-budget tests
             if (rootLength > 0) { int pad = rootLength - (Short.Root.Length + 1 + leaf.Length + 1); if (pad > 0) leaf += "_" + new string('p', pad); }
             string root = Short.Dir(leaf);
-            var r = new TestRoot { Root = root, Work = Path.Combine(root, "GPU Lightmap Work") };
+            var r = new TestRoot { Root = root, Work = Path.Combine(root, "GPU Work") };
             if (withTool && !CreateHardLink(Path.Combine(root, "tool_fast.exe"), ToolCopy, IntPtr.Zero)) File.Copy(ToolCopy, Path.Combine(root, "tool_fast.exe"));
             Directory.CreateDirectory(r.CycDir);
             Directory.CreateDirectory(r.TriDir);

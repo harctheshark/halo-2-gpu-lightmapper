@@ -28,6 +28,7 @@ namespace H2GpuLightmapper.Tests
             yield return T("mapbake M3: a Vista map (cache v8) is detected and accepted; --vista-out yes|no decides the output (<name>_gpulm.map = Vista, <name>_gpulm_mcc.map = MCC), only a Vista map has the option", VistaMaps);
             yield return T("mapbake: sky cube-map dropdown model: every kit cube map listed once, the map's own labelled, Leave empty first, automatic match preselected (else Leave empty + the 30% warning)", CubemapListing);
             yield return T("mapbake: --sky-cubemap resolution (none / auto / tag path / sky leaf name) and its plain errors; the CLI option only exists for --map", CubemapCli);
+            yield return T("mapbake: rule 'kit' (0.6.12): the kit's copy of the same sky decides; an EMPTY kit reference preselects Leave empty with a plain note, no warning, and 'auto' resolves to it", CubemapKitRule);
             yield return T("mapbake: a .scenario bake is unchanged: same argv, same plan with and without the mapbake component, no cube-map model, no map keys", ScenarioUnchanged);
         }
 
@@ -102,7 +103,7 @@ namespace H2GpuLightmapper.Tests
             // the policy line when no --sky-cubemap is given
             var d = MapDry(r, false, "--map", map);
             Assert.Eq(0, d.Exit, "dry run (no sky option)\n" + d);
-            Assert.Contains(d.Out, "the automatic match", "default policy: the automatic match ...");
+            Assert.Contains(d.Out, "the automatic choice", "default policy: the automatic choice ...");
             Assert.Contains(d.Out, "LEFT EMPTY with a warning", "... else left empty with a warning");
             // JSON + a chosen output
             string chosen = Path.Combine(C.Sb.Dir("maps"), "mine.map");
@@ -333,6 +334,34 @@ namespace H2GpuLightmapper.Tests
             var d = CubemapModel.Describe(m);
             Assert.Contains(d[0], "(automatic match)", "describe: automatic");
             Assert.Contains(d[1], "LEFT EMPTY", "describe: left empty"); Assert.Contains(d[1], "WARNING", "describe: warning");
+        }
+
+        private static void CubemapKitRule()
+        {
+            string ec = @"scenarios\skies\solo\earthcity\bitmaps\cubemap_ec_bridge";
+            var q = FakeQuery();
+            q.Skies[0].AutoRule = "kit";                     // the kit's own headlong.sky references ec
+            q.Skies[1].AutoRule = "kit";                     // the kit's own copy of 'second' has NO cube map (as on a user's map)
+            var m = CubemapModel.Build(q);
+            Assert.Eq(ec, m[0].AutoItem.Path, "kit rule with a cube map: the automatic item");
+            Assert.Contains(m[0].AutoItem.Label, "your kit's copy of this sky uses it", "labelled by the kit rule");
+            Assert.True(ReferenceEquals(m[0].Selected, m[0].AutoItem), "preselected");
+            Assert.True(!m[0].KitSaysEmpty, "not empty");
+            var b = m[1];
+            Assert.True(b.KitSaysEmpty, "the kit says empty");
+            Assert.Eq(null, b.AutoItem, "no automatic bitmap item");
+            Assert.Eq(CubemapKind.LeaveEmpty, b.Selected.Kind, "Leave empty preselected");
+            Assert.Eq(null, b.Warning, "NO darkness warning: empty is what the author's tags have");
+            Assert.Contains(b.Info, "has no cube map", "a plain note says why");
+            Assert.Contains(CubemapModel.Describe(m)[1], "automatic: the kit's copy of this sky has no cube map", "describe: automatic empty");
+            Assert.NotContains(CubemapModel.Describe(m)[1], "WARNING", "describe: no warning");
+            var m2 = CubemapModel.Build(q);
+            Assert.Eq(0, CubemapModel.Apply(m2, new[] { new KeyValuePair<string, string>("second", "auto") }).Count, "'auto' is not an error when the kit says empty");
+            Assert.Eq(CubemapKind.LeaveEmpty, m2[1].Selected.Kind, "auto = Leave empty");
+            // rule A (no kit copy of the sky) keeps the old label and the old warning when nothing matched
+            var a = CubemapModel.Build(FakeQuery());
+            Assert.Contains(a[0].AutoItem.Label, "the kit's sky with the same sky model uses it", "rule A label unchanged");
+            Assert.Contains(a[1].Warning, "about 30% darker on headlong", "rule B: the warning stays");
         }
 
         private static void CubemapCli()

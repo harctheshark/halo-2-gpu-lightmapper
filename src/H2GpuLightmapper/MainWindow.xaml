@@ -117,6 +117,8 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <TextBlock Style="{StaticResource FieldLabel}" Text="Photons"/>
                             <TextBox x:Name="PhotonsBox" Grid.Column="1" Width="96" VerticalAlignment="Center" Text="50,000,000" TextChanged="Number_Changed" LostFocus="PhotonsBox_LostFocus"
@@ -128,7 +130,13 @@
                             <TextBlock Grid.Row="1" Grid.Column="2" Margin="6,5,0,0" Style="{StaticResource Dim}" VerticalAlignment="Center" Text="1 – 64"/>
                             <TextBlock x:Name="RaysLine" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,4,0,0" TextWrapping="Wrap" Style="{StaticResource Dim}"/>
                             <TextBlock x:Name="CostLine" Grid.Row="3" Grid.ColumnSpan="3" Margin="0,2,0,0" TextWrapping="Wrap" Style="{StaticResource Dim}"/>
-                            <TextBlock Grid.Row="4" Grid.ColumnSpan="3" Margin="0,3,0,0" FontSize="11.5">
+                            <!-- 0.6.12: shown only while Advanced "Extra direct light samples" is ticked (code-behind, UpdateOptionUi); hidden = no multiplier is passed -->
+                            <TextBlock x:Name="DirectSamplesLabel" Grid.Row="4" Style="{StaticResource FieldLabel}" Margin="0,7,8,0" MaxWidth="128" TextWrapping="Wrap" Text="Direct light samples ×" Visibility="Collapsed"/>
+                            <TextBox x:Name="DirectSamplesBox" Grid.Row="4" Grid.Column="1" Width="44" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,7,0,0" Text="4" TextChanged="Number_Changed" Visibility="Collapsed"
+                                     ToolTip="1 - 64 (default 4): how many times each sun, sky-light and surface-light pass runs. Grain in direct light falls with the square root (×4 = half, ×16 = a quarter)."/>
+                            <TextBlock x:Name="DirectSamplesRange" Grid.Row="4" Grid.Column="2" Margin="6,7,0,0" Style="{StaticResource Dim}" VerticalAlignment="Center" Text="1 – 64" Visibility="Collapsed"/>
+                            <TextBlock x:Name="DirectSamplesLine" Grid.Row="5" Grid.ColumnSpan="3" Margin="0,4,0,0" TextWrapping="Wrap" Style="{StaticResource Dim}" Visibility="Collapsed"/>
+                            <TextBlock Grid.Row="6" Grid.ColumnSpan="3" Margin="0,3,0,0" FontSize="11.5">
                                 <Hyperlink x:Name="ResetCustom" Click="ResetCustom_Click" Foreground="{StaticResource Accent}">Reset to 50M / 16</Hyperlink>
                             </TextBlock>
                         </Grid>
@@ -200,6 +208,10 @@
                                 <!-- 0.6.8: GPULM_SKY_HINT=1 on reuse bakes only (default off; the engine refuses a hint of another capture) -->
                                 <CheckBox x:Name="RebakeHintCheck" Content="Re-bake speedup: reuse the previous bake's cast offsets (same capture only)" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
                                           ToolTip="Only for 'Reuse existing capture' bakes: the photon cast starts where the previous bake of the same capture found each light, so re-baking a big map can finish its cast sooner. The lightmap is the same either way; a capture that changed is detected and baked the normal way."/>
+                                <!-- 0.6.12: the opt-in for the direct sample multiplier; ticking it shows the "Direct light samples ×" box under Custom quality (GPULM_DIRECT_SAMPLE_MUL on Custom bakes only) -->
+                                <CheckBox x:Name="DirectSamplesCheck" Content="Extra direct light samples (opt-in; set the amount under Custom quality)" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
+                                          ToolTipService.ShowDuration="30000"
+                                          ToolTip="Shows a 'Direct light samples ×' box under Custom quality. Each sun, sky-light and surface-light pass then runs that many times with different random numbers and the results are averaged, which smooths grain in direct light (×4 halves it). Those passes take that many times as long. The result is the same lighting with less grain, but not the 2004 tool's exact noise pattern, so it is off unless you tick this. Gather rays are a separate setting."/>
                             </StackPanel>
                         </GroupBox>
                         <CheckBox x:Name="StageOnlyCheck" Content="Stage only (don't write tags)" Checked="Option_Changed" Unchecked="Option_Changed"/>
@@ -260,7 +272,10 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Border Margin="0,0,4,4" Padding="6,1" CornerRadius="9" BorderThickness="1" BorderBrush="{Binding Edge}" Background="{Binding Fill}">
-                            <TextBlock Text="{Binding Name}" Foreground="{Binding Text}" FontSize="11.5"/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Name}" Foreground="{Binding Text}" FontSize="11.5"/>
+                                <TextBlock Text="{Binding Detail}" Visibility="{Binding HasDetail}" Foreground="{Binding Text}" Opacity="0.75" FontSize="10.5" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </Border>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -269,6 +284,7 @@
                 <TextBlock x:Name="EtaText" DockPanel.Dock="Right" Margin="8,0,0,0" Style="{StaticResource Dim}" VerticalAlignment="Center" Text=""/>
                 <ProgressBar x:Name="Bar" Minimum="0" Maximum="1000" Value="0"/>
             </DockPanel>
+            <TextBlock x:Name="StageLine" Margin="0,3,0,0" Style="{StaticResource Dim}" TextWrapping="Wrap" Text="" Visibility="Collapsed"/>
             <TextBlock x:Name="StatusLine" Margin="0,4,0,4" TextWrapping="Wrap" Text="Ready."/>
         </StackPanel>
 

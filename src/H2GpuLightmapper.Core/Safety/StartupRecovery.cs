@@ -228,7 +228,7 @@ namespace H2GpuLightmapper.Core.Safety
                 return new RecoveryItem
                 {
                     Kind = RecoveryKind.InstallMarker, Path = marker, Worker = w, IsTagRestore = tr, Prefix = prefix,
-                    BackupDir = j.Arr("backups").OfType<string>().FirstOrDefault(), TargetDir = j.Str("target_dir"),
+                    BackupDir = WorkMigration.Rebase(j.Arr("backups").OfType<string>().FirstOrDefault()), TargetDir = j.Str("target_dir"),
                     Message = (tr ? "a \"Restore previous lightmap\" into " : "a lightmap install into ") + j.Str("target_dir") + " (started " + j.Str("started") + ") did not finish"
                               + (pending.Count > 0 ? "; not " + (tr ? "restored" : "installed") + ": " + string.Join(", ", pending) : "")
                               + (tr ? " -- put back the files as they were before that restore" : " -- restore the previous lightmap from its backup"),
@@ -435,7 +435,7 @@ namespace H2GpuLightmapper.Core.Safety
             try
             {
                 var j = Json.ParseObj(o.Text);
-                o.BackupDir = j.Arr("backups") == null ? null : j.Arr("backups").OfType<string>().FirstOrDefault();
+                o.BackupDir = j.Arr("backups") == null ? null : WorkMigration.Rebase(j.Arr("backups").OfType<string>().FirstOrDefault());
                 o.TargetDir = j.Str("target_dir");
                 o.IsInstallMarker = o.BackupDir != null && o.TargetDir != null;
             }

@@ -31,21 +31,25 @@ namespace H2GpuLightmapper.Cli
 @"H2 GPU Lightmapper -- command line (the same exe as the window; no window opens)
 
   ""H2 GPU Lightmapper.exe"" --cli bake --h2ek DIR --scenario S --bsp B
-        [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap|ao]
+        [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap|ao]
         [--ao [--ao-strength X] [--ao-exponent Y]] [--force] [--reuse-capture] [--no-install] [--yes]
         [--ao-fallback stop|install] [--probes-fallback stop|install] [--install-retries N [--install-retry-wait-s S]]
         [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix]
         [--dry-run [--json] [--probe-points N] [--assume-vram-mb N [--assume-other-vram-mb N]]]
   ""H2 GPU Lightmapper.exe"" --cli bake --h2ek DIR --map FILE.map [--bsp B] [--map-out OUT.map] [--vista-out yes|no] [--sky-cubemap SKY=BITMAP|none|auto ...]
-        [--quality low|super|custom] [--photons N --rays M] [--mode standard|probes|lightmap] [--ao [--ao-strength X --ao-exponent Y]]
+        [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap] [--ao [--ao-strength X --ao-exponent Y]]
         [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix] [--dry-run [--json]]
+        --direct-samples K (1-64, Custom quality only, opt-in): each sun, sky-light and surface-light pass runs K times with different random numbers and
+        the results are averaged, which smooths grain in direct light (K = 4 halves it; those passes take K times as long). Same lighting, less grain;
+        not the 2004 tool's exact noise pattern.
         Bakes the lightmap straight from a compiled .map (an MCC map built with the Halo 2 Editing Kit, self-contained; or a Vista map, below) and writes a COPY of the
         map with only the lightmap and its bitmap replaced, next to the input as <name>_gpulm.map (or --map-out; the input is never modified, an earlier output is set
         aside as .old_<time>). The map's lightmapper inputs are read into a temporary folder under the work folder (removed after the run) and baked in a real-copy overlay of
         the kit; the live tags are not written. Stock maps (compressed, textures.dat) are refused. Ambient occlusion (--ao), light probes (--mode standard on a
         BSP with probe points, or --mode probes = the lightmap tag only changes) and the quality options work as for a scenario; --mode lightmap on a probe BSP
         resets its probes to zero, like tool lightmaps. --bsp is needed when the scenario has several. A sky with cube map power scale > 0 but no cube map reference (compiled maps
-        lose it) takes the automatic match (the kit's sky with the same sky model) or is left empty with a warning (about 30% darker on headlong);
+        lose it) takes the automatic choice: your kit's own copy of that sky decides (its cube map, or none when it has none), else the kit's sky with the same
+        sky model; with neither it is left empty with a warning (about 30% darker on headlong);
         --sky-cubemap <sky tag name or its last part>=<cube-map bitmap tag path | none | auto> sets it per sky (repeatable).
         A Vista map (cache v8): converted to MCC form with h2conv, baked like an MCC map, injected into an MCC copy; --vista-out yes (the default) then converts
         the result back to a Vista map = <name>_gpulm.map; --vista-out no keeps the MCC map = <name>_gpulm_mcc.map.
@@ -53,8 +57,8 @@ namespace H2GpuLightmapper.Cli
   ""H2 GPU Lightmapper.exe"" --cli restore --h2ek DIR --recover
   ""H2 GPU Lightmapper.exe"" --cli cleanup-alias --h2ek DIR   (removes the H2GLM\<k6> short-path link to that H2EK's work folder)
   ""H2 GPU Lightmapper.exe"" --cli cleanup --h2ek DIR [--dry-run] [--legacy] [--json]
-        Empties the temporary folder GPU Lightmap Work\Temp (safe to delete) (folders a running bake holds are kept): the workers, kept captures
-        and .map bake folders. --legacy instead lists the folders earlier versions (0.6.7 and older) left in GPU Lightmap Work -- this app's
+        Empties the temporary folder GPU Work\Temp (folders a running bake holds are kept): the workers, kept captures
+        and .map bake folders. --legacy instead lists the folders earlier versions (0.6.7 and older) left in their work folder -- this app's
         workers with a capture, _mapbake, the skeleton overlays of those workers, _TAGBAK_auto, old runtimes -- and removes exactly those
         (--dry-run: list only). A worker folder this app did not create is never listed. Refused while a bake runs on that H2EK.
   ""H2 GPU Lightmapper.exe"" --cli doctor [--h2ek DIR] [--json] [--repair] [--no-gpu] [--no-extract]
@@ -123,6 +127,7 @@ namespace H2GpuLightmapper.Cli
         public static int Run(string[] args)
         {
             string mode = Ui.ConsoleHost.Attach();
+            if (args.Contains("--dry-run")) Core.Payload.WorkMigration.ReadOnly = true;   // a dry run writes nothing: no folder move either
             try { return Dispatch(args); }
             catch (Exception e)
             {
@@ -240,6 +245,8 @@ namespace H2GpuLightmapper.Cli
             o.ExactVertexLighting = a.Has("--exact-vertex-lighting");
             o.SceneryPermutationFix = a.Has("--scenery-permutation-fix");
             o.RebakeHint = a.Has("--rebake-hint");        // 0.6.8: GPULM_SKY_HINT=1 on reuse bakes (Advanced "Re-bake speedup")
+            var ds = a.GetInt("--direct-samples");          // 0.6.12: the opt-in direct sample multiplier (Custom quality only: BakeOptions.Validate refuses it otherwise)
+            if (ds.HasValue) { o.DirectSamplesOptIn = true; o.DirectSamplesGiven = true; o.DirectSamples = ds.Value; }
             o.ForceCompat = a.Has("--force-compat");
             o.ReuseUnrecorded = a.Has("--reuse-unrecorded");
             if (o.ReuseUnrecorded && !o.ReuseCapture) a.Errors.Add("--reuse-unrecorded needs --reuse-capture");
@@ -253,7 +260,7 @@ namespace H2GpuLightmapper.Cli
         private static int Bake(string[] args, int start)
         {
             var a = ParseFor(args, start + 1,
-                new[] { "--h2ek", "--scenario", "--bsp", "--map", "--map-out", "--vista-out", "--quality", "--photons", "--rays", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
+                new[] { "--h2ek", "--scenario", "--bsp", "--map", "--map-out", "--vista-out", "--quality", "--photons", "--rays", "--direct-samples", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
                         "--worker", "--probe-worker", "--dev-max-calls", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s", "--dev-simulate-quarantine" },
                 new[] { "--ao", "--force", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--rebake-hint", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp", "--dev-no-stage" },
                 new[] { "--sky-cubemap" });
@@ -289,7 +296,7 @@ namespace H2GpuLightmapper.Cli
             var s = new BakeSession(host, o, so);
             TextWriter info = json ? Console.Error : Console.Out;
             s.Info += m => info.WriteLine(m);
-            s.Line += l => Console.Out.WriteLine(l.Kind == LineKind.Shell ? "=== " + l.Text : l.IsErr ? "ERR| " + l.Text : l.Text);
+            s.Line += l => { if (l.Kind != LineKind.Progress) Console.Out.WriteLine(l.Kind == LineKind.Shell ? "=== " + l.Text : l.IsErr ? "ERR| " + l.Text : l.Text); };      // 0.6.12: progress lines are for the window only
             s.Ask = p => p.Kind == PromptKind.InstallRetry ? retry.Answer(p, () => { var r = s.Run; return r != null && r.CancelRequested; }) : CliAnswer(o, p);
             string lastStep = null;
             s.StatusChanged += st =>
@@ -326,7 +333,7 @@ namespace H2GpuLightmapper.Cli
             var s = new MapBakeSession(host, o, so);
             TextWriter info = json ? Console.Error : Console.Out;
             s.Info += m => info.WriteLine(m);
-            s.Line += l => Console.Out.WriteLine(l.Kind == LineKind.Shell ? "=== " + l.Text : l.IsErr ? "ERR| " + l.Text : l.Text);
+            s.Line += l => { if (l.Kind != LineKind.Progress) Console.Out.WriteLine(l.Kind == LineKind.Shell ? "=== " + l.Text : l.IsErr ? "ERR| " + l.Text : l.Text); };      // 0.6.12: progress lines are for the window only
             s.Ask = p => CliAnswer(o, p);
             string lastStep = null;
             s.StatusChanged += st =>

@@ -83,6 +83,26 @@ namespace H2GpuLightmapper.App
         public const string RebakeHintNote = "re-bake speedup on (GPULM_SKY_HINT=1: the previous bake's cast offsets of this capture)";
         public const string RebakeHintTip = "Only for 'Reuse existing capture' bakes: the photon cast starts where the previous bake of the same capture found each light, "
             + "so re-baking a big map can finish its cast sooner. The lightmap is the same either way; a capture that changed is detected and baked the normal way.";
+        /// <summary>0.6.12 Advanced settings "Extra direct light samples" (the opt-in) + the Custom box "Direct light samples ×" / CLI --direct-samples N:
+        /// every lightmap gpu_bake of a CUSTOM-quality bake gets GPULM_DIRECT_SAMPLE_MUL=N, so the engine runs each sun / sky-light pass and the surface-light
+        /// class N times with different random seeds and averages them (the sampling grain of direct light falls with the square root of N; those passes
+        /// take N times as long). Not the 2004 tool's noise pattern, hence opt-in. Off, another quality, or N = 1: nothing is set (the argv and the
+        /// environment are exactly as before). Gather rays and the photon map are not affected.</summary>
+        public bool DirectSamplesOptIn;
+        public int DirectSamples = DirectSamplesDefault;
+        /// <summary>True when the command line gave --direct-samples (it is then refused without --quality custom; the window's tick is not).</summary>
+        public bool DirectSamplesGiven;
+        public const int DirectSamplesMin = 1, DirectSamplesMax = 64, DirectSamplesDefault = 4;
+        public const string DirectSamplesEnvVar = "GPULM_DIRECT_SAMPLE_MUL";
+        public const string DirectSamplesLabel = "Extra direct light samples (opt-in; set the amount under Custom quality)";
+        public const string DirectSamplesTip = "Shows a 'Direct light samples ×' box under Custom quality. Each sun, sky-light and surface-light pass then runs that many times with different "
+            + "random numbers and the results are averaged, which smooths grain in direct light (×4 halves it). Those passes take that many times as long. "
+            + "The result is the same lighting with less grain, but not the 2004 tool's exact noise pattern, so it is off unless you tick this. Gather rays are a separate setting.";
+        public const string DirectSamplesBoxTip = "1 - 64 (default 4): how many times each sun, sky-light and surface-light pass runs. Grain in direct light falls with the square root (×4 = half, ×16 = a quarter).";
+        public const string DirectSamplesNeedsCustom = "--direct-samples is only valid with --quality custom";
+        /// <summary>The multiplier this bake's lightmap gpu_bake steps get (1 = nothing is set).</summary>
+        public int DirectSamplesEffective { get { return DirectSamplesOptIn && Quality == Quality.Custom ? DirectSamples : 1; } }
+        public string DirectSamplesNote { get { return string.Format(CultureInfo.InvariantCulture, "direct light samples ×{0} (opt-in: {1}={0}; sun, sky-light and surface-light passes averaged over {0} runs)", DirectSamples, DirectSamplesEnvVar); } }
         public const string SceneryPermutationFixSwitch = "SceneryOwnPermutationOnly";
         public const string SceneryPermutationFixNote = "scenery multi permutation fix on (experimental; differs from the 2004 tool on purpose)";
         public const string SceneryPermutationFixLabel = "Scenery Multi Permutation Fix (Experimental Improvement)";
@@ -298,7 +318,9 @@ namespace H2GpuLightmapper.App
                 if (!customAvailable) e.Add("Custom quality needs the N3 guarded fullgpu (engine_custom), which this payload does not carry -- without it a photon count past the uint32 limit wraps silently; dev: --dev-custom-unguarded");
                 if (Photons < PhotonsMin || Photons > PhotonsMax) e.Add(string.Format(CultureInfo.InvariantCulture, "photons must be {0:N0} - {1:N0} (got {2:N0})", PhotonsMin, PhotonsMax, Photons));
                 if (Rays < RaysMin || Rays > RaysMax) e.Add("gather rays (MC samples) must be " + RaysMin + " - " + RaysMax + " (got " + Rays + ")");
+                if (DirectSamplesOptIn && (DirectSamples < DirectSamplesMin || DirectSamples > DirectSamplesMax)) e.Add("direct light samples must be " + DirectSamplesMin + " - " + DirectSamplesMax + " (got " + DirectSamples + ")");
             }
+            else if (DirectSamplesGiven) e.Add(DirectSamplesNeedsCustom);
             if (Mode == BakeMode.AoOnly && !Ao) e.Add("AO only adds ambient occlusion: AO must be on");
             if (AoForce && Mode != BakeMode.AoOnly) e.Add("--force is only for --mode ao (apply AO again to a lightmap that already has it)");
             if (Ao)
@@ -345,7 +367,9 @@ namespace H2GpuLightmapper.App
                 if (!customAvailable) e.Add("Custom quality needs the N3 guarded fullgpu (engine_custom), which this payload does not carry");
                 if (Photons < PhotonsMin || Photons > PhotonsMax) e.Add(string.Format(CultureInfo.InvariantCulture, "photons must be {0:N0} - {1:N0} (got {2:N0})", PhotonsMin, PhotonsMax, Photons));
                 if (Rays < RaysMin || Rays > RaysMax) e.Add("gather rays (MC samples) must be " + RaysMin + " - " + RaysMax + " (got " + Rays + ")");
+                if (DirectSamplesOptIn && (DirectSamples < DirectSamplesMin || DirectSamples > DirectSamplesMax)) e.Add("direct light samples must be " + DirectSamplesMin + " - " + DirectSamplesMax + " (got " + DirectSamples + ")");
             }
+            else if (DirectSamplesGiven) e.Add(DirectSamplesNeedsCustom);
             foreach (var kv in SkyCubemaps)
                 if (string.IsNullOrWhiteSpace(kv.Key) || string.IsNullOrWhiteSpace(kv.Value)) e.Add("--sky-cubemap needs <sky>=<bitmap tag path | none>");
             foreach (var w in new[] { Worker, ProbeWorker })
@@ -366,6 +390,7 @@ namespace H2GpuLightmapper.App
                 if (ExactVertexLighting) m += "   exact vertex lighting on";
                 if (SceneryPermutationFix) m += "   scenery multi permutation fix on";
                 if (RebakeHint) m += "   re-bake speedup on";
+                if (DirectSamplesEffective > 1) m += "   direct light samples ×" + DirectSamplesEffective.ToString(CultureInfo.InvariantCulture);
                 if (ForceCompat) m += "   compatibility mode (DF64) FORCED";
                 if (!Fixes) m += "   FIXES OFF (dev)";
                 return m;
@@ -381,6 +406,7 @@ namespace H2GpuLightmapper.App
             if (ExactVertexLighting) s += "   exact vertex lighting on";
             if (SceneryPermutationFix) s += "   scenery multi permutation fix on";
             if (RebakeHint) s += "   re-bake speedup on";
+            if (DirectSamplesEffective > 1) s += "   direct light samples ×" + DirectSamplesEffective.ToString(CultureInfo.InvariantCulture);
             if (BspRel != null) s += "   BSP from " + BspFolder(BspRel);
             if (ForceCompat) s += "   compatibility mode (DF64) FORCED";
             if (!Fixes) s += "   FIXES OFF (dev)";
