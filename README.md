@@ -2,13 +2,13 @@
 
 A GPU re-implementation of the Halo 2 (MCC H2EK) lightmapper. It reproduces the CPU `tool_fast` bake, with the Osoyoos
 Plücker and scenery fixes, on the GPU in minutes instead of hours, and it is packaged as one standalone Windows exe: no
-Python, PowerShell or other runtime to install.
+Python or other runtime to install, and no PowerShell.
 
 > **Unofficial fan tool.** Halo, Halo 2 and the Halo 2 Editing Kit belong to Microsoft / 343 Industries / Bungie. This project
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 0.6.12** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.0.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -38,13 +38,15 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   On four of the seven tested maps the result is at, or within, the CPU's own run-to-run noise, and on the others it is within
   about two percentage points (see the table below).
 - **Minutes, not hours.** chronopolis: 7.7 minutes on the GPU against 92 minutes on the CPU.
-- **One exe.** The window and a command line are the same file. It carries PowerShell 7.6.6, Python 3.10.5 with numpy and the
-  GPU engine inside itself and unpacks them on first start.
+- **One exe.** The window and a command line are the same file. It carries Python 3.10.5 with numpy and the GPU engine inside
+  itself and unpacks them on first start. It uses no PowerShell.
 - **Quality:** Low, Super (the stock CPU quality levels) and Custom (Experimental: your own photon and gather-ray counts).
 - **Ray tracing, automatic (0.6.9).** On a GPU with RT cores the final-gather rays run on them, which makes whole bakes about 1.7-2x
   faster; the engine uses RT only when a short self-check shows it is clearly faster and agrees with the normal tracer, and otherwise bakes
   the old way. Nothing to switch on. Tested on an RTX 4090 only.
 - **Repeatable (0.6.9).** Baking an unchanged map again gives the same lightmap.
+- **A small exe, no PowerShell (1.0.0).** The exe is about 26 MB (it was 167.6 MB). The bake is driven by a small native program, so
+  the app uses no PowerShell at all. Results are unchanged: on the release's test maps the lightmap tags are byte-identical to 0.6.12's.
 - **Many surface lights, large search distance (0.6.12).** A map with thousands of surface lights and a large lightmap search
   distance bakes in minutes instead of hours (a test map: cancelled after about 2 hours before, about 9 minutes now).
 - **Extra direct light samples (0.6.12, opt-in).** In Custom quality the sun, sky-light and surface-light passes can run several
@@ -143,20 +145,20 @@ one PC. Another GPU will be slower or faster; a card much slower than an RTX 409
 ## Download and first start
 
 1. Download `H2 GPU Lightmapper.exe` from the **Releases** page of this repository. **That one file is all you need**: it
-   carries the engine, PowerShell, Python and the licence texts inside itself. The other release files are optional
+   carries the engine, Python and the licence texts inside itself. The other release files are optional
    (`.exe.config` only names .NET Framework 4.8, which Windows 10 1903+ and Windows 11 already have; `SHA256SUMS.txt`,
    `NOTICES.txt` and `build_record.json` are for checking and reference). Check the download with
    `certutil -hashfile "H2 GPU Lightmapper.exe" SHA256` and compare it with the SHA-256 in the release notes.
 2. **SmartScreen.** The exe is **not code-signed**, so Windows SmartScreen will probably show "Windows protected your PC".
    Click **More info**, then **Run anyway**. Do this only for a file whose SHA-256 matches the one published with the release.
    If Smart App Control is on, Windows may block the exe outright (not tested).
-3. On the first start the app unpacks its runtimes (about 300 MB) to `%LOCALAPPDATA%\H2GpuLightmapper\rt\`. That takes a few
-   seconds. Before every bake it re-checks every unpacked file and repairs any that changed.
+3. On the first start of a new version the app unpacks its runtimes (Python 3.10.5 with numpy, the map converter and the licence texts; about 80 MB) to `%LOCALAPPDATA%\H2GpuLightmapper\rt\`. That takes a few
+   seconds, a few seconds longer than in 0.6.12 because the files are stored more compactly; later starts are not affected. Before every bake it re-checks every unpacked file and repairs any that changed.
 
 ## Windows Security (Defender)
 
 Windows Security may flag one of the engine files inside the app (`fullgpu.exe`, `fullgpu_rt.exe`, the AO engine's `fullgpu.exe`,
-`tw_native.exe`, `H2GpuLightmapper.ToolLoader.exe`) as suspicious. They are small, new, unsigned programs, and the detection is a
+`tw_native.exe`, `h2lm-bake.exe`, `H2GpuLightmapper.ToolLoader.exe`) as suspicious. They are small, new, unsigned programs, and the detection is a
 behaviour / heuristic one (for example `Behavior:Win32/DefenseEvasion.A!ml`), not a named virus.
 
 What you will see: the bake stops before it writes anything to your tags and says "Windows Security (Defender) removed <file> ...",
@@ -210,7 +212,7 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
    - **Temp folder** (0.6.8): temporary files live in `<H2EK>\GPU Work\Temp\`. You can delete it, or anything in it,
      at any time, even during a bake: your tags are never written from it. It trims itself (newest 3 captures kept, 40 GB cap); the
      settings show its size with **Open** and **Clean now**, and **Free space from earlier versions** removes the folders 0.6.7 and older
-     left behind.
+     left behind and, since 1.0.0, the unused PowerShell runtime folder (about 257 MB) of earlier versions.
    - **Re-bake speedup** (0.6.8): with Reuse existing capture, the photon cast starts where the previous bake found each light. Command
      line: `--rebake-hint`.
    - **Extra direct light samples** (0.6.12, opt-in): shows a **Direct light samples ×** box (1 to 64, default 4) under Custom
@@ -257,6 +259,9 @@ the lightmap and its bitmap change in the copy. Temporary work files are cleaned
   cube-map reference decides, and an empty one stays empty, as a bake from your tags would have it.
 - **Not supported yet:** stock compressed MCC maps (the ones that keep their textures in a separate `textures.dat`).
 - A map with several BSPs asks which BSP to bake.
+- **Fixed in 1.0.0:** a Vista map that was baked and converted back to a Vista map could lose a small number of sounds on a PC that
+  had never run the standalone map converter, while the bake reported success. The conversion now resamples those sounds itself,
+  and a result that lost any sound is refused instead of being handed over.
 
 ## Command line
 
@@ -414,7 +419,7 @@ part of this snapshot. See [docs/BUILDING.md](docs/BUILDING.md) for what is need
   [Assembly](https://github.com/xboxchaos/assembly) plugin layouts (GPL-3.0) and the blam-tags project's definitions (HABT's
   layouts, MIT).
 - **Unreal Engine Lightmass** (Epic Games) for the ambient-occlusion formula that the AO layer follows.
-- **PowerShell** (Microsoft, MIT), **CPython** (Python Software Foundation) and **numpy** (the NumPy developers), which are
+- **CPython** (Python Software Foundation) and **numpy** (the NumPy developers), which are
   bundled inside the exe under their own licenses.
 
 ## Transparency: this project was vibecoded
@@ -427,5 +432,5 @@ checked against real bakes, but treat it as what it is: a fast-moving hobby tool
 ## License
 
 The code in this repository is released under the **MIT license** (see [LICENSE](LICENSE)), Copyright (c) 2026 Harc
-(harctheshark). Third-party components (PowerShell, CPython, numpy, the Osoyoos hook DLL and database, and others) keep their
+(harctheshark). Third-party components (CPython, numpy, the Osoyoos hook DLL and database, and others) keep their
 own licenses; see [THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES.txt).

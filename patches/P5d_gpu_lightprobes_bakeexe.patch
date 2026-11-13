@@ -1,0 +1,21 @@
+# title: P5d gpu_lightprobes.py: start the stage's h2lm-bake.exe (1.0 native bake program, same arguments); --pwsh removed
+# source: _research/lightprobes/gpu_lightprobes.py
+# base-md5: 21958cbdcf2fdd6b122a69d48e77354c
+# result-md5: de71b68f65dadf2a3f2bdcf92438ac9b
+--- a/_research/lightprobes/gpu_lightprobes.py
++++ b/_research/lightprobes/gpu_lightprobes.py
+@@ -6,3 +6,3 @@
+  1. lp_probes.py      the BSP's `structure bsp lighting` points -> OUT\\probes.bin (build_lightprobes' probe list, block order)
+- 2. gpu_bake.ps1      capture (GPULM_SKY_HI=1: the mip-0 sky cube) + fullgpu PROBE MODE (GPULM_PROBES): the cube rays, the CPU hit
++ 2. h2lm-bake.exe     capture (GPULM_SKY_HI=1: the mip-0 sky cube) + fullgpu PROBE MODE (GPULM_PROBES): the cube rays, the CPU hit
+                       point, the flag-0x40 sun bypass, compute_light_value (6x3 gather) per surface hit -> farm_wNN\\probe_hits.bin,
+@@ -31,3 +31,2 @@
+ ap.add_argument('--farm', default=None, metavar='DIR', help='the farm_wNN dir gpu_bake writes for --worker (default: <h2 root>\\GPU Lightmap Work\\farm_wNN)')
+-ap.add_argument('--pwsh', default=None, metavar='EXE', help='pwsh to run gpu_bake.ps1 with (default: pwsh on PATH); given, it also gets -ExecutionPolicy Bypass')
+ ap.add_argument('--plucker-fix', action='store_true', help='pass -PluckerFix to gpu_bake (with --skip-capture it must match the capture)')
+@@ -67,3 +66,4 @@
+ if a.h2_root: env['H2LM_ROOT'] = H2
+-bake = [a.pwsh or 'pwsh', '-NoProfile', '-NonInteractive'] + (['-ExecutionPolicy', 'Bypass'] if a.pwsh else []) + ['-File', os.path.join(a.stage, 'gpu_bake.ps1'), '-Scenario', a.scenario, '-Bsp', a.bsp,
++# P5d (1.0): the stage's native bake program h2lm-bake.exe (it replaced the bake script; the same arguments)
++bake = [os.path.join(a.stage, 'h2lm-bake.exe'), '-Scenario', a.scenario, '-Bsp', a.bsp,
+         '-Worker', str(a.worker), '-Quality', a.quality] + (['-SkipCapture'] if a.skip_capture else []) + (['-Sever', a.sever] if a.sever else [])

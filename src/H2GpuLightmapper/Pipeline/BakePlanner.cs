@@ -87,7 +87,7 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>Does it need the map query (probe points / environments)? (Standard and Probes)</summary>
         public static bool NeedsMapQuery(BakeOptions o) { return o.Mode != BakeMode.Lightmap && o.Mode != BakeMode.AoOnly; }
 
-        /// <summary>INST-relative gpu_bake for the quality: Custom uses engine_custom (N3 guarded fullgpu) when the payload has it.</summary>
+        /// <summary>INST-relative bake program (h2lm-bake.exe) for the quality: Custom uses engine_custom (N3 guarded fullgpu) when the payload has it.</summary>
         public static string GpuBakeRel(BakeOptions o, PayloadManifest m)
         {
             if (o.Quality == Quality.Custom && m != null && m.InstComponent.Has(InstLayout.GpuBakeCustom)) return InstLayout.GpuBakeCustom;
@@ -97,7 +97,7 @@ namespace H2GpuLightmapper.Pipeline
         /// <param name="farmRoot">the folder that holds the workers: ResolvedRuntime.Farms (WORK\Temp (safe to delete) or WORK).</param>
         public static string FarmDir(string farmRoot, int w) { return Path.Combine(farmRoot, "farm_w" + w.ToString("D2", CultureInfo.InvariantCulture)); }
 
-        /// <summary>gpu_bake's own arguments in run_bake.ps1's order (+ the P2 custom parameters last).</summary>
+        /// <summary>The bake program's own arguments in the old launcher's order (+ the P2 custom parameters last).</summary>
         public static List<string> GpuBakeArgs(BakeOptions o, int worker, bool writeBack, bool skipCapture, GpuLimits limits = null)
         {
             var a = new List<string> { "-Scenario", o.ScenarioRel, "-Bsp", o.Bsp, "-Worker", worker.ToString(CultureInfo.InvariantCulture), "-Quality", o.QualityToken };
@@ -235,11 +235,11 @@ namespace H2GpuLightmapper.Pipeline
                 // fallback. Before U3 that plan ran gpu_bake -WriteBack, whose [4b] lmw_install failed the whole run on a held file.
                 bool shellInstallsLightmap = p.Install && !o.Ao && !p.ProbePath;
                 var args = GpuBakeArgs(o, n, false, pi.ReuseLightmap, pi.Limits);
-                var spec = PwshInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);   // refuses -?, -Cleanup, a worker outside 200-299 / 149
+                var spec = BakeInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);   // refuses -?, -Cleanup, a worker outside 200-299 / 149
                 var g = p.Add(new PlanStep
                 {
                     Id = StepIds.GpuBake, UiStep = pi.ReuseLightmap ? StepId.Derive : StepId.Capture, Kind = PlanStepKind.Process,
-                    Title = "gpu_bake.ps1 farm_w" + n.ToString("D2", CultureInfo.InvariantCulture) + (shellInstallsLightmap ? " (stage only; the shell installs its stage)" : " (stage only)"),
+                    Title = "h2lm-bake farm_w" + n.ToString("D2", CultureInfo.InvariantCulture) + (shellInstallsLightmap ? " (stage only; the shell installs its stage)" : " (stage only)"),
                     FileName = spec.FileName, Cwd = spec.Cwd, CaptureWorker = n, CaptureOut = outN, FreshCapture = !pi.ReuseLightmap,
                 });
                 g.Args.AddRange(spec.Args);
@@ -461,11 +461,11 @@ namespace H2GpuLightmapper.Pipeline
                 var args = GpuBakeArgs(o, n, false, false, pi.Limits);
                 args.Remove("-ExactVertexLighting");               // no tag writer runs in AO only
                 args.Add("-CaptureOnly");
-                var spec = PwshInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);
+                var spec = BakeInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);
                 var g = p.Add(new PlanStep
                 {
                     Id = StepIds.GpuBake, UiStep = StepId.Capture, Kind = PlanStepKind.Process,
-                    Title = "gpu_bake.ps1 farm_w" + n.ToString("D2", CultureInfo.InvariantCulture) + " (capture only: AO only needs the geometry; no lighting is baked)",
+                    Title = "h2lm-bake farm_w" + n.ToString("D2", CultureInfo.InvariantCulture) + " (capture only: AO only needs the geometry; no lighting is baked)",
                     FileName = spec.FileName, Cwd = spec.Cwd, CaptureWorker = n, CaptureOut = outN, FreshCapture = true,
                 });
                 g.Args.AddRange(spec.Args);
@@ -533,7 +533,7 @@ namespace H2GpuLightmapper.Pipeline
             if (pi.ReuseProbe) s.Args.Add("--skip-capture");
             // 0.6.8: with the farms in Temp the probe driver's --farm is the real farm (P5c checks it against H2LM_FARMS); only the 0.6.7 layout of a
             // .map bake still names the overlay work folder's farm junction (the driver then checks it against H2LM_WORK)
-            s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", pi.OverlayWork != null && !rt.FarmsInTemp ? FarmDir(pi.OverlayWork, m) : outM, "--pwsh", rt.PwshExe });
+            s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", pi.OverlayWork != null && !rt.FarmsInTemp ? FarmDir(pi.OverlayWork, m) : outM });
             if (o.Fixes) { s.Args.Add("--plucker-fix"); s.Args.Add("--scenery-fix"); }
             if (o.Responsive) s.EnvExtra["GPULM_RESPONSIVE"] = "1";             // X2: gpu_lightprobes.py runs gpu_bake itself and has no -Responsive argument
             s.Params.Add("adds", "GPULM_PROBES=RUN\\probes\\probes.bin and GPULM_SKY_HI=1 for its gpu_bake only (the lightmap capture never sees SKY_HI)");
@@ -544,7 +544,7 @@ namespace H2GpuLightmapper.Pipeline
             return new ResolvedRuntime
             {
                 AppVersion = rt.AppVersion, Root = rt.Root, Work = rt.Work, InstDir = rt.InstDir, SlotBase = rt.SlotBase,
-                PwshDir = rt.PwshDir, PwshExe = rt.PwshExe, PyDir = rt.PyDir, PyExe = rt.PyExe, MapbakeDir = rt.MapbakeDir, MapbakePy = rt.MapbakePy, GpuBakePs1 = script,
+                PyDir = rt.PyDir, PyExe = rt.PyExe, MapbakeDir = rt.MapbakeDir, MapbakePy = rt.MapbakePy, BakeExe = script,
                 LmwInstallPy = rt.LmwInstallPy, BoundsDb = rt.BoundsDb, ScanSceneryPy = rt.ScanSceneryPy, GpuCheckExe = rt.GpuCheckExe, FarmRoot = rt.FarmRoot,
             };
         }

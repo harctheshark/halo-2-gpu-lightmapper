@@ -33,8 +33,11 @@ namespace H2GpuLightmapper.Tests
             yield return T("unit 0.6.6: relevance = scenario folder / BSP / scenery-shader-light-sky tags / the bitmaps + render_models the tag-reference walk reaches", Relevance066);
             yield return T("unit: history + Custom ETA scaling", HistoryEta);
             yield return T("unit: map-query result parsing", MapQueryParse);
+            yield return T("unit 1.0: map query: empty instanced geometry (emptyInstances / clusters / bspError parsed, absent in an old result, never part of Ok) + the warning texts (0 / 1 / 6 names, 1 cluster vs many)", MapQueryEmptyInstances);
+            yield return T("unit 1.0: map query run on a production BSP (read only): no empty instanced geometry, the BSP's clusters counted", MapQueryEmptyInstancesRealNone);
+            yield return T("unit 1.0: map query run on H2LM_TEST_EMPTYINST_SCENARIO (read only; skipped when unset): its empty instanced geometry is found", MapQueryEmptyInstancesRealSome);
             yield return T("unit 0.6.4: cross-folder BSP picker: every structure_bsps entry by tag path, other folders labelled 'name  (from folder)', old engine keeps the beside-the-scenario list, ambiguity / missing tag notes, options (BspRel validation, summary, tag file)", CrossFolderPicker);
-            yield return T("unit 0.6.4: cross-folder BSP engine gate (gpu_bake.ps1 declares -WriterOnly and -ToolOverlay): new engine supported, older engine / Custom engine / no payload refused with the plain sentence", CrossFolderGate);
+            yield return T("unit 0.6.4: cross-folder BSP engine gate (the engine's parameter list declares -WriterOnly and -ToolOverlay): new engine supported, older engine / Custom engine / no payload refused with the plain sentence", CrossFolderGate);
             yield return T("unit 0.6.4: write-back fallback detector: the engine's three direct->tool lines (and a tool->direct one) are recognised, ordinary lines and the shell's own warning are not; warning + summary texts", FallbackDetect);
             yield return T("unit 0.6.6: tolerated stage deviation: lmw_validate WARN / 'filled N uncovered texel(s)' lines are recognised (one warning per kind, own text ignored, ordinary lines not); OUT\\tagw_validate.json with failed checks is a stage problem, WARN-only / clean / stale / missing is not", StageWarningDetect);
             yield return T("unit: review fixes: on-disk case, install-without-layer flags, the undo time rule, --probes-fallback", ReviewFixes);
@@ -170,42 +173,39 @@ namespace H2GpuLightmapper.Tests
 
         private static void SceneryPermEngineGate()
         {
+            // 1.0: an engine's switches are read from its parameter list (bake_params.txt: "Name<TAB>type" per line), not parsed out of a script
             Func<string, bool> decl = s => Core.Payload.EngineSwitches.DeclaresSwitch(s, "SceneryOwnPermutationOnly");
-            // declared, in the shapes real scripts use
-            Assert.True(decl(Script("param(", "  [string]$Scenario = \"\",", "  [switch]$SceneryOwnPermutationOnly,   # opt-in", "  [switch]$Responsive", ")", "Write-Host hi")), "declared");
-            Assert.True(decl(Script("[CmdletBinding()]", "param([switch] $sceneryownpermutationonly)")), "case-insensitive, space before the name, [CmdletBinding()] first");
-            Assert.True(decl(Script("PARAM (", "  [Parameter(Mandatory=$false)][System.Management.Automation.SwitchParameter]$SceneryOwnPermutationOnly", ")")), "attribute + full SwitchParameter type");
-            Assert.True(decl(Script("<# header mentioning param( and [switch]$Other #>", "param(", "  [switch]$SceneryOwnPermutationOnly", ")")), "a block comment above that mentions param( is skipped");
-            Assert.True(decl(Script("param(", "  [ValidateSet(\"low\",\"super\")][string]$Quality = \"super\",   # (nested parens) )", "  [switch]$SceneryOwnPermutationOnly", ")")), "nested parentheses and a ')' in a comment do not end the block early");
+            // declared, in the shapes a list can have
+            Assert.True(decl("Scenario\tstring\nSceneryOwnPermutationOnly\tswitch\nResponsive\tswitch\n"), "declared");
+            Assert.True(decl("# bake_params.txt: the parameters the program takes\r\nWorker\tint\r\nSceneryOwnPermutationOnly\tswitch\r\n"), "a comment line, CRLF line ends");
+            Assert.True(decl("sceneryownpermutationonly\tSWITCH"), "case-insensitive name and type");
+            Assert.True(decl("-SceneryOwnPermutationOnly\tswitch"), "a leading dash is tolerated");
+            Assert.True(decl("SceneryOwnPermutationOnly switch"), "a space instead of the tab");
+            Assert.True(decl("\n\n  SceneryOwnPermutationOnly\tswitch  \n"), "blank lines and surrounding blanks");
+            Assert.Eq("int", Core.Payload.EngineSwitches.ParseParams("A\tInt\nB\tSWITCH\n#C\tint\nGPULM_COMPAT\tenv")["a"], "ParseParams: a type is read lower-case, names case-insensitively");
+            Assert.Eq(3, Core.Payload.EngineSwitches.ParseParams("A\tInt\nB\tSWITCH\n#C\tint\nGPULM_COMPAT\tenv").Count, "ParseParams: the comment line is not a parameter, an env line is an entry");
+            Assert.Eq(0, Core.Payload.EngineSwitches.ParseParams(null).Count, "ParseParams: null -> an empty list");
             // NOT declared
-            Assert.True(!decl(Script("param(", "  [switch]$Responsive,", "  [switch]$ExactVertexLighting", ")")), "an older engine");
-            Assert.True(!decl(Script("param(", "  [switch]$Responsive   # SceneryOwnPermutationOnly arrives in 0.6.4: [switch]$SceneryOwnPermutationOnly", ")")), "named only in a comment");
-            Assert.True(!decl(Script("param(", "  [string]$Note = \"[switch]$SceneryOwnPermutationOnly\"", ")")), "named only inside a string");
-            Assert.True(!decl(Script("param(", "  [string]$SceneryOwnPermutationOnly", ")")), "declared, but not as a switch");
-            Assert.True(!decl(Script("param(", "  [switch]$SceneryOwnPermutationOnlyX", ")")), "a longer name is not the name");
-            Assert.True(!decl(Script("param(", "  [switch]$Responsive", ")", "function F { param([switch]$SceneryOwnPermutationOnly) }", "if ($SceneryOwnPermutationOnly) { }")), "a function's own param block / a later use does not count");
-            Assert.True(!decl(Script("$x = 1", "if ($SceneryOwnPermutationOnly) { 1 }")), "no param block at all");
-            Assert.True(!decl(""), "empty script");
-            Assert.True(!decl(null), "null script");
-            Assert.True(!decl(Script("param(", "  [switch]$SceneryOwnPermutationOnly")), "an unterminated param block fails closed");
-            // the real engines (read-only): production 0.6.3 has Responsive + ExactVertexLighting but not the new switch; the dev engine has it
-            string prod = Path.Combine(C.MineGlw, @"engine_v373\gpu_bake.ps1");
+            Assert.True(!decl("Responsive\tswitch\nExactVertexLighting\tswitch\n"), "an older engine");
+            Assert.True(!decl("# SceneryOwnPermutationOnly\tswitch arrives in 0.6.4\nResponsive\tswitch\n"), "named only in a comment");
+            Assert.True(!decl("SceneryOwnPermutationOnly\tstring\n"), "listed, but not as a switch");
+            Assert.True(!decl("SceneryOwnPermutationOnly\tenv\n"), "an environment variable line is not a switch");
+            Assert.True(!decl("SceneryOwnPermutationOnlyX\tswitch\n"), "a longer name is not the name");
+            Assert.True(!decl("XSceneryOwnPermutationOnly\tswitch\n"), "a name that merely ends in it is not the name");
+            Assert.True(!decl("SceneryOwnPermutationOnly\tswitch\textra\n"), "a malformed line (three fields) is ignored");
+            Assert.True(!decl("SceneryOwnPermutationOnly\n"), "a name without a type is ignored");
+            Assert.True(!decl("SceneryOwnPermutationOnly\tstring\nSceneryOwnPermutationOnly\tswitch\n"), "the first entry of a name wins");
+            Assert.True(!decl(""), "empty list");
+            Assert.True(!decl(null), "null list (no parameter list: fails closed)");
+            // the production engine's parameter list (read-only, when this PC has one): the engine takes the switches the shell passes
+            string prod = Path.Combine(C.MineGlw, @"engine_v373\bake_params.txt");
             if (File.Exists(prod))
             {
                 string t = File.ReadAllText(prod);
                 Assert.True(Core.Payload.EngineSwitches.DeclaresSwitch(t, "Responsive") && Core.Payload.EngineSwitches.DeclaresSwitch(t, "ExactVertexLighting"), "production engine_v373 declares -Responsive and -ExactVertexLighting");
-                Assert.True(decl(t), "production engine_v373 (promoted to 0.6.4 on 2026-10-21) declares -SceneryOwnPermutationOnly");
+                Assert.True(decl(t), "production engine_v373 (0.6.4 and newer) declares -SceneryOwnPermutationOnly");
             }
-            string old063 = Path.Combine(C.MineGlw, @"engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
-            if (File.Exists(old063))
-            {
-                string t = File.ReadAllText(old063);
-                Assert.True(Core.Payload.EngineSwitches.DeclaresSwitch(t, "Responsive") && Core.Payload.EngineSwitches.DeclaresSwitch(t, "ExactVertexLighting"), "the 0.6.3 engine (pre-promotion backup) declares -Responsive and -ExactVertexLighting");
-                Assert.True(!decl(t), "the 0.6.3 engine (pre-promotion backup) does NOT declare -SceneryOwnPermutationOnly");
-            }
-            string dev = Path.Combine(C.MineGlw, @"_research\permself\dev_CO\gpu_bake.ps1");
-            if (File.Exists(dev)) Assert.True(decl(File.ReadAllText(dev)), "the dev_CO engine declares -SceneryOwnPermutationOnly");
-            else if (!File.Exists(prod)) throw new TestSkip("neither the production nor the dev_CO engine is on this PC");
+            // (no production check otherwise: the engine's script is not parsed any more, and the 0.6.3 / dev engine scripts the old checks read have no parameter list)
             // the payload gate (in-process: AppHost over the test payloads; nothing extracted, nothing started)
             var good = AppHost.Create(new HostConfig { PayloadDir = C.PayloadDir });
             Assert.True(good.HasPayload, "test payload loads: " + good.PayloadError);
@@ -215,14 +215,14 @@ namespace H2GpuLightmapper.Tests
             string why = old.SceneryPermutationFixWhy(o);
             Assert.True(why != null, "an older engine: not supported");
             Assert.Contains(why, "Needs engine 0.6.4 or newer.", "the plain reason ends with the engine requirement");
-            Assert.Contains(why, "engine_v373/gpu_bake.ps1", "and names the engine file");
+            Assert.Contains(why, "engine_v373/h2lm-bake.exe", "and names the engine's bake program");
             Assert.Contains(why, "-SceneryOwnPermutationOnly", "and the parameter");
             // Custom runs engine_custom: that engine decides for Custom
             var mixed = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_nosp_custom"), customEngine: true, customSceneryEngine: false) });
             var oc = BakeOptions.Defaults(); oc.Quality = Quality.Custom;
             Assert.Eq(null, mixed.SceneryPermutationFixWhy(BakeOptions.Defaults()), "Super: engine_v373 declares it");
             string cwhy = mixed.SceneryPermutationFixWhy(oc);
-            Assert.True(cwhy != null && cwhy.Contains("engine_custom/gpu_bake.ps1") && cwhy.Contains("Needs engine 0.6.4 or newer."), "Custom: engine_custom lacks it -> refused, naming engine_custom: " + cwhy);
+            Assert.True(cwhy != null && cwhy.Contains("engine_custom/h2lm-bake.exe") && cwhy.Contains("Needs engine 0.6.4 or newer."), "Custom: engine_custom lacks it -> refused, naming engine_custom: " + cwhy);
             var both = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_sp_custom"), customEngine: true) });
             Assert.Eq(null, both.SceneryPermutationFixWhy(oc), "Custom with a declaring engine_custom: supported");
             // no payload at all: never supported
@@ -457,7 +457,7 @@ namespace H2GpuLightmapper.Tests
             p.Feed("[3] GPU BAKE", false);
             Assert.True(!p.DeviceLost, "none yet");
             p.Feed("DIRECT: *** GPU CAST DEVICE REMOVED (hung)", false);
-            p.Feed("pwsh: DEVICE_HUNG", true);
+            p.Feed("h2lm-bake: DEVICE_HUNG", true);
             Assert.Eq(2, p.DeviceLossLines.Count, "both streams");
             Assert.True(p.DeviceLost, "flag");
             Assert.True(DeviceLoss.AnyDeviceLoss(new[] { "a", "b was RESET by Windows (TDR)" }) && !DeviceLoss.AnyDeviceLoss(new[] { "a", "b" }) && !DeviceLoss.AnyDeviceLoss(null), "AnyDeviceLoss");
@@ -1108,13 +1108,13 @@ namespace H2GpuLightmapper.Tests
             var good = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_xbsp_gate"), crossBspEngine: true) });
             Assert.True(good.HasPayload, "payload loads: " + good.PayloadError);
             var o = BakeOptions.Defaults();
-            Assert.Eq(null, good.CrossFolderBspWhy(o), "an engine whose gpu_bake.ps1 declares -WriterOnly and -ToolOverlay: supported");
+            Assert.Eq(null, good.CrossFolderBspWhy(o), "an engine whose parameter list declares -WriterOnly and -ToolOverlay: supported");
             var old = AppHost.Create(new HostConfig { PayloadDir = C.PayloadDir });
             string why = old.CrossFolderBspWhy(o);
             Assert.True(why != null, "the default (0.6.3-shaped) test engine: not supported");
             Assert.Contains(why, BakeOptions.CrossFolderBspNeedsEngine, "ends with the plain requirement");
             Assert.Contains(why, "Baking a BSP from another folder needs engine 0.6.4 or newer.", "the exact sentence");
-            Assert.Contains(why, "engine_v373/gpu_bake.ps1", "names the engine file");
+            Assert.Contains(why, "engine_v373/h2lm-bake.exe", "names the engine's bake program");
             Assert.Contains(why, "-WriterOnly", "and the missing parameter");
             // Custom runs engine_custom: that engine decides for Custom
             var cust = AppHost.Create(new HostConfig { PayloadDir = C.BuildPayload(C.Sb.Dir("payload_xbsp_gate_c"), customEngine: true, crossBspEngine: true) });
@@ -1225,6 +1225,112 @@ namespace H2GpuLightmapper.Tests
             var bad = MapQuery.Parse(new[] { "Traceback..." }, 1, "boom");
             Assert.True(!bad.Ok && bad.Error.Contains("boom"), "no result line");
             Assert.True(MapQuery.Code.IndexOf('"') < 0, "the snippet has no double quote (argv-safe)");
+        }
+
+        // ------------------------------------------------------------------ 1.0: empty instanced geometry (a % object holding only +portal faces)
+
+        private const string MqBase = "\"bsps\": [\"b\"], \"bspRefs\": [\"scenarios\\\\multi\\\\b\\\\b\"], \"points\": 0, \"pointsError\": null, \"ltmpExists\": false, \"envs\": null, \"groups\": null, \"envsError\": null";
+
+        private static MapInfo Mq(string extra) { return MapQuery.Parse(new[] { "MAPQUERY {" + MqBase + (extra == null ? "" : ", " + extra) + "}" }, 0, ""); }
+
+        private static MapInfo WithEmpty(int? clusters, params string[] names) { return new MapInfo { EmptyInstances = names.ToList(), Clusters = clusters }; }
+
+        private static void MapQueryEmptyInstances()
+        {
+            // parsing: present
+            var one = Mq("\"emptyInstances\": [\"portals\"], \"clusters\": 1, \"bspError\": null");
+            Assert.True(one.Ok, "ok");
+            Assert.Seq(new[] { "portals" }, one.EmptyInstances, "emptyInstances");
+            Assert.Eq(1, one.Clusters.Value, "clusters");
+            Assert.True(one.BspError == null, "no bspError");
+            var none = Mq("\"emptyInstances\": [], \"clusters\": 28, \"bspError\": null");
+            Assert.Eq(0, none.EmptyInstances.Count, "none");
+            Assert.Eq(28, none.Clusters.Value, "28 clusters");
+            // an older payload's result: no keys -> empty list, nulls, still Ok
+            var old = Mq(null);
+            Assert.True(old.Ok && old.EmptyInstances != null && old.EmptyInstances.Count == 0 && old.Clusters == null && old.BspError == null, "old result: empty list, nulls, ok");
+            Assert.True(old.EmptyInstanceWarning() == null && old.EmptyInstanceShort() == null, "old result: no warning");
+            // the BSP could not be read: an error string, nulls, still Ok (the query never fails because of this part)
+            var err = Mq("\"emptyInstances\": null, \"clusters\": null, \"bspError\": \"TagIOError: bad tag\"");
+            Assert.True(err.Ok, "a BSP read error does not fail the query");
+            Assert.True(err.EmptyInstances != null && err.EmptyInstances.Count == 0 && err.Clusters == null, "error: empty list, no clusters");
+            Assert.Eq("TagIOError: bad tag", err.BspError, "bspError");
+            Assert.True(err.EmptyInstanceWarning() == null, "error: no warning");
+            // Ok does not depend on the new fields
+            var failed = Mq("\"emptyInstances\": [\"x\"], \"clusters\": 1, \"bspError\": null");
+            failed.PointsError = "boom";
+            Assert.True(!failed.Ok, "Ok still follows Error / PointsError");
+
+            // the texts: 0 names
+            Assert.True(WithEmpty(1).EmptyInstanceWarning() == null && WithEmpty(1).EmptyInstanceShort() == null, "0 names: null");
+            // 1 name, 1 cluster vs 28
+            const string body = " An object whose name starts with % is exported as instanced geometry; faces in it that use only +portal (or another non-rendered material) are dropped, so they do not work as portals. The map still bakes. To make the portals work, move those faces into the level mesh (an object without the % prefix) and import the level again.";
+            Assert.Eq("instanced geometry \"%portals\" has no visible geometry." + body + " This BSP has 1 cluster, so no portal is in effect.", WithEmpty(1, "portals").EmptyInstanceWarning(), "1 name, 1 cluster");
+            Assert.Eq("instanced geometry \"%portals\" has no visible geometry." + body, WithEmpty(28, "portals").EmptyInstanceWarning(), "1 name, 28 clusters: no cluster sentence");
+            Assert.Eq("instanced geometry \"%portals\" has no visible geometry." + body, WithEmpty(null, "portals").EmptyInstanceWarning(), "clusters unknown: no cluster sentence");
+            Assert.Eq("WARNING: \"%portals\" has no visible geometry (portals in instanced geometry do not work; the map still bakes)", WithEmpty(1, "portals").EmptyInstanceShort(), "short, 1 name");
+            // 6 names: 5 listed, then "and 1 more"; an unnamed one is "instance #index"
+            var six = WithEmpty(28, "a", "b", "#2", "d", "e", "f");
+            Assert.Eq("instanced geometry \"%a\", \"%b\", instance #2, \"%d\", \"%e\" and 1 more have no visible geometry." + body, six.EmptyInstanceWarning(), "6 names, 28 clusters");
+            Assert.Eq("instanced geometry \"%a\", \"%b\", instance #2, \"%d\", \"%e\" and 1 more have no visible geometry." + body + " This BSP has 1 cluster, so no portal is in effect.", WithEmpty(1, "a", "b", "#2", "d", "e", "f").EmptyInstanceWarning(), "6 names, 1 cluster");
+            Assert.Eq("WARNING: \"%a\", \"%b\", instance #2, \"%d\", \"%e\" and 1 more have no visible geometry (portals in instanced geometry do not work; the map still bakes)", six.EmptyInstanceShort(), "short, 6 names");
+
+            // the snippet: no new argument, the tags root is found from the scenario's own path, a BSP read error is caught
+            Assert.Contains(MapQuery.Code, "os.path.basename(tp).lower() == 'tags'", "the tags root is the scenario's nearest 'tags' ancestor");
+            Assert.Contains(MapQuery.Code, "out['bspError'] = '%s: %s' % (type(e).__name__, e)", "a BSP read error is caught");
+            Assert.Seq(new[] { "-B", "-c", MapQuery.Code, "t", "s", "b", "l" }, MapQuery.Args("t", "s", "b", "l"), "the argv is unchanged");
+        }
+
+        private static string MqTagIoDir()
+        {
+            string d = C.Sb.Dir("mq_tagio");
+            foreach (var f in new[] { C.FxTagIo, C.FxTagDefs })
+            {
+                string dst = Path.Combine(d, Path.GetFileName(f));
+                if (!File.Exists(dst)) File.Copy(f, dst);
+            }
+            return d;
+        }
+
+        private static MapInfo RunMq(string scenarioFile, string bsp)
+        {
+            string dir = MqTagIoDir();
+            var args = MapQuery.Args(dir, scenarioFile, bsp, Path.Combine(dir, "no_such.scenario_structure_lightmap"));
+            return MapQuery.Run(C.PyExe, args, dir, H2Lm.Proc.ChildEnvironment.FromCurrentProcess());
+        }
+
+        private static void MapQueryEmptyInstancesRealNone()
+        {
+            string scen = Path.Combine(C.MineRoot, @"tags\scenarios\multi\cyclotron\cyclotron.scenario");
+            if (!File.Exists(scen) || !File.Exists(Path.ChangeExtension(scen, ".scenario_structure_bsp"))) throw new TestSkip("no cyclotron scenario / BSP under the --mine root");
+            var mi = RunMq(scen, "cyclotron");
+            Assert.True(mi.Ok, "ok: " + mi.Error + mi.PointsError);
+            Assert.True(mi.BspError == null, "the BSP was read: " + mi.BspError);
+            Assert.Eq(0, mi.EmptyInstances.Count, "no empty instanced geometry");
+            Assert.True(mi.Clusters.HasValue && mi.Clusters.Value > 1, "clusters counted: " + mi.Clusters);
+            Assert.True(mi.EmptyInstanceWarning() == null, "no warning");
+            // a BSP the scenario does not reference: an error string, the query still ok
+            var other = RunMq(scen, "no_such_bsp");
+            Assert.True(other.Ok && other.BspError != null && other.EmptyInstances.Count == 0 && other.Clusters == null, "unknown BSP: error string, ok: " + other.BspError);
+            // no BSP asked (the scenario-only query): nothing read, no error
+            var sc = RunMq(scen, "");
+            Assert.True(sc.Ok && sc.BspError == null && sc.EmptyInstances.Count == 0 && sc.Clusters == null, "scenario-only query");
+        }
+
+        private static void MapQueryEmptyInstancesRealSome()
+        {
+            string scen = Environment.GetEnvironmentVariable("H2LM_TEST_EMPTYINST_SCENARIO");
+            if (string.IsNullOrEmpty(scen)) throw new TestSkip("set H2LM_TEST_EMPTYINST_SCENARIO to a .scenario whose BSP has instanced geometry with no visible geometry (H2LM_TEST_EMPTYINST_BSP: the BSP name, default the scenario's name)");
+            if (!File.Exists(scen)) throw new TestSkip("no " + scen);
+            string bsp = Environment.GetEnvironmentVariable("H2LM_TEST_EMPTYINST_BSP");
+            if (string.IsNullOrEmpty(bsp)) bsp = Path.GetFileNameWithoutExtension(scen);
+            var mi = RunMq(scen, bsp);
+            Assert.True(mi.Ok, "ok: " + mi.Error + mi.PointsError);
+            Assert.True(mi.BspError == null, "the BSP was read: " + mi.BspError);
+            Assert.True(mi.EmptyInstances.Count >= 1, "empty instanced geometry found: " + mi.Raw);
+            Assert.True(mi.Clusters.HasValue && mi.Clusters.Value >= 1, "clusters counted");
+            Assert.True(mi.EmptyInstanceWarning() != null && mi.EmptyInstanceShort().StartsWith("WARNING: ", StringComparison.Ordinal), "warning texts");
+            Console.WriteLine("    " + mi.Raw);
         }
     }
 }

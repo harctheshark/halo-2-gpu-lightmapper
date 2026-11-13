@@ -1,5 +1,5 @@
 // S2.2 preflight on a (possibly foreign) H2EK root: FINAL_DESIGN section 8 + the constraints found by S0.2 (ASCII paths:
-// pwsh decodes `& py` captures as OEM 437) and S0.4 (no '{' '}' in the root: gpu_bake builds $OUT / $SKW with -f format
+// the bake's captured child output was decoded as OEM 437) and S0.4 (no '{' '}' in the root: gpu_bake builds $OUT / $SKW with -f format
 // strings that contain $W). Every check is read-only except the optional write probe (WORK\.write_probe, created and
 // deleted) and EnsureBoundsDb (copies the shipped DB into ROOT only when ROOT has none; never overwrites).
 using System;
@@ -103,9 +103,6 @@ namespace H2GpuLightmapper.Core.Preflight
         /// <summary>The bake's fullgpu carries the NvOptimus / AmdPowerXpress exports (the N3 guarded Custom engine): the plain
         /// verdict on a hybrid PC is then advice only. Default false: Low / Super run the production fullgpu without them.</summary>
         public bool FullgpuSelectsDgpu;
-        /// <summary>The runtime pwsh.exe for the execution-policy / language-mode check (null = skip).</summary>
-        public string PwshExe;
-        public ChildEnvironment PwshEnv;
     }
 
     public static class PreflightChecks
@@ -198,7 +195,6 @@ namespace H2GpuLightmapper.Core.Preflight
                 else if (plain.Raw != null)
                     rep.Add("gpu.hybrid", CheckLevel.Info, "two GPUs; programs without a preference get " + (plain.DefaultAdapter ?? "?") + ", which is suitable", plain.Line);
             }
-            if (o.PwshExe != null) CheckPwshPolicy(rep, o);
             return rep;
         }
 
@@ -370,29 +366,6 @@ namespace H2GpuLightmapper.Core.Preflight
             if (rep.Precision == PrecisionMode.Compat) rep.Add("gpu.precision", CheckLevel.Info, GpuCheck.PrecisionCompat, string.Join("; ", g.Notes));
             else rep.Add("gpu.precision", CheckLevel.Info, GpuCheck.PrecisionFull);
             foreach (var a in g.Advice) rep.Add("gpu.advice", CheckLevel.Warn, a + " (advice only; the app never changes system settings)");
-        }
-
-        /// <summary>Execution policy and language mode as the bundled pwsh sees them (S0.2): a Group-Policy AllSigned /
-        /// Restricted overrides -ExecutionPolicy Bypass, and Constrained Language Mode (Smart App Control / WDAC) cannot run
-        /// gpu_bake.ps1.</summary>
-        private static void CheckPwshPolicy(PreflightReport rep, PreflightOptions o)
-        {
-            const string script = "Get-ExecutionPolicy -List | ForEach-Object { 'POLICY ' + $_.Scope + '=' + $_.ExecutionPolicy }; 'LANG ' + $ExecutionContext.SessionState.LanguageMode";
-            ProcessRunner.Result r;
-            try
-            {
-                r = ProcessRunner.RunCapture(o.PwshExe, new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script },
-                    Path.GetDirectoryName(o.PwshExe), o.PwshEnv, 30000);
-            }
-            catch (Exception e) { rep.Add("pwsh.policy", CheckLevel.Fail, "the bundled PowerShell could not start: " + e.Message); return; }
-            var pol = r.StdoutLines.Where(l => l.StartsWith("POLICY ", StringComparison.Ordinal)).Select(l => l.Substring(7)).ToList();
-            string lang = r.StdoutLines.Where(l => l.StartsWith("LANG ", StringComparison.Ordinal)).Select(l => l.Substring(5).Trim()).FirstOrDefault();
-            if (r.ExitCode != 0 || lang == null) { rep.Add("pwsh.policy", CheckLevel.Fail, "the bundled PowerShell failed (exit " + ProcessRunner.FormatExit(r.ExitCode) + "): " + string.Join(" / ", r.StderrLines.Take(3))); return; }
-            var gpo = pol.Where(p => p.StartsWith("MachinePolicy=", StringComparison.OrdinalIgnoreCase) || p.StartsWith("UserPolicy=", StringComparison.OrdinalIgnoreCase))
-                         .Where(p => { string v = p.Substring(p.IndexOf('=') + 1); return v != "Undefined" && v != "Bypass" && v != "Unrestricted" && v != "RemoteSigned"; }).ToList();
-            if (gpo.Count > 0) rep.Add("pwsh.policy", CheckLevel.Fail, "a Group Policy forces the PowerShell execution policy (" + string.Join(", ", gpo) + "), which blocks the unsigned bake script", string.Join("; ", pol));
-            else if (lang != "FullLanguage") rep.Add("pwsh.policy", CheckLevel.Fail, "PowerShell runs in " + lang + " (Smart App Control / application control policy); the bake script needs FullLanguage", string.Join("; ", pol));
-            else rep.Add("pwsh.policy", CheckLevel.Ok, "PowerShell: FullLanguage, execution policy not forced", string.Join("; ", pol));
         }
 
         /// <summary>

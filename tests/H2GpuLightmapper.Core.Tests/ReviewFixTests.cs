@@ -259,7 +259,7 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.Eq(RestoreOutcome.Refused, refused.Outcome, "no new restore over an unfinished one");
             var req = StartupRecovery.RestoreRequestFor(it, f.Root, f.Work);
             req.PyExe = C.PyExe; req.LmwInstallPy = C.FxLmwInstall;
-            req.Env = BakeEnv.Build(new H2Lm.Proc.BakeEnvSpec { PwshDir = C.PwshDir, PyDir = C.PyDir, Root = f.Root, Work = f.Work });
+            req.Env = BakeEnv.Build(new H2Lm.Proc.BakeEnvSpec { PyDir = C.PyDir, Root = f.Root, Work = f.Work });
             var rr = TagInstaller.Restore(req);
             Assert.Eq(InstallOutcome.Installed, rr.Outcome, "lmw_install restore exit 0: " + rr.Message + " / " + string.Join(" / ", rr.Lines));
             foreach (var kv in before) Assert.Eq(kv.Value, f.Md5(kv.Key), kv.Key + " rolled back to before the restore");

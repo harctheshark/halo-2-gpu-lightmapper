@@ -58,7 +58,7 @@ namespace H2GpuLightmapper.Pipeline
             var inst = m == null ? null : m.InstComponent;
             Func<string, string> md5Of = rel => inst == null ? null : inst.Find(rel) == null ? null : inst.Find(rel).Md5.ToLowerInvariant();
             id.Binaries["estimatorDll"] = md5Of(InstLayout.EstimatorDll);
-            id.Binaries["fullgpu"] = md5Of(gpuBakeRel.Replace("gpu_bake.ps1", "v041-fullgpu/fullgpu.exe"));
+            id.Binaries["fullgpu"] = md5Of(InstLayout.Sibling(gpuBakeRel, "v041-fullgpu/fullgpu.exe"));
             id.Binaries["gpuBake"] = md5Of(gpuBakeRel);
             id.Binaries["toolFast"] = toolMd5 ?? Md5OrNull(Path.Combine(root, "tool_fast.exe"));
             id.Binaries["boundsDb"] = Md5OrNull(Path.Combine(root, "h2v_scenery_bounds.db"));

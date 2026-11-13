@@ -1,0 +1,51 @@
+# title: P6e gpu_ao.py: trace starts the engine's h2lm-bake.exe (1.0 native bake program, same arguments)
+# source: _research/ao/gpu_ao.py
+# base-md5: d73740c3ff866dfb2ddcad1043ba9d58
+# result-md5: 83513a379cca63ad1eef0d51e9b93f6b
+--- a/_research/ao/gpu_ao.py
++++ b/_research/ao/gpu_ao.py
+@@ -2,7 +2,7 @@
+ Model: Unreal Lightmass AO as written up in the user's guide _research\\ao\\AO_PASS_FOR_H2.md (the guide wins over ue5_ao_spec.md).
+ AO is OFF by default (strength 0). NOTHING here ever writes a live tag unless `install --write-back` is given.
+ 
+-  trace     run  gpu_bake.ps1 -AOOnly  on a farm dir (GPU, ~20 s on cyclotron): one representative sample per texel, 1024 cosine-weighted rays (--rays; was 64),
++  trace     run  h2lm-bake.exe -AOOnly  on a farm dir (GPU, ~20 s on cyclotron): one representative sample per texel, 1024 cosine-weighted rays (--rays; was 64),
+             tmax = D  ->  farm_wNN\\ao\\trace\\ao_vis.bin (+ ao_vertex.bin, ao_scenery.bin).  Writes nothing else in the farm root.
+   apply     numpy, seconds, no GPU: occ -> direct *= 1 - strength*direct_frac*occ, indirect *= 1 - strength*indirect_frac*occ  on atlas_split's
+             d3/i3, per-vertex rows with the mean of the two fractions; rebuilds vertdir.  -> farm_wNN\\ao\\<tag>\\run\\  (the farm's own products untouched)
+@@ -150,7 +150,7 @@
+ # ------------------------------------------------------------------------------------------------ trace
+ def cmd_trace(a):
+     engine = os.path.abspath(a.engine)
+-    if not os.path.exists(os.path.join(engine, 'gpu_bake.ps1')): die('no gpu_bake.ps1 in %s' % engine)
++    if not os.path.exists(os.path.join(engine, 'h2lm-bake.exe')): die('no h2lm-bake.exe in %s' % engine)   # P6e (1.0): the native bake program
+     farm = farm_dir(a)
+     if not os.path.isdir(farm): die('no farm dir %s' % farm)
+     lock = os.path.join(farm, '.gpu_bake.lock')
+@@ -158,7 +158,7 @@
+     p = a.params_override
+     if not (0.0 < a.distance < 64.0): die('--distance must be in (0, 64) world units')
+     if not (1 <= a.rays <= 4096): die('--rays must be in 1..4096')
+-    cmd = ['pwsh', '-NoProfile', '-NonInteractive', '-File', os.path.join(engine, 'gpu_bake.ps1'), '-Scenario', a.scenario, '-Bsp', a.bsp,
++    cmd = [os.path.join(engine, 'h2lm-bake.exe'), '-Scenario', a.scenario, '-Bsp', a.bsp,
+            '-Worker', str(a.worker), '-SkipCapture', '-AOOnly', '-AODistance', repr(a.distance), '-AORays', str(a.rays)]
+     if a.quality: cmd += ['-Quality', a.quality]              # P6: the bake's own quality (a LOW bake is ssN 1); not given = gpu_bake's default super, as before
+     if a.plucker_fix: cmd.append('-PluckerFix')
+@@ -168,7 +168,7 @@
+     if a.strict_window: cmd.append('-AOStrictWindow')
+     os.makedirs(os.path.join(farm, 'ao'), exist_ok=True)
+     logf = os.path.join(farm, 'ao', 'gpu_ao_trace_driver.log')
+-    log('tracing: %s' % ' '.join(cmd[4:]))
++    log('tracing: %s' % ' '.join(cmd))
+     trd = os.path.join(farm, 'ao', 'trace'); dest = hold = None
+     if a.name:                                        # an A/B trace kept beside the default one: `trace` is put aside, the result becomes trace_<name>, `trace` comes back
+         dest = os.path.join(farm, 'ao', 'trace_' + a.name); hold = trd + '.hold_' + time.strftime('%H%M%S')
+@@ -644,7 +644,7 @@
+         p.add_argument('--worker', type=int, default=71, help='farm_wNN number')
+         p.add_argument('--farm', default=None, help='or the farm dir itself')
+         p.add_argument('--scenario', default=r'scenarios\multi\cyclotron\cyclotron'); p.add_argument('--bsp', default='cyclotron')
+-        p.add_argument('--engine', default=ENGINE_DEFAULT, help='engine dir holding gpu_bake.ps1 + v043-tagwriter (default: dev_AO2)')
++        p.add_argument('--engine', default=ENGINE_DEFAULT, help='engine dir holding h2lm-bake.exe + v043-tagwriter (default: dev_AO2)')
+         if tag: p.add_argument('--tag', required=True)
+     p = sub.add_parser('trace'); common(p, False)
+     p.add_argument('--distance', type=float, default=DEFAULT_D, help='max occlusion distance, world units (default 0.656168 = 2 m)')

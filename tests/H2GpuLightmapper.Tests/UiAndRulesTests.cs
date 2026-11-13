@@ -49,7 +49,7 @@ namespace H2GpuLightmapper.Tests
             foreach (var dev in new[] { false, true })
             {
                 string png = Path.Combine(C.Sb.Dir("ui"), dev ? "window_custom.png" : "window.png");
-                var a = new List<string> { "--payload-dir", dev ? guarded : C.PayloadDir, "--localappdata", C.Lad, "--alias-volume-root", C.Vol, "--rt-pwsh", C.PwshDir, "--rt-py", C.PyDir,
+                var a = new List<string> { "--payload-dir", dev ? guarded : C.PayloadDir, "--localappdata", C.Lad, "--alias-volume-root", C.Vol, "--rt-py", C.PyDir,
                                            "--h2ek", r.Root, "--scenario", @"scenarios\multi\triplicate\triplicate", "--bsp", "triplicate",
                                            "--dev-ui-snapshot", png, "--dev-ui-snapshot-delay-ms", "6000" };
                 if (dev) a.AddRange(new[] { "--dev-probes", "--dev-ui-preset", "custom,ao,advanced,lightmap,responsive,directsamples" });   // 0.6.12: + the direct-samples opt-in (its Custom box is then shown)
@@ -75,7 +75,7 @@ namespace H2GpuLightmapper.Tests
         {
             var r = C.NewRoot();
             string png = Path.Combine(C.Sb.Dir("ui"), "window_after_bake.png");
-            var a = new List<string> { "--payload-dir", C.PayloadDir, "--localappdata", C.Lad, "--alias-volume-root", C.Vol, "--rt-pwsh", C.PwshDir, "--rt-py", C.PyDir,
+            var a = new List<string> { "--payload-dir", C.PayloadDir, "--localappdata", C.Lad, "--alias-volume-root", C.Vol, "--rt-py", C.PyDir,
                                        "--h2ek", r.Root, "--scenario", @"scenarios\multi\triplicate\triplicate", "--bsp", "triplicate",
                                        "--dev-ui-snapshot", png, "--dev-ui-snapshot-delay-ms", "6000", "--dev-ui-autobake", "--dev-skip-preflight", "--dev-skip-gpucheck", "--dev-probes" };
             var res = C.Run(a, 240000);

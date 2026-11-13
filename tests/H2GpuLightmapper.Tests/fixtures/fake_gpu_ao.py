@@ -1,7 +1,7 @@
 """S2.5/S3 test stand-in for INST\\_research\\ao\\gpu_ao.py (P6). Same verbs / options the shell passes (trace, apply, stage);
 writes the farm files the next verb and the shell read; never a GPU, never a tags tree. Every call is appended to
 H2LM_WORK\\fake_calls.log (one JSON line)."""
-import argparse, hashlib, json, os, shutil, sys
+import argparse, hashlib, json, os, shutil, subprocess, sys
 sys.dont_write_bytecode = True
 
 W = os.environ.get('H2LM_WORK')
@@ -38,13 +38,17 @@ for v in ('trace', 'apply', 'stage'):
 a = ap.parse_args()
 if not W or not os.path.isdir(W):
     die('H2LM_WORK is not set')
-rec(dict(tool='gpu_ao', argv=sys.argv, cwd=os.getcwd(), h2lm_root=os.environ.get('H2LM_ROOT'), pwsh_on_path=shutil.which('pwsh'),
+rec(dict(tool='gpu_ao', argv=sys.argv, cwd=os.getcwd(), h2lm_root=os.environ.get('H2LM_ROOT'), py_on_path=shutil.which('py'),
          gpulm=sorted(k for k in os.environ if k.startswith('GPULM_')), pythonpath=os.environ.get('PYTHONPATH')))
 farm = os.path.abspath(a.farm)
 if os.path.basename(farm).lower() != 'farm_w%02d' % a.worker:
     die('--farm is not farm_w%02d' % a.worker)
-if not os.path.exists(os.path.join(a.engine, 'gpu_bake.ps1')):
-    die('no gpu_bake.ps1 in %s' % a.engine)
+bake_exe = os.path.join(a.engine, 'h2lm-bake.exe')      # the real driver starts the AO engine copy's bake program
+if not os.path.exists(bake_exe):
+    die('no h2lm-bake.exe in %s' % a.engine)
+_pr = subprocess.run([bake_exe, '--list-params'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env=os.environ)
+if _pr.returncode != 0 or b'Scenario' not in _pr.stdout:
+    die('%s --list-params failed (exit %d): %s' % (bake_exe, _pr.returncode, _pr.stderr.decode('utf-8', 'replace')[-300:]))
 if a.cmd == 'trace':
     if os.path.exists(os.path.join(farm, '.gpu_bake.lock')):
         die('a farm lock exists')

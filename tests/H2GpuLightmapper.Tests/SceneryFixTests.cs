@@ -62,8 +62,7 @@ namespace H2GpuLightmapper.Tests
 
         private static List<string> Tail(JObj call)
         {
-            var a = call.Arr("argv").Cast<string>().ToList();
-            return a.Skip(a.FindIndex(x => x.EndsWith("gpu_bake.ps1", StringComparison.OrdinalIgnoreCase)) + 1).ToList();
+            return call.Arr("argv").Cast<string>().ToList();      // 1.0: the arguments exactly as the bake program received them
         }
 
         private static readonly string[] StageOnlyTail = { "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct" };
@@ -190,12 +189,12 @@ namespace H2GpuLightmapper.Tests
         private static void IdentityUnit()
         {
             string root = C.Sb.Dir("sf_ident");
-            var none = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/gpu_bake.ps1", false, "tt");
+            var none = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/h2lm-bake.exe", false, "tt");
             Assert.True(none.Binaries.ContainsKey("sceneryFixDb") && none.Binaries.ContainsKey("boundsDb"), "both keys exist");
             Assert.Eq(null, none.Binaries["sceneryFixDb"], "absent file -> null");
             File.WriteAllText(Path.Combine(root, SceneryFixDeps.DbName), "x\r\n");
             File.WriteAllText(Path.Combine(root, SceneryFixDeps.LegacyDbName), "y\r\n");
-            var have = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/gpu_bake.ps1", false, "tt");
+            var have = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/h2lm-bake.exe", false, "tt");
             Assert.Eq(Md5(Path.Combine(root, SceneryFixDeps.DbName)), have.Binaries["sceneryFixDb"], "md5 of SceneryFixDependencies.db");
             Assert.Eq(Md5(Path.Combine(root, SceneryFixDeps.LegacyDbName)), have.Binaries["boundsDb"], "md5 of the legacy db");
             // the reuse gate
@@ -207,13 +206,13 @@ namespace H2GpuLightmapper.Tests
             Func<TagsFingerprint> tags = () => TagsFingerprint.Compute(root, set);
             Assert.Eq(null, CaptureRecord.Write(farm, have, @"scenarios\m\m\m", "m", 200, "r", tags(), DateTime.Now), "record written");
             Assert.True(CaptureRecord.Evaluate(farm, have, @"scenarios\m\m\m", "m", false, tags).Allowed, "same identity reuses");
-            var changed = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/gpu_bake.ps1", false, "tt");
+            var changed = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/h2lm-bake.exe", false, "tt");
             changed.Binaries["sceneryFixDb"] = "ffff";
             var v = CaptureRecord.Evaluate(farm, changed, @"scenarios\m\m\m", "m", false, tags);
             Assert.True(!v.Allowed, "a changed sceneryFixDb refuses");
             Assert.Contains(v.Reason, "Scenery Fix Dependencies database changed", "named");
             Assert.Contains(v.Reason, "sceneryFixDb", "which field");
-            var eng = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/gpu_bake.ps1", false, "tt");
+            var eng = CaptureIdentity.For(new BakeOptions(), null, root, "engine_v373/h2lm-bake.exe", false, "tt");
             eng.Binaries["fullgpu"] = "zz";
             Assert.Contains(CaptureRecord.Evaluate(farm, eng, @"scenarios\m\m\m", "m", false, tags).Reason, "the engine changed since the capture", "an engine change keeps the engine wording");
         }

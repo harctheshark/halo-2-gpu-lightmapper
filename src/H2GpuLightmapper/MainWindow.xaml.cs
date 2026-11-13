@@ -275,6 +275,7 @@ namespace H2GpuLightmapper
             _scenarios.Clear(); _scenarioView.Refresh();
             BspCombo.ItemsSource = null;
             MapInfo.Text = "";
+            SetMapInfoWarn(false);
             var inst = _host.HasPayload ? _host.Manifest.InstComponent : null;
             Task.Run(() =>
             {
@@ -554,6 +555,7 @@ namespace H2GpuLightmapper
             if (bsps.Count == 0)
             {
                 MapInfo.Text = "No .scenario_structure_bsp in this scenario's folder.";
+                SetMapInfoWarn(false);
                 ListBspsFromScenario(s, want);       // none beside the scenario: they may all be in other folders
             }
         }
@@ -624,6 +626,7 @@ namespace H2GpuLightmapper
             int ver = ++_mapVersion;
             _mapInfo = null;
             MapInfo.Text = "Reading the map…";
+            SetMapInfoWarn(false);
             var rt = _rt; var env = _env;
             Task.Run(() =>
             {
@@ -647,10 +650,19 @@ namespace H2GpuLightmapper
                         if (ApplyBspChoices(root, scen, qi, keepName) && CurBsp != null && !string.Equals(CurBsp, bsp, StringComparison.OrdinalIgnoreCase)) { RefreshMap(); return; }
                     }
                     MapInfo.Text = MapInfoText(mi, hist, scen, bsp, CurBspRel) + (_bspNotes.Count > 0 ? "  ·  " + string.Join("  ", _bspNotes) : "");
+                    SetMapInfoWarn(mi != null && mi.Ok && mi.EmptyInstanceShort() != null);
                     UpdateOptionUi();
                     RefreshReuse();
                 }));
             });
+        }
+
+        /// <summary>1.0: the map info line in the warning colour while it carries the empty-instanced-geometry warning; otherwise the colour this
+        /// method set is taken back (the line's own style), and any other colour is left as it was.</summary>
+        private void SetMapInfoWarn(bool warn)
+        {
+            if (warn) MapInfo.Foreground = Palette.Warn;
+            else if (MapInfo.Foreground == Palette.Warn) MapInfo.ClearValue(TextBlock.ForegroundProperty);
         }
 
         private static string MapInfoText(MapInfo mi, List<HistoryEntry> hist, string scen, string bsp, string bspRel = null)
@@ -663,6 +675,8 @@ namespace H2GpuLightmapper
             {
                 parts.Add(mi.Points == 0 ? "no light probe points" : mi.Points + " light probe point(s)");
                 parts.Add(mi.LtmpExists ? "lightmap present" + (mi.Envs.HasValue ? " (" + mi.Envs + " lighting environment(s))" : "") : "no lightmap yet");
+                string ew = mi.EmptyInstanceShort();        // 1.0: instanced geometry with no visible geometry (a % object holding only +portal faces): a warning only
+                if (ew != null) parts.Add(ew);
             }
             var last = History.Last(hist, scen, bsp);
             if (last != null) parts.Add("last bake " + last.StartedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " " + last.Quality + " " + last.State.ToLowerInvariant() + " (" + History.Dur(last.Seconds) + ")");

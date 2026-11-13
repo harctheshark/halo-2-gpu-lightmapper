@@ -1,5 +1,5 @@
 """S2.5/S3 test stand-in for INST\\_research\\lightprobes\\gpu_lightprobes.py (P5). Same options and the same child shape: it runs
-<stage>\\gpu_bake.ps1 (the FAKE gpu_bake in the test payload) through --pwsh with GPULM_PROBES + GPULM_SKY_HI=1 added to the
+<stage>\\h2lm-bake.exe (the FAKE bake program in the test payload; it needs `py` on the PATH it is given) with GPULM_PROBES + GPULM_SKY_HI=1 added to the
 environment it was given, its output in OUT\\gpu_bake.log (the shell tails it), then requires the probe-ready sky files and
 writes OUT\\probes.bin + OUT\\<ltmp> (= --ltmp-src with its last 8 bytes replaced by 'SHSHSHSH': same size, like lp_write_sh).
 Knob: H2LM_WORK\\fake_control.txt "probes=ok|fail|points=N"."""
@@ -11,7 +11,7 @@ ap.add_argument('--scenario', required=True); ap.add_argument('--bsp', required=
 ap.add_argument('--worker', type=int, required=True); ap.add_argument('--stage', required=True)
 ap.add_argument('--skip-capture', action='store_true'); ap.add_argument('--out', required=True)
 ap.add_argument('--sever', default=None); ap.add_argument('--ltmp-src', required=True)
-ap.add_argument('--h2-root', required=True); ap.add_argument('--farm', required=True); ap.add_argument('--pwsh', required=True)
+ap.add_argument('--h2-root', required=True); ap.add_argument('--farm', required=True)      # no --pwsh any more: the bake program is run directly
 ap.add_argument('--plucker-fix', action='store_true'); ap.add_argument('--scenery-fix', action='store_true')
 ap.add_argument('--photons', type=int, default=None); ap.add_argument('--mc-samples', type=int, default=None)
 a = ap.parse_args()
@@ -41,7 +41,7 @@ with open(os.path.join(a.out, 'probes.bin'), 'wb') as f:
     for i in range(n):
         f.write(struct.pack('<3f', float(i), 0.0, 1.0))
 env = dict(os.environ); env['GPULM_PROBES'] = os.path.join(a.out, 'probes.bin'); env['GPULM_SKY_HI'] = '1'; env['H2LM_ROOT'] = a.h2_root
-bake = [a.pwsh, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', os.path.join(a.stage, 'gpu_bake.ps1'), '-Scenario', a.scenario,
+bake = [os.path.join(a.stage, 'h2lm-bake.exe'), '-Scenario', a.scenario,
         '-Bsp', a.bsp, '-Worker', str(a.worker), '-Quality', a.quality] + (['-SkipCapture'] if a.skip_capture else [])
 bake += (['-PluckerFix'] if a.plucker_fix else []) + (['-SceneryFix'] if a.scenery_fix else []) + (['-Photons', str(a.photons)] if a.photons is not None else []) + (
          ['-MCSamples', str(a.mc_samples)] if a.mc_samples is not None else [])

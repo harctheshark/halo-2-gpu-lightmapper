@@ -8,7 +8,7 @@ namespace H2GpuLightmapper.Tests
 {
     /// <summary>
     /// S2.5 + S3.1-S3.4 tests. Usage:
-    ///   H2GpuLightmapper.Tests.exe [--filter text] [--keep] [--exe path] [--pwsh dir] [--py dir] [--mine root]
+    ///   H2GpuLightmapper.Tests.exe [--filter text] [--keep] [--exe path] [--py dir] [--mine root]
     /// Production is only READ (md5-checked copies of lmw_install.py, lmw_tagio + defs, the estimator DLLs; copies of the
     /// cyclotron / triplicate scenario + triplicate lightmap; a read-only dry run on ProdRoot). Scratch: build\s25\t\&lt;id&gt;
     /// (payload, fixtures, UI snapshots) and a short %TEMP%\s25\&lt;hh&gt;\ (sandbox H2EK roots, LOCALAPPDATA, alias volume).
@@ -33,7 +33,6 @@ namespace H2GpuLightmapper.Tests
                 else if (a == "--skip") skips.Add(next());
                 else if (a == "--keep") c.Keep = true;
                 else if (a == "--exe") c.Exe = next();
-                else if (a == "--pwsh") c.PwshDir = next();
                 else if (a == "--py") c.PyDir = next();
                 else if (a == "--mine") c.MineRoot = next();
                 else if (a == "--clean-kept") return CleanKept();

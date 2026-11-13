@@ -9,18 +9,18 @@ This page says what is needed to build the app, and says plainly what this repos
 - **patches** (`patches/`) that adapt the engine scripts to the exe, with their series files;
 - **native sources** (`native/`): `gpucheck` (the GPU capability check), the `osoy_launch` patch and its build script, and the
   build scripts for the guarded GPU host (`fullgpu_guard`);
-- **test sources** (`tests/`) and the Python bundle scripts (`build/s03/`, `build/fetch_pwsh.py`).
+- **test sources** (`tests/`) and the Python bundle scripts (`build/s03/`).
 
 ## What is NOT in this repository
 
 **The GPU engine.** The engine binaries (`fullgpu.exe`, the estimator/capture DLLs, `inject.exe`, `seamfast.dll`, ...), the
-HLSL kernels, the capture-DLL source, the engine's PowerShell and Python pipeline (`gpu_bake.ps1` and the numeric scripts) and
+HLSL kernels, the capture-DLL source, the engine's bake driver and Python pipeline (the source of `h2lm-bake.exe` and the numeric scripts) and
 the tag-writer scripts are shipped **inside the release exe**, and their source is not part of this snapshot. The patches in
 `patches/` apply to those files and are pinned by md5 to the engine version they were written for, so they cannot be applied
 without it.
 
-Also not here: the Halo 2 Editing Kit (it comes from the user's own Steam install), the portable PowerShell zip and the
-CPython install (downloaded or taken from a local install at build time), prebuilt binaries of any kind, and the gate proof
+Also not here: the Halo 2 Editing Kit (it comes from the user's own Steam install), the CPython install (taken from a local
+install at build time), prebuilt binaries of any kind, and the gate proof
 records (`T4_PROOF.json`, `AO_ENGINE_PROOF.json`) that the payload builder consults before it enables light probes, AO and Custom.
 
 Consequence: **you can build and run the app shell from this repository; you cannot rebuild the release exe from it.** To get a
@@ -64,8 +64,8 @@ Need **Visual Studio 2022 with the MSVC 14.44 toolset** (the build scripts call 
 - a **production engine tree**: a folder `<H2EK_ROOT>\GPU Lightmap Work\` with `engine_v373` (and the AO and probe research
   drivers) at the md5s the patch series pins. Pass it with `--glw` (and `--h2root` for the H2EK root). The roots in
   `payload_spec.json` are the placeholders `<H2EK_ROOT>`; replace them or use the command-line overrides;
-- the **PowerShell 7.6.6** zip (`python build\fetch_pwsh.py fetch --allow-download` downloads the official release and
-  verifies its SHA-256);
+- the built **`h2lm-bake.exe`**, the native bake driver (its path is passed in the environment variable `H2LM_BAKE_EXE`; its
+  source is part of the engine and is not in this repository). Until 0.6.12 this was a bundled PowerShell 7 runtime;
 - a **CPython 3.10.5 x64 install with numpy 2.2.6** on the build PC, from which `build\s03\make_pybundle.py` makes the isolated
   runtime;
 - the **Osoyoos** `H2ToolHooks.dll` and `h2v_scenery_bounds.db` (MIT), and the built `gpucheck.exe` and `osoy_launch.exe`;
@@ -87,8 +87,7 @@ and engine tree, and they read their locations from environment variables instea
 | `H2LM_TEST_ROOT` | the H2EK root (the launcher self-test) |
 | `H2LM_TEST_STEAM_LIB`, `H2LM_TEST_LONGPATH_ROOT` | optional: a Steam library with the stock H2EK, and an H2EK whose work path is 70 characters; those tests skip when unset |
 
-Some tests also expect the unpacked PowerShell and Python bundle at `cache\` and `build\s03\out\` (see `build/fetch_pwsh.py`
-and `build/s03/make_pybundle.py`). Production files are only read; none of the tests writes live tags or starts a GPU bake.
+Some tests also expect the unpacked Python bundle at `build\s03\out\` (see `build/s03/make_pybundle.py`). Production files are only read; none of the tests writes live tags or starts a GPU bake.
 
 ## Public-copy notes
 

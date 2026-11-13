@@ -92,7 +92,7 @@ namespace H2GpuLightmapper.Core.Tests
             var ic = inst.Manifest.InstComponent;
             string dir = inst.Resolve(root).InstDir;
             string dll = Path.Combine(dir, @"engine_v373\v014-inject-estimator\gpulm_estimator.dll");
-            string ps1 = Path.Combine(dir, @"engine_v373\gpu_bake.ps1");
+            string ps1 = Path.Combine(dir, @"engine_v373\fake_gpu_bake.py");
             File.Delete(dll);                                          // simulated: missing
             var b = File.ReadAllBytes(ps1); b[5] ^= 0x01; File.WriteAllBytes(ps1, b);   // simulated: md5 mismatch
             var v = inst.VerifyBeforeBake(root);

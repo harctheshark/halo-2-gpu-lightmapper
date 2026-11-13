@@ -1,10 +1,10 @@
 """zip_payloads.py -- S1.9: the payload resources of H2 GPU Lightmapper.exe. Stdlib only.
 
 Writes <out>\\ (default build\\s19\\payload\\; the exe build embeds every *.zip there plus MANIFEST.json):
-  rt-pwsh-7.6.6.zip      PowerShell 7.6.6, re-packed from the sha256-verified official PowerShell-7.6.6-win-x64.zip (S0.2)
   rt-py310-np226.zip     the S0.3 isolated CPython 3.10.5 + numpy 2.2.6 bundle, verbatim after a full check (format, every entry
                          md5 == its H2LM_PYBUNDLE.json, bundle_id recomputed, no scipy: the N4 gate passed)
-  NOTICES.zip            NOTICES.txt + licenses\\ (PowerShell LICENSE + ThirdPartyNotices, CPython / PSF, NumPy, Osoyoos MIT)
+  NOTICES.zip            NOTICES.txt + licenses\\ (CPython / PSF, NumPy, Osoyoos MIT, h2conv GPL)
+  (1.0: no shell runtime component: the engine folders carry the bake program h2lm-bake.exe; see stage_engine.py)
   engine-<ver>.zip       INST, from stage_engine.py's stage (every staged file re-hashed against its stage report first)
   MANIFEST.json          format 1 (S0.1 / S2.1): per component name, resource, dirName, target, zipSize, zipMd5, fileCount,
                          totalBytes, maxPathLen, files[{path, size, md5, sourceMd5?, role?}]
@@ -38,6 +38,13 @@ TOOL = 'zip_payloads.py (S1.9)'
 
 def component(name, zip_path, files, target, dir_tmpl, app_version):
     h8 = L.content_hash(files)[:8]
+    c = _component(name, zip_path, files, target, dir_tmpl, app_version, h8)
+    if any(f.get('packed') for f in files):
+        c['packEntry'] = L.PACK_NAME     # 1.0: the files flagged "packed" are inside this entry (one LZMA stream)
+    return c
+
+
+def _component(name, zip_path, files, target, dir_tmpl, app_version, h8):
     return {
         'name': name,
         'resource': 'payload/' + os.path.basename(zip_path),
@@ -84,38 +91,15 @@ def zip_inst(spec, stage, out_dir, app_version):
         raise Refused('stage content hash mismatch')
     ispec = spec['inst']
     zp = os.path.join(out_dir, ispec['zip'].format(appVersion=app_version))
-    recs = L.write_det_zip(zp, entries)
+    recs = L.write_det_zip(zp, entries, pack=L.pack_binaries)
     files.sort(key=lambda f: f['path'])
     if [(x['path'], x['md5']) for x in recs] != [(f['path'], f['md5']) for f in files]:
         raise Refused('INST zip order / content mismatch')
+    for f, x in zip(files, recs):
+        if x.get('packed'):
+            f['packed'] = True
     return component(ispec['name'], zp, files, 'inst', ispec['dirName'], app_version), rep
 
-
-# ---------------------------------------------------------------------------------------------------------------- pwsh
-def zip_pwsh(spec, out_dir, app_version, keep):
-    ps = spec['rt']['pwsh']
-    src = L.resolve(ps['source_zip'], {})
-    fp = L.load_module('h2lm_fetch_pwsh', L.resolve(ps['verifier'], {}))
-    ok, msg = fp.verify_zip(src)
-    if not ok:
-        raise Refused('PowerShell zip %s: %s (build\\fetch_pwsh.py fetch --allow-download re-fetches the approved release)' % (src, msg))
-    entries = []
-    with zipfile.ZipFile(src) as z:
-        for i in z.infolist():
-            if i.is_dir():
-                continue
-            name = i.filename.replace('\\', '/')
-            data = z.read(i)            # CRC-checked by zipfile
-            entries.append((name, data))
-            if name in keep:
-                keep[name] = data
-    names = set(n for n, _ in entries)
-    if 'pwsh.exe' not in names:
-        raise Refused('%s has no pwsh.exe at its root' % src)
-    zp = os.path.join(out_dir, ps['zip'])
-    files = L.write_det_zip(zp, entries)
-    return component(ps['name'], zp, files, 'rt', ps['dirName'], app_version), {'source_zip': src, 'source_check': msg,
-                                                                                     'version': fp.VERSION, 'sha256': fp.SHA256}
 
 
 # ---------------------------------------------------------------------------------------------------------------- py
@@ -191,6 +175,16 @@ def zip_py(spec, out_dir, app_version, keep):
     if scrubbed:
         files = with_member(files, 'H2LM_PYBUNDLE.json', new_json)
         entries['H2LM_PYBUNDLE.json'] = new_json
+    if L.pack_enabled():
+        # 1.0: the bundle is re-written with its files in one LZMA pack; every member is carried byte for byte and re-verified
+        recs = L.write_det_zip(zp, sorted(entries.items()), pack=L.pack_all)
+        if [(x['path'], x['size'], x['md5']) for x in recs] != sorted((f['path'], f['size'], f['md5']) for f in files):
+            raise Refused('the packed Python bundle differs from the verified one')
+        files = recs
+        probs = L.check_det_zip(zp, files)
+        if probs:
+            raise Refused('the packed Python bundle does not verify: %s' % '; '.join(probs[:5]))
+    elif scrubbed:
         L.write_det_zip(zp, sorted(entries.items()))
         probs = L.check_det_zip(zp, files)
         if probs:
@@ -249,32 +243,26 @@ def zip_mapbake(spec, out_dir, app_version):
     if 'mapbake.py' not in entries:
         raise Refused('mapbake.py missing')
     zp = os.path.join(out_dir, mb['zip'])
-    files = L.write_det_zip(zp, sorted(entries.items()))
+    files = L.write_det_zip(zp, sorted(entries.items()), pack=L.pack_all)
     return component(mb['name'], zp, files, 'rt', mb['dirName'], app_version), {'h2conv_source': src, 'files': len(files), 'license_md5': mb['license_md5']}, lic
 
 
 # ---------------------------------------------------------------------------------------------------------------- notices
-SECTIONS = """1. PowerShell {pwsh_version} -- Copyright (c) Microsoft Corporation -- MIT License
-   The unmodified files of the official PowerShell-{pwsh_version}-win-x64.zip (sha256 {pwsh_sha256}).
-   PowerShell's ThirdPartyNotices.txt lists the open-source components PowerShell itself contains (the .NET runtime and
-   libraries among them) and their licenses.
-   Files: licenses\\PowerShell\\LICENSE.txt, licenses\\PowerShell\\ThirdPartyNotices.txt
-
-2. Python {python} -- Copyright (c) Python Software Foundation -- PSF License Agreement for Python
+SECTIONS = """1. Python {python} -- Copyright (c) Python Software Foundation -- PSF License Agreement for Python
    An isolated copy of the official Windows x64 CPython {python} files (bundle {bundle_id}). site.py is patched so the user
    site-packages stays off in isolated mode, and a sitecustomize.py is added. CPython's LICENSE.txt also carries the
    licenses of the libraries CPython includes (OpenSSL, libffi, SQLite, zlib, bzip2, xz, expat, ...).
    File: licenses\\CPython\\LICENSE.txt
 
-3. NumPy {numpy} -- Copyright (c) NumPy Developers -- BSD 3-Clause License
+2. NumPy {numpy} -- Copyright (c) NumPy Developers -- BSD 3-Clause License
    numpy's LICENSE.txt also carries the licenses of the libraries its wheel bundles (OpenBLAS, LAPACK, the GCC runtime).
    File: licenses\\NumPy\\LICENSE.txt
 
-4. Microsoft Visual C++ runtime DLLs -- Copyright (c) Microsoft Corporation
+3. Microsoft Visual C++ runtime DLLs -- Copyright (c) Microsoft Corporation
    vcruntime140.dll and vcruntime140_1.dll (shipped with CPython) and numpy.libs\\msvcp140-*.dll (shipped with NumPy), as
    redistributed by those projects under the Microsoft Visual C++ redistributable terms.
 
-5. Osoyoos Launcher -- Copyright (c) 2017 num0005, Copyright (c) 2022 Osoyoos Launcher Contributors -- MIT License
+4. Osoyoos Launcher -- Copyright (c) 2017 num0005, Copyright (c) 2022 Osoyoos Launcher Contributors -- MIT License
    osoyoos\\H2ToolHooks.dll is built from the Osoyoos launcher's H2ToolHooks source (the Halo 2 tool fixes this program
    turns on). standalone\\h2v_scenery_bounds.db is the scenery bounds database the Osoyoos scenery fix reads; it is copied
    into your H2EK folder only when that folder has none. SceneryFixDependencies.db (0.6.2) is the per-model dependency
@@ -284,7 +272,7 @@ SECTIONS = """1. PowerShell {pwsh_version} -- Copyright (c) Microsoft Corporatio
    same MIT notice. The scanner keeps h2v_scenery_bounds.db in step, after a timestamped backup.
    File: licenses\\Osoyoos\\LICENSE.md
 
-6. h2conv (Halo 2 MCC to Vista Converter) -- GPL-3.0-or-later source files + proprietary compiled modules -- the converter that reads and writes the map of the ".map file" source
+5. h2conv (Halo 2 MCC to Vista Converter) -- GPL-3.0-or-later source files + proprietary compiled modules -- the converter that reads and writes the map of the ".map file" source
    A SEPARATE program in the runtime folder mapbake-<hash>\\h2conv\\ (without its xbox package, Xbox map conversion, which this program never uses).
    Its Python source files (*.py) are GPL-3.0-or-later; their complete corresponding source is the shipped files themselves.  Its compiled
    modules (*.pyd) are proprietary: Copyright (C) 2026 harctheshark, all rights reserved; they are not covered by the GPL.  It also bundles,
@@ -298,15 +286,13 @@ SECTIONS = """1. PowerShell {pwsh_version} -- Copyright (c) Microsoft Corporatio
    File: licenses\\h2conv\\LICENSE.txt"""
 
 
-def zip_notices(spec, out_dir, app_version, keep, pwsh_info, py_info, h2conv_license=None):
+def zip_notices(spec, out_dir, app_version, keep, py_info, h2conv_license=None):
     n = spec['notices']
     oso_p = L.resolve(n['osoyoos_license'], {})
     oso = open(oso_p, 'rb').read()
     if L.md5_bytes(oso) != n['osoyoos_license_md5']:
         raise Refused('%s md5 %s is not the recorded %s' % (oso_p, L.md5_bytes(oso), n['osoyoos_license_md5']))
-    lic = [('licenses/PowerShell/LICENSE.txt', keep['LICENSE.txt@pwsh']),
-           ('licenses/PowerShell/ThirdPartyNotices.txt', keep['ThirdPartyNotices.txt']),
-           ('licenses/CPython/LICENSE.txt', keep['LICENSE.txt@py']),
+    lic = [('licenses/CPython/LICENSE.txt', keep['LICENSE.txt@py']),
            ('licenses/NumPy/LICENSE.txt', keep['site-packages/numpy-2.2.6.dist-info/LICENSE.txt']),
            ('licenses/Osoyoos/LICENSE.md', oso)]
     if h2conv_license is not None:
@@ -315,7 +301,7 @@ def zip_notices(spec, out_dir, app_version, keep, pwsh_info, py_info, h2conv_lic
         if not d:
             raise Refused('license text %s not found in its component' % p)
     head = open(L.resolve(n['header'], {}), encoding='utf-8').read()
-    sec = SECTIONS.format(pwsh_version=pwsh_info['version'], pwsh_sha256=pwsh_info['sha256'], python=py_info['python'],
+    sec = SECTIONS.format(python=py_info['python'],
                           numpy=py_info['numpy'], bundle_id=py_info['bundle_id'][:8])
     parts = [head.replace('{COMPONENTS}', sec).rstrip('\n'), '']
     for p, d in lic:
@@ -356,6 +342,10 @@ def validate_manifest(m):
             seen.add(p.lower())
             if len(f['md5']) != 32:
                 raise Refused('%s: %s md5' % (c['name'], p))
+            if f.get('packed') and c.get('packEntry') != L.PACK_NAME:
+                raise Refused('%s: %s is packed but the component names no pack entry' % (c['name'], p))
+        if c.get('packEntry') and not any(f.get('packed') for f in c['files']):
+            raise Refused('%s: a pack entry is named but no file is packed' % c['name'])
         probs = L.check_det_zip(os.path.join(m['_dir'], c['resource'].split('/', 1)[1]), c['files'])
         if probs:
             raise Refused('%s zip does not match its manifest entry: %s' % (c['name'], '; '.join(probs[:5])))
@@ -363,12 +353,14 @@ def validate_manifest(m):
     if len(inst) != 1:
         raise Refused('exactly one inst component is required, found %d' % len(inst))
     rt = [c for c in m['components'] if c['target'] == 'rt']
-    if not any(any(f['path'] == 'pwsh.exe' for f in c['files']) for c in rt):
-        raise Refused('no rt component holds pwsh.exe at its root')
+    if any(any(f['path'].lower() == 'pwsh.exe' for f in c['files']) for c in rt):
+        raise Refused('an rt component holds pwsh.exe: 1.0 ships no shell runtime')
     if not any(any(f['path'] == 'py.exe' for f in c['files']) for c in rt):
         raise Refused('no rt component holds py.exe at its root')
     ip = set(f['path'] for f in inst[0]['files'])
-    for need in ('engine_v373/gpu_bake.ps1', 'engine_v373/v043-tagwriter/lmw_install.py'):
+    if any(p.lower().endswith('.ps1') for p in ip):
+        raise Refused('INST carries a script for a shell runtime the payload does not ship: %s' % sorted(p for p in ip if p.lower().endswith('.ps1'))[:5])
+    for need in ('engine_v373/h2lm-bake.exe', 'engine_v373/bake_params.txt', 'engine_v373/v043-tagwriter/lmw_install.py'):
         if need not in ip:
             raise Refused('INST lacks %s (the shell resolves it)' % need)
 
@@ -392,18 +384,14 @@ def main(argv=None):
         if os.path.exists(tmp):
             raise Refused('%s exists' % tmp)
         os.makedirs(tmp)
-        keep_pwsh = {'LICENSE.txt': None, 'ThirdPartyNotices.txt': None}
         keep_py = {'LICENSE.txt': None, 'site-packages/numpy-2.2.6.dist-info/LICENSE.txt': None}
-        c_pwsh, i_pwsh = zip_pwsh(spec, tmp, ver, keep_pwsh)
-        print('  pwsh   %-28s %8.1f MB  %d files  %s' % (c_pwsh['resource'], c_pwsh['zipSize'] / 1e6, c_pwsh['fileCount'], c_pwsh['dirName']))
         c_py, i_py = zip_py(spec, tmp, ver, keep_py)
         print('  py     %-28s %8.1f MB  %d files  %s' % (c_py['resource'], c_py['zipSize'] / 1e6, c_py['fileCount'], c_py['dirName']))
-        keep = {'LICENSE.txt@pwsh': keep_pwsh['LICENSE.txt'], 'ThirdPartyNotices.txt': keep_pwsh['ThirdPartyNotices.txt'],
-                'LICENSE.txt@py': keep_py['LICENSE.txt'],
+        keep = {'LICENSE.txt@py': keep_py['LICENSE.txt'],
                 'site-packages/numpy-2.2.6.dist-info/LICENSE.txt': keep_py['site-packages/numpy-2.2.6.dist-info/LICENSE.txt']}
         c_map, i_map, h2c_lic = zip_mapbake(spec, tmp, ver)
         print('  mapbake %-27s %8.1f MB  %d files  %s' % (c_map['resource'], c_map['zipSize'] / 1e6, c_map['fileCount'], c_map['dirName']))
-        c_not = zip_notices(spec, tmp, ver, keep, i_pwsh, i_py, h2c_lic)
+        c_not = zip_notices(spec, tmp, ver, keep, i_py, h2c_lic)
         print('  notice %-28s %8.1f MB  %d files  %s' % (c_not['resource'], c_not['zipSize'] / 1e6, c_not['fileCount'], c_not['dirName']))
         c_inst, srep = zip_inst(spec, os.path.abspath(a.stage), tmp, ver)
         print('  inst   %-28s %8.1f MB  %d files  %s' % (c_inst['resource'], c_inst['zipSize'] / 1e6, c_inst['fileCount'], c_inst['dirName']))
@@ -412,7 +400,7 @@ def main(argv=None):
             raise Refused('the stage report has no features.ao verdict (review fix 15): re-run stage_engine.py')
         if not isinstance(feats.get('probes'), dict) or not isinstance(feats['probes'].get('enabled'), bool):
             raise Refused('the stage report has no features.probes verdict (V5, gate T4): re-run stage_engine.py')
-        man = {'format': 1, 'appVersion': ver, 'components': [c_pwsh, c_py, c_map, c_not, c_inst],
+        man = {'format': 1, 'appVersion': ver, 'components': [c_py, c_map, c_not, c_inst],
                'features': {'ao': {k: v for k, v in feats['ao'].items() if v is not None},
                             'probes': {k: v for k, v in feats['probes'].items() if v is not None}}}
         if isinstance(feats.get('driveRoot'), dict) and isinstance(feats['driveRoot'].get('enabled'), bool):     # X1: optional (an older stage report has none)
@@ -430,7 +418,7 @@ def main(argv=None):
             'seconds': round(time.time() - t0, 1), 'appVersion': ver, 'payload_dir': out, 'manifest_md5': man_md5,
             'stage_report': os.path.join(os.path.abspath(a.stage), 'stage_report.json'),
             'stage_content_hash': srep['content_hash'], 'stage_engine': srep['engine'],
-            'sources': {'pwsh': i_pwsh, 'py': i_py, 'mapbake': i_map},
+            'sources': {'py': i_py, 'mapbake': i_map},
             'zips': [{k: c[k] for k in ('name', 'resource', 'dirName', 'target', 'zipSize', 'zipMd5', 'fileCount', 'totalBytes', 'maxPathLen')}
                      for c in man['components']],
             'payload_bytes': sum(c['zipSize'] for c in man['components']) + os.path.getsize(os.path.join(tmp, 'MANIFEST.json')),

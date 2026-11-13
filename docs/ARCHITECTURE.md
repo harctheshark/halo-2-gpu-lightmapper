@@ -9,16 +9,15 @@ this repository; see [BUILDING.md](BUILDING.md) for what is and is not here.
 H2 GPU Lightmapper.exe   (one file, WPF on .NET Framework 4.8, window and --cli in the same exe)
  |
  |  embedded payload (zip resources, listed in MANIFEST.json, every file md5-pinned)
- |    - PowerShell 7.6.6          (unmodified official zip)
  |    - CPython 3.10.5 + numpy 2.2.6   (an isolated copy; no scipy)
- |    - the engine package         (scripts, GPU kernels host, capture DLLs, tag writer)
+ |    - the engine package         (bake program, Python scripts, GPU kernels host, capture DLLs, tag writer)
  |
  |  first start unpacks to
  |    %LOCALAPPDATA%\H2GpuLightmapper\rt\          runtimes, shared and immutable (md5-checked before every bake)
  |    <H2EK>\GPU Work\_runtime\<ver>\     the engine, per H2EK
  |
  |  a bake is a chain of child processes (a Windows job object: cancelling kills the whole tree)
- |    shell -> bundled pwsh -> gpu_bake.ps1 -> osoy_launch -> tool_fast (+ hook DLLs) ; Python (bundled) ; fullgpu.exe
+ |    shell -> h2lm-bake.exe -> osoy_launch -> tool_fast (+ hook DLLs) ; Python (bundled) ; fullgpu.exe
 ```
 
 **Shell (C#).** `src/H2GpuLightmapper` is the window and the command line; `src/H2GpuLightmapper.Core` holds everything that is
@@ -26,14 +25,32 @@ not UI: H2EK discovery, preflight checks, payload extraction, the process runner
 (backups, installer, restore, recovery, the GPU lock). `src/H2GpuLightmapper.DllSlots` patches the work-folder path inside
 the capture DLL; `src/Proc` runs child processes inside a job object. All of it compiles into the single exe.
 
-**Bundled PowerShell and Python.** The GPU engine's driver (`gpu_bake.ps1`) is a PowerShell script, and the numeric
-pipeline is Python with numpy. The exe carries portable copies of both, so the user installs nothing. The shell builds the
-child environment from scratch (every `GPULM_*`, `H2LM_*` and `PYTHON*` variable removed, then its own set) so a developer's
-shell settings cannot leak into a bake.
+**Bake program (C#).** `h2lm-bake.exe` sits in each engine folder (the production engine and the AO engine) and drives one bake. Its
+source is part of the engine and is not in this repository. Until 0.6.12 the driver was a PowerShell script, `gpu_bake.ps1`, run on a bundled
+PowerShell 7. The program takes the same steps in the same order and takes the same arguments, and the app uses no PowerShell. Its
+phases are:
+
+1. **Pre-flight.** Clear the engine's environment variables, check the root, the tool, the hook DLLs and the files of the direct tag
+   writer.
+2. **Capture.** Start `tool_fast` through `osoy_launch` (a held launch, so the hook DLL is injected early), wait for the DLL's ready
+   message and for the tool to exit, then run the checks on what it recorded. A bake that reuses a capture skips this phase and checks
+   the capture's records instead.
+3. **Derive.** Python helpers build the sky, surface-light, owner, seam, sun-cull and object-grid tables from the capture.
+4. **GPU bake.** Plan the parts (`fullgpu.exe` writes the plan), run the photon lattice, then the main pass in one run or in parts
+   that are merged afterwards, and check the results.
+5. **Tag writer.** The direct tag writer makes the stage and validates it. Only when it fails does the tool's own write-back run, as
+   the fallback.
+
+Every child process is started through one place in the program. The AO engine's copy, started with `-AOOnly`, takes the place of
+that engine's own fork of the script.
+
+**Bundled Python.** The numeric pipeline is Python with numpy. The exe carries a portable copy, so the user installs nothing. The
+shell builds the child environment from scratch (every `GPULM_*`, `H2LM_*` and `PYTHON*` variable removed, then its own set) so a
+developer's shell settings cannot leak into a bake.
 
 **Engine payload.** The validated GPU lightmapper pipeline, packaged under `engine_v373`: the capture and estimator DLLs,
-the `fullgpu.exe` compute host and its HLSL kernels, the Python pipeline, and the direct tag writer. The scripts are run
-as they are; small, strictly checked patches (`patches/`) adapt them to the exe (configurable paths, no console window, a
+the `fullgpu.exe` compute host and its HLSL kernels, the Python pipeline, and the direct tag writer. The Python scripts are
+run as they are; small, strictly checked patches (`patches/`) adapt them to the exe (configurable paths, no console window, a
 Custom quality row, AO and light-probe drivers), and each patch is pinned by the md5 of the file it applies to.
 
 ## The bake, step by step
@@ -90,7 +107,7 @@ Custom quality row, AO and light-probe drivers), and each patch is pinned by the
 | Path | What |
 |---|---|
 | `src/` | the app: shell, core library, DLL slot patcher, process runner, `sh_stage.py` (probe tag merge) |
-| `patches/` | the strict, md5-pinned patches that adapt the engine scripts to the exe, with their series files |
+| `patches/` | the strict, md5-pinned patches that adapt the engine scripts to the exe, with their series files (the `gpu_bake` series is for 0.6.12 and older, whose driver was a script) |
 | `tools/payload/` | the payload builder: stages the engine, zips the payload, builds the exe that embeds it |
 | `native/` | C/C++ sources and build scripts: `gpucheck`, the `osoy_launch` patch and build, the `fullgpu_guard` build |
 | `tests/` | unit and end-to-end test sources (C# test programs, Python tests) |

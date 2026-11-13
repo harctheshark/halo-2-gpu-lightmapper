@@ -16,6 +16,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\H2GpuLightmapper.Core\H2GpuLightmapper.Core.csproj" />
+    <!-- the fake bake program: h2lm-bake.exe lands next to this runner and goes into the test payload -->
+    <ProjectReference Include="..\FakeBakeEngine\FakeBakeEngine.csproj" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.Runtime.Serialization" />
   </ItemGroup>

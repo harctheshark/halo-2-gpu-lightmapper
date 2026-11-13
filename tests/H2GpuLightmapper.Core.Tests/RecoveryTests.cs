@@ -57,7 +57,7 @@ namespace H2GpuLightmapper.Core.Tests
             string runDir = C.Sb.Dir(@"troot_rec2\run");
             string bak = Path.Combine(runDir, "tag_backup_before_writeback");
             var before = new[] { "fake_fake_lightmap.scenario_structure_lightmap", "fake_fake_lightmap_bitmaps.bitmap", "fake_fake_lightmap_truecolor_bitmaps.bitmap" }.ToDictionary(n => n, f.Md5);
-            var env = BakeEnv.Build(new H2Lm.Proc.BakeEnvSpec { PwshDir = C.PwshDir, PyDir = C.PyDir, Root = f.Root, Work = f.Work });
+            var env = BakeEnv.Build(new H2Lm.Proc.BakeEnvSpec { PyDir = C.PyDir, Root = f.Root, Work = f.Work });
             var ok = TagInstaller.Install(new InstallRequest { PyExe = C.PyExe, LmwInstallPy = C.FxLmwInstall, Root = f.Root, Work = f.Work, Stage = stage, TargetDir = f.TagDir,
                 BackupDir = bak, Marker = Path.Combine(f.Work, "farm_w205", StartupRecovery.MarkerName), Env = env });
             Assert.Eq(InstallOutcome.Installed, ok.Outcome, "install: " + ok.Message);

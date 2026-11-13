@@ -14,7 +14,7 @@ namespace H2GpuLightmapper.Tests
 {
     /// <summary>
     /// End-to-end runs of the exe's --cli bake / restore / doctor / cancel / status on SANDBOX H2EK roots, with the test payload:
-    /// fake gpu_bake / gpu_ao / gpu_lightprobes / sh_stage (the real interfaces, no GPU, no tool), the REAL portable pwsh 7.6.6,
+    /// fake gpu_bake / gpu_ao / gpu_lightprobes / sh_stage (the real interfaces, no GPU, no tool), the fake bake program h2lm-bake.exe (which runs fixtures\fake_gpu_bake.py with the bundle's py),
     /// the REAL Python bundle (map query over the real lmw_tagio) and the REAL lmw_install.py installing into the sandbox tags.
     /// </summary>
     internal static class E2eTests
@@ -134,7 +134,7 @@ namespace H2GpuLightmapper.Tests
             string run = RunDirOf(res);
             var calls = r.Calls("gpu_bake");
             Assert.Eq(2, calls.Count, "the stage-only bake + the production write-back");
-            Func<JObj, List<string>> tail = c => { var a = c.Arr("argv").Cast<string>().ToList(); return a.Skip(a.FindIndex(x => x.EndsWith("gpu_bake.ps1", StringComparison.OrdinalIgnoreCase)) + 1).ToList(); };
+            Func<JObj, List<string>> tail = c => c.Arr("argv").Cast<string>().ToList();      // 1.0: the fake records the arguments exactly as the bake program received them
             Assert.Seq(new[] { "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "custom", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct", "-Photons", "20000000", "-MCSamples", "8" },
                        tail(calls[0]), "1: stage-only, fresh capture");
             Assert.Seq(new[] { "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "custom", "-WriteBack", "-SkipCapture", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct", "-Photons", "20000000", "-MCSamples", "8" },
@@ -174,7 +174,7 @@ namespace H2GpuLightmapper.Tests
             Assert.True(!r.Calls("gpu_bake").Last().Arr("argv").Cast<string>().Contains("-WriteBack"), "stage-only");
         }
 
-        /// <summary>U3: gpu_bake.ps1 refuses a stage-only bake up front when the direct writer cannot run at all ("-WriteBackMode
+        /// <summary>U3: the bake program refuses a stage-only bake up front when the direct writer cannot run at all ("-WriteBackMode
         /// direct cannot run", no phase started); with -WriteBack production switches to the tool write-back there.</summary>
         private static void NoDirectWriter()
         {
@@ -622,7 +622,7 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq("DONE", h.Last().Str("state"), "history entry");
             string log = File.ReadAllText(Path.Combine(run, "bake.log"));
             foreach (var s in new[] { "=== plan|", "[1] CAPTURE", "the shell installs it", "start lmw_install install", "installed and verified", "verified: 3 installed file(s) md5-equal to the stage",
-                                      "GPU lock acquired", "capture record written", "pwsh 7.6.6", "numpy 2.2.6" })
+                                      "GPU lock acquired", "capture record written", "py on PATH ", "numpy 2.2.6" })
                 Assert.Contains(log, s, "bake.log");
             Assert.NotContains(log, "[4b] INSTALL", "no install inside gpu_bake (U3)");
             var startIns = log.Split('\n').FirstOrDefault(x => x.Contains("start lmw_install install"));
@@ -643,15 +643,17 @@ namespace H2GpuLightmapper.Tests
             Assert.True(!Directory.Exists(Path.Combine(r.Work, "_TAGBAK_auto")), "0.6.8: no _TAGBAK_auto from the shell's install");
             foreach (var n in new[] { CycPrefix + ".scenario_structure_lightmap", CycPrefix + "_bitmaps.bitmap", CycPrefix + "_truecolor_bitmaps.bitmap" })
                 Assert.Eq(Md5(Path.Combine(run, "final_stage", n)), Md5(Path.Combine(r.CycDir, n)), "installed from the KEEP copy: " + n);
-            Assert.Contains(log, "DEV RUNTIME OVERRIDE (--rt-pwsh / --rt-py): these runtimes were NOT md5-verified (versions match the pin)", "the run header was checked against the pin, loudly under the dev override (finding 20)");
+            Assert.Contains(log, "DEV RUNTIME OVERRIDE (--rt-py): this runtime was NOT md5-verified (versions match the pin)", "the run header was checked against the pin, loudly under the dev override (finding 20)");
+            Assert.Contains(log, "py on PATH " + Path.Combine(C.PyDir, "py."), "the header names the py on the child PATH (the bundle's)");
+            Assert.NotContains(log, "pwsh", "no shell is named anywhere in the log");
             Assert.Eq(null, call.Str("pythonpath"), "PYTHONPATH stripped");
-            Assert.Eq(Path.Combine(C.PyDir, "py.exe"), call.Str("py"), "& py = the bundle");
+            Assert.True(string.Equals(Path.Combine(C.PyDir, "py.exe"), call.Str("py"), StringComparison.OrdinalIgnoreCase), "`py` on the bake program's PATH = the bundle: " + call.Str("py"));
+            Assert.Eq(Path.Combine(r.Work, @"_runtime\0.5.0-s25cccc\engine_v373\fake_gpu_bake.py"), call.Str("script"), "the bake program ran the fake script beside it");
             Assert.Eq(Path.Combine(r.Work, @"_runtime\0.5.0-s25cccc"), call.Str("h2lm_code"), "H2LM_CODE");
             Assert.Eq(r.Work, call.Str("cwd"), "cwd WORK");
             var argv = call.Arr("argv").Cast<string>().ToList();
             Assert.Seq(new[] { "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct" },
-                       argv.Skip(argv.FindIndex(a => a.EndsWith("gpu_bake.ps1", StringComparison.OrdinalIgnoreCase)) + 1).ToList(), "the argv gpu_bake received (stage only)");
-            Assert.Contains(string.Join(" ", argv.Take(6)), "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File", "pwsh flags");
+                       argv, "the argv the bake program received (stage only; the bake arguments as they are, no shell flags)");
             // INST: extracted, sealed, slot DLLs patched for this WORK
             var mk = Json.ReadObjFile(Path.Combine(r.Work, @"_runtime\0.5.0-s25cccc\.complete"));
             Assert.True(mk != null && mk.Str("slotBase") != null, "INST marker with the slot base");
@@ -699,7 +701,7 @@ namespace H2GpuLightmapper.Tests
             Assert.Seq(new[] { "trace", "apply", "stage" }, ao.Select(c => c.Arr("argv").Cast<string>().ElementAt(1)).ToList(), "verbs in order");
             Assert.True(ao[0].Arr("argv").Cast<string>().SequenceEqual(new[] { ao[0].Arr("argv").Cast<string>().First(), "trace", "--farm", r.Farm(200), "--worker", "200", "--scenario", Cyc, "--bsp", "cyclotron",
                         "--engine", Path.Combine(r.Work, @"_runtime\0.5.0-s25cccc\_research\ao\dev_AO"), "--quality", "super", "--plucker-fix", "--scenery-fix" }), "trace argv: " + string.Join(" ", ao[0].Arr("argv")));
-            Assert.True(string.Equals(Path.Combine(C.PwshDir, "pwsh.exe"), ao[0].Str("pwsh_on_path"), StringComparison.OrdinalIgnoreCase), "gpu_ao's `pwsh` = the bundled one (PATH): " + ao[0].Str("pwsh_on_path"));
+            Assert.True(string.Equals(Path.Combine(C.PyDir, "py.exe"), ao[0].Str("py_on_path"), StringComparison.OrdinalIgnoreCase), "gpu_ao's `py` = the bundled one (PATH): " + ao[0].Str("py_on_path"));
             Assert.Eq(r.Root, ao[0].Str("h2lm_root"), "H2LM_ROOT for P6");
             Assert.True(!r.Calls("gpu_bake").Single().Arr("argv").Cast<string>().Contains("-WriteBack"), "the bake itself was stage-only");
             var st = RunStatus.Load(run);
@@ -953,8 +955,7 @@ namespace H2GpuLightmapper.Tests
 
         private static List<string> TailArgs(JObj call)
         {
-            var a = call.Arr("argv").Cast<string>().ToList();
-            return a.Skip(a.FindIndex(x => x.EndsWith("gpu_bake.ps1", StringComparison.OrdinalIgnoreCase)) + 1).ToList();
+            return call.Arr("argv").Cast<string>().ToList();      // 1.0: the arguments exactly as the bake program received them
         }
 
         /// <summary>The BSP tag path the run resolved (status.json extra.options.bspRel): null = the BSP beside the scenario.</summary>
@@ -1344,7 +1345,7 @@ namespace H2GpuLightmapper.Tests
             string inst = InstOf(r);
             const string rel = "engine_v373/v041-fullgpu/fullgpu.exe";
             string fg = Path.Combine(inst, rel.Replace('/', '\\'));
-            string gb = Path.Combine(inst, @"engine_v373\gpu_bake.ps1");
+            string gb = Path.Combine(inst, @"engine_v373\fake_gpu_bake.py");
             string fgMd5 = Md5(fg), gbMd5 = Md5(gb);
             byte[] fgBytes = File.ReadAllBytes(fg);
             // 1. missing + changed -> re-extracted before the bake
@@ -1352,7 +1353,7 @@ namespace H2GpuLightmapper.Tests
             File.AppendAllText(gb, "\n# changed\n");
             Ok(C.Bake(r, bake), "re-extracted, DONE");
             Assert.Eq(fgMd5, Md5(fg), "fullgpu.exe re-extracted");
-            Assert.Eq(gbMd5, Md5(gb), "gpu_bake.ps1 re-extracted");
+            Assert.Eq(gbMd5, Md5(gb), "the engine's bake script re-extracted");
             // 2. removed again right after its re-extraction -> refused BEFORE the bake
             File.Delete(fg);
             int calls = r.Calls("gpu_bake").Count;

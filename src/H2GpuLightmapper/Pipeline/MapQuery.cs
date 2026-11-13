@@ -3,6 +3,8 @@
 // The query is a short python program run by the BUNDLE py over the INST tag walker (v043-tagwriter\lmw_tagio, the same one
 // lp_probes.py / sh_stage.py use); its probe rule is lp_probes.py's, verbatim: the `structure bsp lighting` element whose
 // `bsp` reference's last path component equals the BSP name; one probe per `lighting points` entry.
+// 1.0 (empty instanced geometry): it also reads the selected BSP tag (found from the scenario's own path and its structure-bsps reference, no new
+// argument) for "instanced geometry instances" whose definition has no render geometry (a `%` object holding only +portal faces): a WARNING, never a refusal.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -39,7 +41,46 @@ namespace H2GpuLightmapper.Pipeline
         public int? Envs, Groups;
         public string PointsError, EnvsError, Error;
         public string Raw;
+        /// <summary>1.0: the names of the selected BSP's instanced geometry instances whose definition has no render geometry ("#index" for an unnamed one);
+        /// never null (empty for an older payload's query, a scenario-only query, or a BSP that could not be read -- see <see cref="BspError"/>).</summary>
+        public List<string> EmptyInstances = new List<string>();
+        /// <summary>1.0: the selected BSP's cluster count (null when the BSP was not read).</summary>
+        public int? Clusters;
+        /// <summary>1.0: why the selected BSP could not be read for the empty-instance check (null when it was, or when no BSP was asked about).</summary>
+        public string BspError;
         public bool Ok { get { return Error == null && PointsError == null; } }
+
+        public const int EmptyInstanceNamesShown = 5;
+
+        /// <summary>"\"%portals\"" / "\"%a\", \"%b\" and 4 more" (an unnamed instance is "instance #3"); null when there is none.</summary>
+        private string EmptyInstanceNames()
+        {
+            if (EmptyInstances == null || EmptyInstances.Count == 0) return null;
+            var shown = EmptyInstances.Take(EmptyInstanceNamesShown).Select(n => n.StartsWith("#", StringComparison.Ordinal) ? "instance " + n : "\"%" + n + "\"").ToList();
+            int more = EmptyInstances.Count - shown.Count;
+            return string.Join(", ", shown) + (more > 0 ? " and " + more + " more" : "");
+        }
+
+        /// <summary>1.0: the full warning for instanced geometry with no visible geometry (bake log, run notes); null when there is none.
+        /// It is a warning only: the map still bakes.</summary>
+        public string EmptyInstanceWarning()
+        {
+            string names = EmptyInstanceNames();
+            if (names == null) return null;
+            bool one = EmptyInstances.Count == 1;
+            return "instanced geometry " + names + (one ? " has" : " have") + " no visible geometry. An object whose name starts with % is exported as instanced geometry; "
+                 + "faces in it that use only +portal (or another non-rendered material) are dropped, so they do not work as portals. The map still bakes. "
+                 + "To make the portals work, move those faces into the level mesh (an object without the % prefix) and import the level again."
+                 + (Clusters == 1 ? " This BSP has 1 cluster, so no portal is in effect." : "");
+        }
+
+        /// <summary>1.0: the short form (the window's map info line, the run summary); null when there is none.</summary>
+        public string EmptyInstanceShort()
+        {
+            string names = EmptyInstanceNames();
+            if (names == null) return null;
+            return "WARNING: " + names + (EmptyInstances.Count == 1 ? " has" : " have") + " no visible geometry (portals in instanced geometry do not work; the map still bakes)";
+        }
     }
 
     public static class MapQuery
@@ -47,11 +88,11 @@ namespace H2GpuLightmapper.Pipeline
         // Single quotes only (the argv is quoted by JobProcess.QuoteArg; no backslash escapes needed in C#).
         public static readonly string Code = string.Join("\n", new[]
         {
-            "import sys, os, re, json",
+            "import sys, os, re, json, struct",
             "sys.dont_write_bytecode = True",
             "tagio, scen, bsp, ltmp = sys.argv[1:5]",
             "sys.path.insert(0, tagio)",
-            "out = {'bsps': [], 'bspRefs': [], 'points': None, 'pointsError': None, 'ltmpExists': os.path.exists(ltmp), 'envs': None, 'groups': None, 'envsError': None}",
+            "out = {'bsps': [], 'bspRefs': [], 'points': None, 'pointsError': None, 'ltmpExists': os.path.exists(ltmp), 'envs': None, 'groups': None, 'envsError': None, 'emptyInstances': None, 'clusters': None, 'bspError': None}",
             "try:",
             "    import lmw_tagio as T",
             "except Exception as e:",
@@ -81,6 +122,48 @@ namespace H2GpuLightmapper.Pipeline
             "        out['envs'] = L.count(ENV) if any(T.npath(p) == T.npath(ENV) for p in L.cnt_addr) else 0",
             "    except Exception as e:",
             "        out['envsError'] = '%s: %s' % (type(e).__name__, e)",
+            // 1.0: the selected BSP's instanced geometry instances with no render geometry (never fails the query)
+            "try:",
+            "    bf = None",
+            "    if bsp:",
+            "        tp = os.path.dirname(os.path.abspath(scen)); troot = None",
+            "        while troot is None and os.path.dirname(tp) != tp:",
+            "            if os.path.basename(tp).lower() == 'tags': troot = tp",
+            "            else: tp = os.path.dirname(tp)",
+            "        rel = [x for x in out['bspRefs'] if x.split(chr(92))[-1].lower() == bsp.lower()]",
+            "        if troot is None: out['bspError'] = 'no tags folder above the scenario'",
+            "        elif not rel: out['bspError'] = 'the scenario has no structure bsp named %s' % bsp",
+            "        else:",
+            "            bf = os.path.join(troot, rel[0] + '.scenario_structure_bsp')",
+            "            if not os.path.isfile(bf): out['bspError'] = 'the BSP tag does not exist: %s' % bf; bf = None",
+            "    if bf:",
+            "        d = open(bf, 'rb').read(); B = T.Walk(d, 'sbsp', keep_fields=True)",
+            "        NB = {T.npath(b.path): b for b in B.blocks}",
+            "        blk = lambda p: NB.get(T.npath(p))",
+            "        ib = blk('root[0].instanced geometry instances'); cb = blk('root[0].clusters')",
+            "        clusters = cb.count if cb else 0",
+            "        offs = {}",
+            "        for p, o, t, s in B.fields:",
+            "            m = re.match(r'root\\[0\\]\\.instanced geometry instances\\[0\\]\\.(.+)$', T.npath(p))",
+            "            if m: offs[m.group(1)] = (o, t, s)",
+            "        names = []",
+            "        if ib and 'name' in offs and 'instance definition' in offs:",
+            "            nrel = offs['name'][0] - ib.data; q = ib.data + ib.count * ib.esize",
+            "            for i in range(ib.count):",
+            "                n = struct.unpack_from('<I', d, ib.data + i * ib.esize + nrel)[0] >> 24",
+            "                names.append(d[q:q + n].decode('latin1')); q += n",
+            "        drel = offs['instance definition'][0] - ib.data if ib and 'instance definition' in offs else 52",
+            "        empty = []",
+            "        for i in range(ib.count if ib else 0):",
+            "            dd = struct.unpack_from('<h', d, ib.data + i * ib.esize + drel)[0]",
+            "            si = blk('root[0].instanced geometries definitions[%d].render info.render data[0].section.strip indices' % dd)",
+            "            rv = blk('root[0].instanced geometries definitions[%d].render info.render data[0].section.raw vertices' % dd)",
+            "            if dd >= 0 and not (si and si.count) and not (rv and rv.count):",
+            "                nm = names[i] if i < len(names) else ''",
+            "                empty.append(nm if nm else '#%d' % i)",
+            "        out['clusters'] = clusters; out['emptyInstances'] = empty",
+            "except Exception as e:",
+            "    out['emptyInstances'] = None; out['clusters'] = None; out['bspError'] = '%s: %s' % (type(e).__name__, e)",
             "print('MAPQUERY ' + json.dumps(out))",
         });
 
@@ -108,6 +191,11 @@ namespace H2GpuLightmapper.Pipeline
             mi.Envs = j.Int("envs");
             mi.Groups = j.Int("groups");
             mi.EnvsError = j.Str("envsError");
+            // 1.0: absent in an older payload's result (empty list / nulls)
+            var ei = j.Arr("emptyInstances");
+            if (ei != null) mi.EmptyInstances = ei.OfType<string>().ToList();
+            mi.Clusters = j.Int("clusters");
+            mi.BspError = j.Str("bspError");
             return mi;
         }
 

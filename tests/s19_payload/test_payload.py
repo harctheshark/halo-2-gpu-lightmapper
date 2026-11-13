@@ -57,8 +57,10 @@ EXPECT_POST = {
     '_research/ao/dev_AO/gpu_bake.ps1': ('c15a00ddc67ec81dd049ac16bfbf9cd4', '888dccb7f3a29449af9489d6abb458ff'),   # 0.6.12 rc0612: P17 / P14 re-made on c15a00dd (0.6.11: 57152089 -> 282af452); 0.6.11 rc0611: P17 / P14 re-made on 57152089 (0.6.10: 14e8ee1b -> 9a202fb3); 0.6.10 rc0610: P17 / P14 re-made on 14e8ee1b (0.6.9: ff8de832 -> 8b0e2904); 0.6.9 rc069_a3: P17 / P14 re-made on ff8de832 (rc069_a2: b34c221e -> 4adb7566)
 }
 EXPECT_PATCHED = {
-    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '21958cbdcf2fdd6b122a69d48e77354c'),   # 0.6.8: + P5c (--farm under H2LM_FARMS; P5 + P5b = 3634172b); P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
-    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', 'd73740c3ff866dfb2ddcad1043ba9d58'),   # P6 + P6b + P6c + P6d (0.6.12b: stage via the production native tag writer; P6..P6c = a8914dc8) (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
+    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', 'de71b68f65dadf2a3f2bdcf92438ac9b'),   # 1.0: + P5d (starts the stage's h2lm-bake.exe; --pwsh gone; P5..P5c = 21958cbd)
+    # (0.6.8 entry follows)   # 0.6.8: + P5c (--farm under H2LM_FARMS; P5 + P5b = 3634172b); P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
+    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', '83513a379cca63ad1eef0d51e9b93f6b'),   # 1.0: + P6e (trace starts the engine's h2lm-bake.exe; P6..P6d = d73740c3)
+    # (0.6.12b entry follows)   # P6 + P6b + P6c + P6d (0.6.12b: stage via the production native tag writer; P6..P6c = a8914dc8) (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
     '_research/ao/ao_seamfix.py': ('93c2fe8c5ce812358b58b7c2073da030', '94e85d76a4acc7abda904fab5caab8cb'),   # 0.6.12b: + the dense neighbour table (7b239011 before);   # N4 (A1 re-make: + stacked-layer rule)
     '_research/ao/ao_denoise.py': ('5da70c2fe14fbb2decd78ce8902b418a', '70522fac1d61f372e6c5af358592e7cf'),   # N4 (A1: ao_denoise.bilateral_raw without scipy)
     # U2 (2026-10-15): the three lmw_tagio.py walkers read SHORT block elements as tool_fast does (patches/tagio/series_tagio.json)
@@ -74,8 +76,8 @@ EXPECT_BUILT = {'osoyoos/osoy_launch.exe': 'e2dba7afcaf6967a900ade1d59d01f5d',
 EXPECT_NEW = {'_research/ao/ao_ballgrid.py': '1ef5e617bfd2ab11d3366e018a0259e6', 'standalone/sh_stage.py': None,
               'standalone/farm_products.json': 'PROJ:src/standalone/farm_products.json',
               '_research/ao/ao_existing.py': 'PROJ:src/standalone/ao_existing.py'}      # 0.6.8 xc8: AO only      # 0.6.8: the engine-owned product list (shipped from the project tree)      # ao_ballgrid: A1 (+ ball_blocks)
-SHELL_NEEDS = ['engine_v373/gpu_bake.ps1', 'engine_v373/v043-tagwriter/lmw_install.py', 'engine_v373/v014-inject-estimator/gpulm_estimator.dll',
-               'engine_v373/v041-fullgpu/fullgpu.exe', '_research/ao/gpu_ao.py', '_research/ao/dev_AO/gpu_bake.ps1',
+SHELL_NEEDS = ['engine_v373/h2lm-bake.exe', 'engine_v373/bake_params.txt', '_research/ao/dev_AO/bake_params.txt', 'engine_v373/v043-tagwriter/lmw_install.py', 'engine_v373/v014-inject-estimator/gpulm_estimator.dll',
+               'engine_v373/v041-fullgpu/fullgpu.exe', '_research/ao/gpu_ao.py', '_research/ao/dev_AO/h2lm-bake.exe',
                '_research/lightprobes/gpu_lightprobes.py', 'standalone/sh_stage.py', 'v043-tagwriter/lmw_tagio.py',
                'v043-tagwriter/lmw_defs.json', 'standalone/gpucheck_plain.exe',
                '_research/ao/ao_seamfix.py', '_research/ao/ao_denoise.py', '_research/ao/ao_ballgrid.py']      # A1: gpu_ao imports all three
@@ -138,7 +140,7 @@ def t_manifest_and_zips():
     m = manifest()
     check(m['format'] == 1 and m['appVersion'] == L.app_version(), 'format / appVersion')
     names = {c['name'] for c in m['components']}
-    check(names == {'pwsh-7.6.6', 'py310-np226', 'mapbake', 'notices', 'engine'}, 'components %s' % names)
+    check(names == {'py310-np226', 'mapbake', 'notices', 'engine'}, 'components %s (1.0: no shell runtime component)' % names)
     for c in m['components']:
         zp = os.path.join(PAYLOAD, c['resource'].split('/', 1)[1])
         check(c['zipMd5'] == L.md5_file(zp) and c['zipSize'] == os.path.getsize(zp), '%s zip md5/size' % c['name'])
@@ -186,6 +188,9 @@ def t_inst_equals_production():
                 check(twin in twins and f['md5'] == twins[twin], '%s differs from its INST twin %s' % (p, twin))
             n_custom += 1
             continue
+        if p.endswith('/h2lm-bake.exe') or p.endswith('/bake_params.txt'):
+            check_bake_program(p, f, r, rep)
+            continue
         if p in EXPECT_POST:
             prod, res = EXPECT_POST[p]
             check(f['md5'] == res, '%s md5 %s != production + post-upstream series %s' % (p, f['md5'], res))
@@ -230,6 +235,27 @@ def t_inst_equals_production():
         '; engine_custom = %d files == engine_v373 except the T3a guard %s' % (n_custom, guard_record()['guard_md5'][:8]) if n_custom else '')
 
 
+def check_bake_program(p, f, r, rep):
+    """1.0: h2lm-bake.exe replaces the gpu_bake.ps1 of its folder (the replaced script was the tested one: EXPECT_POST / its engine_custom twin);
+    bake_params.txt is generated from the program in the same folder"""
+    be = rep.get('bake_engine') or {}
+    folder = p.rsplit('/', 1)[0]
+    rec = [x for x in be.get('folders', []) if x['folder'] == folder]
+    check(be.get('shipped') and len(rec) == 1, '%s: no bake_engine record for %s' % (p, folder))
+    script = folder + '/gpu_bake.ps1'
+    want = EXPECT_POST.get(script if not folder.startswith('engine_custom') else 'engine_v373/gpu_bake.ps1', (None, None))[1]
+    check(rec[0]['replaced'] == script and rec[0]['replaced_md5'] == want, '%s replaced %s md5 %s, not the tested %s' % (p, rec[0]['replaced'], rec[0]['replaced_md5'], want))
+    if p.endswith('.exe'):
+        check(f['md5'] == be['md5'] == r.get('md5') and r.get('kind') == 'built' and r.get('replaces') == script, '%s: %s' % (p, {k: r.get(k) for k in ('kind', 'role', 'replaces')}))
+    else:
+        d = L.load_module('h2lm_stage_engine', os.path.join(TOOLS, 'stage_engine.py'))
+        got, _ = d.list_params(os.path.join(STAGE, 'inst', *(folder + '/h2lm-bake.exe').split('/')))
+        txt = open(os.path.join(STAGE, 'inst', *p.split('/')), encoding='utf-8').read()
+        lines = [x.split('\t') for x in txt.splitlines() if x and not x.startswith('#')]
+        check([x for x in lines if x[1] != 'env'] == [list(v) for v in got.values()], '%s is not the program\'s --list-params' % p)
+        check(r.get('role') == 'generated:bake_params', '%s role %s' % (p, r.get('role')))
+
+
 def t_roles_layout():
     """the shell's INST contract: required paths, 4 pristine slot DLLs, boundsdb / gpucheck roles, runtimes at their roots,
     no scipy, no cleanup_farm.ps1, no backups, no research-only files"""
@@ -254,7 +280,8 @@ def t_roles_layout():
            or '/ao_seam_' in p or 'scnobs' in p or p.endswith('.h') or p.endswith('.cpp')]
     check(not bad, 'unexpected files in INST: %s' % bad)
     rt = [x for x in m['components'] if x['target'] == 'rt']
-    check(any(any(f['path'] == 'pwsh.exe' for f in x['files']) for x in rt), 'pwsh.exe')
+    check(not any(any(f['path'].lower() == 'pwsh.exe' for f in x['files']) for x in rt), '1.0: an rt component carries pwsh.exe')
+    check(not [p for p in paths if p.lower().endswith(('.ps1', '.psm1', '.psd1'))], '1.0: INST carries shell scripts: %s' % [p for p in paths if p.lower().endswith('.ps1')][:5])
     pyc = [x for x in rt if any(f['path'] == 'py.exe' for f in x['files'])][0]
     check(not any(f['path'].startswith('site-packages/scipy') for f in pyc['files']), 'scipy shipped')
     rep = stage_report()
@@ -263,7 +290,7 @@ def t_roles_layout():
     ce = [p for p in paths if p.startswith('engine_custom/')]
     if rep['custom_engine']['shipped']:
         check_custom_guard(paths['engine_custom/v041-fullgpu/fullgpu.exe']['md5'])
-        check(rep['custom_engine'].get('guard_md5') == guard_record()['guard_md5'] and 'engine_custom/gpu_bake.ps1' in paths
+        check(rep['custom_engine'].get('guard_md5') == guard_record()['guard_md5'] and 'engine_custom/h2lm-bake.exe' in paths and 'engine_custom/bake_params.txt' in paths
               and len(ce) == sum(1 for p in paths if p.startswith('engine_v373/')), 'engine_custom layout / report %s' % rep['custom_engine'])
     else:
         check(not ce, 'engine_custom shipped without --with-custom-engine')
@@ -447,21 +474,22 @@ def t_extract_with_shell():
             else:
                 check(L.md5_file(p) == f['md5'], '%s/%s md5' % (c['name'], f['path']))
     inst = dirs['engine']
-    check(L.md5_file(os.path.join(inst, 'engine_v373', 'gpu_bake.ps1')) == EXPECT_POST['engine_v373/gpu_bake.ps1'][1], 'gpu_bake')
+    be = stage_report()['bake_engine']
+    check(L.md5_file(os.path.join(inst, 'engine_v373', 'h2lm-bake.exe')) == be['md5'], 'h2lm-bake.exe')
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('PYTHON', 'PSMODULEPATH', 'GPULM_', 'H2LM_', 'OSOYOOS_'))}
-    pwsh = os.path.join(dirs['pwsh-7.6.6'], 'pwsh.exe')
-    env2 = dict(env, H2LM_T1=os.path.join(inst, 'engine_v373', 'gpu_bake.ps1'), H2LM_T2=os.path.join(inst, '_research', 'ao', 'dev_AO', 'gpu_bake.ps1'))
-    rc, o, e, _ = run([pwsh, '-NoProfile', '-NonInteractive', '-Command',
-                       '$v=$PSVersionTable.PSVersion.ToString(); $n=0; foreach($f in $env:H2LM_T1,$env:H2LM_T2){$er=$null; '
-                       '[void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$null,[ref]$er); $n+=$er.Count}; '
-                       '"PWSH $v $PSHOME PARSEERR $n"'], env=env2, timeout=120)
-    import re
-    line = [re.match(r'^PWSH (\S+) (.*) PARSEERR (\d+)\s*$', x) for x in o.splitlines()]
-    line = [x for x in line if x]
-    check(rc == 0 and line, 'pwsh run: %d %s %s' % (rc, o[-300:], e[-300:]))
-    ver, home, nerr = line[-1].groups()
-    check(ver == '7.6.6' and os.path.normcase(home.rstrip('\\')) == os.path.normcase(dirs['pwsh-7.6.6']) and nerr == '0',
-          'pwsh: %s' % line[-1].group(0))
+    # 1.0: the extracted bake programs answer --list-params with exactly the parameter list extracted beside them
+    sd = L.load_module('h2lm_stage_engine', os.path.join(TOOLS, 'stage_engine.py'))
+    nprog = 0
+    for fo in ('engine_v373', os.path.join('_research', 'ao', 'dev_AO'), 'engine_custom'):
+        exe = os.path.join(inst, fo, 'h2lm-bake.exe')
+        if not os.path.isfile(exe):
+            continue
+        got, _ = sd.list_params(exe)
+        txt = open(os.path.join(inst, fo, 'bake_params.txt'), encoding='utf-8').read()
+        lines = [x.split('\t') for x in txt.splitlines() if x and not x.startswith('#')]
+        check([x for x in lines if x[1] != 'env'] == [list(v) for v in got.values()], '%s: --list-params != bake_params.txt' % exe)
+        nprog += 1
+    check(nprog >= 2, 'bake programs extracted: %d' % nprog)
     py = os.path.join(dirs['py310-np226'], 'py.exe')
     rc, o, e, _ = run([py, '-c', 'import sys,numpy;print("PY",sys.version.split()[0],numpy.__version__,sys.flags.isolated,sys.executable)'],
                       env=dict(env, PYTHONPATH=r'C:\bogus', PYTHONHOME=r'C:\bogus'), timeout=120)
@@ -482,13 +510,13 @@ def t_extract_with_shell():
     else:
         check(mk.get('slotBase') == (tempdir if farms else work) + '\\' and mk.get('slotKind') == 'Direct', 'INST marker %s' % mk)
         check(not rp, 'sandbox holds reparse points: %s' % rp)
-    return 'extracted %d components (%.1f s doctor); pwsh 7.6.6, py 3.10.5 + numpy 2.2.6 isolated; slot base %s; gpu_bake x2 parse 0 errors' % (
-        len(m['components']), s, work + '\\')
+    return 'extracted %d components (%.1f s doctor); py 3.10.5 + numpy 2.2.6 isolated; slot base %s; %d bake programs list their parameters' % (
+        len(m['components']), s, work + '\\', nprog)
 
 
 def t_dry_run_h2ekmine():
     """the built exe plans a real bake on ProdRoot from its EMBEDDED manifest, read-only: the gpu-bake step runs the payload's
-    pwsh on INST\\engine_v373\\gpu_bake.ps1 (WORK\\_runtime\\<appVersion>-<h8>); nothing is written to WORK"""
+    bake program INST\\engine_v373\\h2lm-bake.exe (WORK\\_runtime\\<appVersion>-<h8>); nothing is written to WORK"""
     work = os.path.join(H2ROOT, 'GPU Lightmap Work')
     # V5 (2026-10-14): since the T2 / T3 / T4 validation runs the exe has its own WORK\_runtime and WORK\standalone on ProdRoot
     # (by design), so "absent" can no longer be the precondition: the dry run must leave WORK's top level AND both exe trees
@@ -512,15 +540,14 @@ def t_dry_run_h2ekmine():
     plan = json.loads(o[o.index('{'):o.rindex('}') + 1])
     m = manifest()
     inst = inst_component(m)
-    pw = [c for c in m['components'] if c['name'] == 'pwsh-7.6.6'][0]
     check(str(plan.get('payload', '')).startswith('embedded'), 'payload %s' % plan.get('payload'))
     check(os.path.normcase(plan['inst']) == os.path.normcase(os.path.join(work, '_runtime', inst['dirName'])), 'inst %s' % plan['inst'])
     gb = [s for s in plan['steps'] if s['id'] == 'gpu-bake'][0]
-    check(os.path.normcase(gb['exe']) == os.path.normcase(os.path.join(lad, 'H2GpuLightmapper', 'rt', pw['dirName'], 'pwsh.exe')), 'exe %s' % gb['exe'])
-    check(os.path.normcase(os.path.join(plan['inst'], 'engine_v373', 'gpu_bake.ps1')) in [os.path.normcase(a) for a in gb['args']], 'args %s' % gb['args'])
+    check(os.path.normcase(gb['exe']) == os.path.normcase(os.path.join(plan['inst'], 'engine_v373', 'h2lm-bake.exe')), 'exe %s' % gb['exe'])
+    check(gb['args'][:2] == ['-Scenario', r'scenarios\multi\cyclotron\cyclotron'], 'args %s' % gb['args'])
     check(snap() == before and os.path.exists(os.path.join(work, '_runtime')) == had_runtime, 'the dry run wrote into production WORK')
     return 'gpu-bake: %s ... %s (INST %s), WORK untouched (top level + %d _runtime / %d standalone files unchanged)' % (
-        os.path.basename(gb['exe']), ' '.join(gb['args'][4:10]), inst['dirName'], len(before[1]), len(before[2]))
+        os.path.basename(gb['exe']), ' '.join(gb['args'][:6]), inst['dirName'], len(before[1]), len(before[2]))
 
 
 def t_custom_engine_gate():
@@ -627,7 +654,7 @@ def unlink_alias():
 
 
 def t_tool_args_quoted():
-    """0.6.8 RC (P17): every gpu_bake.ps1 the payload ships builds the four tool command lines with the scenario and the BSP quoted (a name with
+    """0.6.8 RC (P17): every gpu_bake.ps1 the bake programs port (the replaced scripts, STAGE\\replaced) builds the four tool command lines with the scenario and the BSP quoted (a name with
     spaces reaches tool_fast as ONE argument), and none keeps an unquoted form"""
     q = '`"'
     want = ['$a = "lightmaps ' + q + '$($o.ScenArg)' + q + ' ' + q + '$Bsp' + q + ' low',
@@ -637,7 +664,7 @@ def t_tool_args_quoted():
     old = ['$a = "lightmaps $($o.ScenArg) $Bsp', '$a = "lightmaps-farm-worker $Scenario $Bsp', '$aFullOverride = "lightmaps $($ovo.ScenArg) $Bsp', '$aFull = "lightmaps $Scenario $Bsp']
     n = 0
     for rel in ('engine_v373/gpu_bake.ps1', 'engine_custom/gpu_bake.ps1', '_research/ao/dev_AO/gpu_bake.ps1'):
-        p = os.path.join(STAGE, 'inst', *rel.split('/'))
+        p = os.path.join(STAGE, 'replaced', *rel.split('/'))
         if not os.path.isfile(p):
             continue
         t = open(p, encoding='utf-8', errors='replace').read()
@@ -662,7 +689,7 @@ def t_no_inject_exe():
     for z in sorted(os.listdir(PAYLOAD)):
         if not z.endswith('.zip'):
             continue
-        with zipfile.ZipFile(os.path.join(PAYLOAD, z)) as zf:
+        with L.PayloadZip(os.path.join(PAYLOAD, z)) as zf:      # 1.0: packed files are read out of the pack
             for i in zf.infolist():
                 n += 1
                 if i.filename.replace('\\', '/').split('/')[-1].lower() == 'inject.exe':

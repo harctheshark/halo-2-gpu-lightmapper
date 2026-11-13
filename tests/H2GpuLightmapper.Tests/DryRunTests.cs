@@ -34,7 +34,7 @@ namespace H2GpuLightmapper.Tests
             yield return T("dry: X2 Keep PC responsive: unticked plans carry no 'Responsive' at all; ticked = + -Responsive last on gpu_bake (incl. the fallback argv), GPULM_RESPONSIVE=1 on the AO trace / probe driver", ResponsivePlan);
             yield return T("dry: W2 2004 Exact Vertex Lighting?: unticked plans carry no -ExactVertexLighting; ticked = + it on every gpu_bake argv (after -Responsive), the note, no other step changes", ExactVertexPlan);
             yield return T("dry: Scenery Multi Permutation Fix: unticked plans carry no -SceneryOwnPermutationOnly; ticked = + it last on every gpu_bake argv (after the other two), the note, warnings for AO / probes, no other step changes", SceneryPermPlan);
-            yield return T("dry: Scenery Multi Permutation Fix is engine-gated: a payload whose gpu_bake.ps1 lacks the parameter refuses the flag (exit 2, 'Needs engine 0.6.4 or newer.'), never plans it; Custom uses engine_custom's own answer", SceneryPermGate);
+            yield return T("dry: Scenery Multi Permutation Fix is engine-gated: a payload whose engine's parameter list lacks the parameter refuses the flag (exit 2, 'Needs engine 0.6.4 or newer.'), never plans it; Custom uses engine_custom's own answer", SceneryPermGate);
             yield return T("dry 0.6.8: Re-bake speedup (--rebake-hint): GPULM_SKY_HINT=1 on the gpu_bake step of a REUSE bake only, argv unchanged; a fresh capture gets nothing and a warning; off = no env", RebakeHintPlan);
             yield return T("dry: DF64 Compatibility mode: every plan states the precision (JSON + text); --assume-no-fp64 plans Compatibility mode on an engine with it and refuses on one without; --force-compat = GPULM_COMPAT=1 on exactly the GPU steps, argv unchanged, refused (dry too) on an engine without the mode", Df64Plan);
             yield return T("dry 0.6.12: direct light samples (--direct-samples K): GPULM_DIRECT_SAMPLE_MUL=K on the gpu_bake step of a CUSTOM bake only, argv unchanged; x1 and off = no env; refused without --quality custom and out of 1-64", DirectSamplesPlan);
@@ -176,7 +176,7 @@ namespace H2GpuLightmapper.Tests
                 Assert.True(!Json.Write(off, false).Contains("SceneryOwnPermutationOnly"), "unticked plan: no SceneryOwnPermutationOnly anywhere (argv, params, env, notes)");
                 Assert.True(!off.Arr("notes").Cast<string>().Any(n => n.Contains("permutation fix")), "unticked: no note");
                 Assert.True(on.Arr("notes").Cast<string>().Any(n => n.StartsWith("scenery multi permutation fix on (experimental; differs from the 2004 tool on purpose)", StringComparison.Ordinal)), "ticked: the plan says 'scenery multi permutation fix on'");
-                Assert.Contains(on.Str("engine"), "gpu_bake.ps1", "engine named");
+                Assert.Contains(on.Str("engine"), "h2lm-bake.exe", "engine named");
                 bool layered = extra.Contains("--ao") || extra.Contains("--probe-points");
                 Assert.Eq(layered, on.Arr("warnings").Cast<string>().Any(w => w.Contains("Scenery Multi Permutation Fix") && w.Contains("untested")), "the AO / probe layers get a warning, a plain lightmap bake does not");
                 int gb = 0;
@@ -251,7 +251,7 @@ namespace H2GpuLightmapper.Tests
             var cust = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "custom", "--photons", "20000000", "--rays", "8" };
             var cbad = run(mixed, cust.Concat(new[] { "--scenery-permutation-fix" }).ToArray());
             Assert.Eq(2, cbad.Exit, "Custom on an engine_custom without the parameter: refused: " + cbad);
-            Assert.Contains(cbad.Json().Str("refused"), "engine_custom/gpu_bake.ps1", "names engine_custom");
+            Assert.Contains(cbad.Json().Str("refused"), "engine_custom/h2lm-bake.exe", "names engine_custom");
             Assert.Eq(0, run(mixed, cyc.Concat(new[] { "--scenery-permutation-fix" }).ToArray()).Exit, "Super on the same payload: engine_v373 declares it: planned");
             Assert.Eq(0, run(C.BuildPayload(C.Sb.Dir("payload_gate_cust_ok"), customEngine: true), cust.Concat(new[] { "--scenery-permutation-fix" }).ToArray()).Exit, "Custom with a declaring engine_custom: planned");
         }
@@ -272,7 +272,7 @@ namespace H2GpuLightmapper.Tests
             const string Var = "GPULM_COMPAT";
             var r = C.NewRoot();
             string oldP = C.PayloadDir;                                                         // the default test payload = the 0.6.3 engine: no Compatibility mode
-            string newP = C.BuildPayload(C.Sb.Dir("payload_df64_new"), compatEngine: true);     // engine 0.6.4: gpu_bake.ps1 validates GPULM_COMPAT
+            string newP = C.BuildPayload(C.Sb.Dir("payload_df64_new"), compatEngine: true);     // engine 0.6.4: its parameter list names GPULM_COMPAT (the engine validates it)
             var cyc = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap" };
             Func<string[], string[], string[]> cat = (a, b) => a.Concat(b).ToArray();
 
@@ -350,7 +350,8 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(2, fo.Exit, "old engine: refused: " + fo);
             string why = fo.Json().Str("refused");
             Assert.Contains(why, "--force-compat is not available", "plain reason");
-            Assert.Contains(why, "engine_v373/gpu_bake.ps1", "names the engine script");
+            Assert.Contains(why, "engine_v373/h2lm-bake.exe", "names the engine's bake program");
+            Assert.Contains(why, "(it does not validate GPULM_COMPAT)", "the plain wording of the missing marker");
             Assert.Contains(why, "Compatibility mode needs engine 0.6.4 or newer.", "and the requirement");
             Assert.True(!fo.Out.Contains("\"steps\"") && !fo.Out.Contains("env+"), "no plan, no env");
             var lf = C.Base("bake"); lf.AddRange(new[] { "--h2ek", r.Root, "--dry-run" }); lf.AddRange(cat(cyc, new[] { "--force-compat" }));
@@ -362,13 +363,13 @@ namespace H2GpuLightmapper.Tests
             var cust = new[] { "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "custom", "--photons", "20000000", "--rays", "8" };
             var cf = DfDry(mixedCustom, r, cat(cust, new[] { "--force-compat" }));
             Assert.Eq(2, cf.Exit, "Custom on an engine_custom without the mode: refused: " + cf);
-            Assert.Contains(cf.Json().Str("refused"), "engine_custom/gpu_bake.ps1", "names engine_custom");
+            Assert.Contains(cf.Json().Str("refused"), "engine_custom/h2lm-bake.exe", "names engine_custom");
             Assert.Eq(0, DfDry(mixedCustom, r, cat(cyc, new[] { "--force-compat" })).Exit, "Super on the same payload (engine_v373 has it): planned");
             Assert.Eq(2, DfDry(mixedCustom, r, cat(cust, new[] { "--assume-no-fp64" })).Exit, "and a GPU without FP64 under Custom is refused plainly");
             string mixedAo = C.BuildPayload(C.Sb.Dir("payload_df64_ao"), compatEngine: true, aoCompatEngine: false);
             var af = DfDry(mixedAo, r, cat(cyc, new[] { "--ao", "--force-compat" }));
             Assert.Eq(2, af.Exit, "AO with an AO engine copy without the mode: refused: " + af);
-            Assert.Contains(af.Json().Str("refused"), "dev_AO/gpu_bake.ps1", "names the AO engine");
+            Assert.Contains(af.Json().Str("refused"), "dev_AO/h2lm-bake.exe", "names the AO engine");
             Assert.Eq(0, DfDry(mixedAo, r, cat(cyc, new[] { "--force-compat" })).Exit, "the same payload without AO: planned");
             Assert.Eq("full-fp64-required", DfDry(mixedAo, r, cat(cyc, new[] { "--ao" })).Json().Obj("precision").Str("mode"), "with AO the plan says the AO engine needs FP64");
         }
@@ -564,7 +565,7 @@ namespace H2GpuLightmapper.Tests
                 Assert.Eq(drive + "GPU Work", e.Str("H2LM_WORK"), "H2LM_WORK");
                 var g = Step(p, "gpu-bake");
                 Assert.Eq(drive + "GPU Work", g.Str("cwd"), "cwd");
-                Assert.Contains(string.Join(" ", Args(g)), drive + @"GPU Work\_runtime\", "the script is under WORK");
+                Assert.Contains(g.Str("exe"), drive + @"GPU Work\_runtime\", "the bake program is under WORK");
                 Assert.True((p.Str("out") ?? "").StartsWith(drive + @"GPU Work\farm_w", StringComparison.OrdinalIgnoreCase), "OUT: " + p.Str("out"));
                 string all = Core.Util.Json.Write(p, false).Replace(@"\\", @"\");
                 // no drive-relative path ("Y:tags") and no doubled separator ("Y:\\tags") anywhere in the plan
@@ -608,12 +609,8 @@ namespace H2GpuLightmapper.Tests
         private static List<string> Args(JObj s) { return s.Arr("args").Select(x => (string)x).ToList(); }
         private static string Inst(TestRoot r) { return Path.Combine(r.Work, @"_runtime\0.5.0-s25cccc"); }
 
-        private static List<string> Pw(TestRoot r, string engineRel, params string[] a)
-        {
-            var l = new List<string> { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(Inst(r), engineRel) };
-            l.AddRange(a);
-            return l;
-        }
+        /// <summary>1.0: the bake program's argv is the bake arguments as they are (the exe is the step's "exe").</summary>
+        private static List<string> Ba(params string[] a) { return new List<string>(a); }
 
         // ------------------------------------------------------------------ tests
 
@@ -626,9 +623,10 @@ namespace H2GpuLightmapper.Tests
             Assert.Seq(new[] { "backup", "gpu-bake", "stage-or-tool-fallback", "copy-final-stage", "install", "verify" }, Ids(p), "steps (0.6.8: the stage is copied to KEEP before the install)");
             Assert.Seq(new[] { "Preflight", "Backup", "Capture", "Derive", "GpuBake", "TagWriter", "Install", "Verify" }, p.Arr("uiSteps").Cast<string>().ToList(), "UI steps");
             var g = Step(p, "gpu-bake");
-            Assert.Eq(Path.Combine(C.PwshDir, "pwsh.exe"), g.Str("exe"), "exe = rt pwsh");
+            Assert.Eq(Path.Combine(Inst(r), @"engine_v373\h2lm-bake.exe"), g.Str("exe"), "exe = the engine's bake program");
             Assert.Eq(r.Work, g.Str("cwd"), "cwd = WORK (run_bake's Set-Location)");
-            Assert.Seq(Pw(r, @"engine_v373\gpu_bake.ps1", "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct"),
+            Assert.Contains(g.Str("title"), "h2lm-bake farm_w200", "the step title names the bake program");
+            Assert.Seq(Ba("-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "super", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct"),
                        Args(g), "the production argv without -WriteBack (stage only)");
             Assert.Eq(true, g.Obj("params").Bool("shellInstalls"), "the shell installs its stage");
             Assert.Eq(true, g.Obj("capture").Bool("fresh"), "a new capture");
@@ -656,9 +654,10 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(r.Work, e.Str("H2LM_WORK"), "H2LM_WORK (the real path)");
             Assert.Eq(Inst(r), e.Str("H2LM_CODE"), "H2LM_CODE = INST");
             Assert.Eq("1", e.Str("H2LM_NOWINDOW"), "NOWINDOW");
-            Assert.True(e.Str("PATH").StartsWith(C.PyDir + ";" + C.PwshDir + ";", StringComparison.OrdinalIgnoreCase), "PATH = py; pwsh; system: " + e.Str("PATH"));
-            Assert.Eq(Path.Combine(C.PwshDir, "Modules"), e.Str("PSModulePath"), "PSModulePath isolated");
-            Assert.Eq("Bypass", e.Str("PSExecutionPolicyPreference"), "policy");
+            string sysRoot = Environment.GetEnvironmentVariable("SystemRoot");
+            Assert.Eq((C.PyDir + ";" + Path.Combine(sysRoot, "System32") + ";" + sysRoot + ";" + Path.Combine(sysRoot, @"System32\Wbem")).ToLowerInvariant(), e.Str("PATH").ToLowerInvariant(), "PATH = py; system (no shell runtime)");
+            Assert.True(!e.Keys.Any(k => k.Equals("PSModulePath", StringComparison.OrdinalIgnoreCase) || k.Equals("PSExecutionPolicyPreference", StringComparison.OrdinalIgnoreCase)
+                                         || k.StartsWith("POWERSHELL_", StringComparison.OrdinalIgnoreCase)), "no shell variable in the child environment (the inherited PSModulePath is gone too)");
             Assert.Eq("utf-8", e.Str("PYTHONIOENCODING"), "PYTHONIOENCODING");
             Assert.Eq("1", e.Str("PYTHONDONTWRITEBYTECODE"), "no __pycache__ in INST");
             Assert.Eq("1", e.Str("NO_COLOR"), "NO_COLOR");
@@ -674,7 +673,7 @@ namespace H2GpuLightmapper.Tests
             var r = C.NewRoot();
             var p = Plan(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--quality", "low", "--no-install");
             Assert.Seq(new[] { "gpu-bake", "stage-check", "copy-final-stage" }, Ids(p), "steps (R1: the stage-only result is checked; 0.6.8: then copied to KEEP)");
-            Assert.Seq(Pw(r, @"engine_v373\gpu_bake.ps1", "-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "low", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct"),
+            Assert.Seq(Ba("-Scenario", Cyc, "-Bsp", "cyclotron", "-Worker", "200", "-Quality", "low", "-SceneryFix", "-PluckerFix", "-WriteBackMode", "direct"),
                        Args(Step(p, "gpu-bake")), "stage-only argv (no -WriteBack)");
             Assert.Eq(Path.Combine(r.Farm(200), "tagw_stage", "tagw_report.json"), Step(p, "stage-check").Obj("params").Str("report"), "stage-check reads OUT\\tagw_stage\\tagw_report.json");
             Assert.Eq(false, p.Bool("install"), "no install");
@@ -748,7 +747,7 @@ namespace H2GpuLightmapper.Tests
             var pb = Step(p, "probe-bake");
             Assert.Seq(new[] { Path.Combine(Inst(r), @"_research\lightprobes\gpu_lightprobes.py"), "--scenario", Tri, "--bsp", "triplicate", "--worker", "201", "--quality", "super",
                                "--stage", Path.Combine(Inst(r), "engine_v373"), "--ltmp-src", Path.Combine(run, "final_stage", ltmp), "--out", Path.Combine(run, "probes"),
-                               "--h2-root", r.Root, "--farm", r.Farm(201), "--pwsh", Path.Combine(C.PwshDir, "pwsh.exe"), "--plucker-fix", "--scenery-fix" }, Args(pb), "gpu_lightprobes argv (P5)");
+                               "--h2-root", r.Root, "--farm", r.Farm(201), "--plucker-fix", "--scenery-fix" }, Args(pb), "gpu_lightprobes argv (P5; no shell is passed any more)");
             Assert.Eq(true, pb.Obj("capture").Bool("skyHi"), "probe capture is SKY_HI");
             Assert.Eq(Path.Combine(run, @"probes\gpu_bake.log"), pb.Str("sideLog"), "the shell tails its gpu_bake.log");
             Assert.Seq(new[] { Path.Combine(Inst(r), @"standalone\sh_stage.py"), "merge", "--stage", Path.Combine(run, "final_stage"), "--sh", Path.Combine(run, "probes", ltmp),
@@ -810,7 +809,7 @@ namespace H2GpuLightmapper.Tests
             var gres = C.Run(gl, 120000);
             Assert.Eq(0, gres.Exit, "Custom needs no dev switch when the payload carries engine_custom: " + gres);
             var gp = gres.Json();
-            Assert.Contains(string.Join("|", Args(Step(gp, "gpu-bake"))), Path.Combine(r.Work, @"_runtime\" + Ctx.GuardedInstDir, @"engine_custom\gpu_bake.ps1"), "the guarded Custom engine is the one that runs");
+            Assert.Eq(Path.Combine(r.Work, @"_runtime\" + Ctx.GuardedInstDir, @"engine_custom\h2lm-bake.exe"), Step(gp, "gpu-bake").Str("exe"), "the guarded Custom engine is the one that runs");
             Assert.Eq(true, gp.Obj("options").Bool("guarded"), "the plan records guarded=true");
             Assert.NotContains(string.Join("|", gp.Arr("warnings").Cast<string>()), "UNGUARDED", "no unguarded warning");
             var ga = Args(Step(gp, "gpu-bake"));

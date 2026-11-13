@@ -1,5 +1,5 @@
 // S2.1 Shell: payload extraction, verify, repair, INST (FINAL_DESIGN sections 2, 9 and plan step S2.1).
-//   rt\  : %LOCALAPPDATA%\H2GpuLightmapper\rt\<dirName>\   shared, immutable (pwsh 7.6.6, py310 + numpy)
+//   rt\  : %LOCALAPPDATA%\H2GpuLightmapper\rt\<dirName>\   shared, immutable (py310 + numpy, mapbake)
 //   INST : <ROOT>\GPU Lightmap Work\_runtime\<dirName>\     per root; both gpulm_estimator DLL families slot-patched with
 //          SlotAlias.Ensure(WORK).SlotBase (WORK\ itself when it fits in 60 bytes, else an alias junction)
 // Start: QuickCheck (size + mtime). Before each bake: VerifyBeforeBake (full md5 of INST, slot DLLs by re-pristining,
@@ -51,11 +51,11 @@ namespace H2GpuLightmapper.Core.Payload
     {
         public string AppVersion;
         public string Root, Work, InstDir, SlotBase;
-        public string PwshDir, PwshExe, PyDir, PyExe;
+        public string PyDir, PyExe;
         /// <summary>The extracted mapbake component (rt\mapbake-&lt;h8&gt;: mapbake.py + h2conv\) and its entry point; null when the payload has none.</summary>
         public string MapbakeDir, MapbakePy;
-        /// <summary>INST\engine_v373\gpu_bake.ps1 (S0.2: the bake argv is pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File this).</summary>
-        public string GpuBakePs1;
+        /// <summary>INST\engine_v373\h2lm-bake.exe, the bake program (1.0: it replaced the old bake script; same arguments).</summary>
+        public string BakeExe;
         /// <summary>INST\engine_v373\v043-tagwriter\lmw_install.py when present.</summary>
         public string LmwInstallPy;
         /// <summary>The shipped h2v_scenery_bounds.db in INST (null if the payload has none).</summary>
@@ -74,7 +74,7 @@ namespace H2GpuLightmapper.Core.Payload
 
         public BakeEnvSpec ToEnvSpec()
         {
-            return new BakeEnvSpec { PwshDir = PwshDir, PyDir = PyDir, Root = Root, Work = Work, Code = InstDir, Farms = FarmsInTemp ? FarmRoot : null, NoWindow = true };
+            return new BakeEnvSpec { PyDir = PyDir, Root = Root, Work = Work, Code = InstDir, Farms = FarmsInTemp ? FarmRoot : null, NoWindow = true };
         }
     }
 
@@ -269,14 +269,7 @@ namespace H2GpuLightmapper.Core.Payload
                 if (l != null) { _layoutCache[f.Md5] = l; return l; }
             }
             var c = Manifest.InstComponent;
-            using (var rs = Source.OpenResource(c.Resource))
-            using (var zip = new ZipArchive(rs, ZipArchiveMode.Read, false))
-            using (var zs = zip.GetEntry(f.Path).Open())
-            using (var ms = new MemoryStream())
-            {
-                zs.CopyTo(ms);
-                return LayoutForPristine(f, ms.ToArray());
-            }
+            return LayoutForPristine(f, PayloadExtractor.ReadFileBytes(Source, c, f));   // 1.0: a zip entry or a packed file
         }
 
         // ------------------------------------------------------------------ checks
@@ -544,7 +537,6 @@ namespace H2GpuLightmapper.Core.Payload
         public ResolvedRuntime Resolve(string root)
         {
             string work = ShellPaths.WorkOf(root);
-            var pw = Manifest.PwshComponent ?? throw new InvalidDataException("the payload has no pwsh runtime (pwsh.exe)");
             var py = Manifest.PyComponent ?? throw new InvalidDataException("the payload has no Python runtime (py.exe)");
             var ic = Manifest.InstComponent;
             string inst = InstDir(work);
@@ -557,11 +549,10 @@ namespace H2GpuLightmapper.Core.Payload
                 AppVersion = Manifest.AppVersion,
                 Root = SafeFs.Norm(root), Work = work, InstDir = inst,
                 SlotBase = marker == null ? null : marker.Str("slotBase"),
-                PwshDir = RtDir(pw), PwshExe = Path.Combine(RtDir(pw), "pwsh.exe"),
                 PyDir = RtDir(py), PyExe = Path.Combine(RtDir(py), "py.exe"),
                 MapbakeDir = Manifest.MapbakeComponent == null ? null : RtDir(Manifest.MapbakeComponent),
                 MapbakePy = Manifest.MapbakeComponent == null ? null : Path.Combine(RtDir(Manifest.MapbakeComponent), "mapbake.py"),
-                GpuBakePs1 = instFile("engine_v373/gpu_bake.ps1"),
+                BakeExe = instFile("engine_v373/h2lm-bake.exe"),
                 LmwInstallPy = instFile("engine_v373/v043-tagwriter/lmw_install.py"),
                 BoundsDb = bdb == null ? null : Path.Combine(inst, bdb.Path.Replace('/', '\\')),
                 ScanSceneryPy = instFile("standalone/scan_scenery_bounds.py"),

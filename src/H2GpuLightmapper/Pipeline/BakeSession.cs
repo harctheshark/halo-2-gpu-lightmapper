@@ -1,7 +1,7 @@
 // S3.x one bake, start to finish (FINAL_DESIGN sections 5, 7, 8, 9), shared by the GUI and the CLI.
 //   Prepare (refusals here = exit 2, before anything is written to the tags or a farm):
 //     options + feature flag -> root / scenario / BSP exist -> path text -> preflight (tool_fast, prerequisites, NTFS, ANSI,
-//     slot, budget, free space, write probe, tool smoke) -> payload extract + full verify + repair -> gpucheck + pwsh policy
+//     slot, budget, free space, write probe, tool smoke) -> payload extract + full verify + repair -> gpucheck
 //     -> bounds DB copied if absent -> startup recovery (interrupted run marked, own stale lock released; a half-finished
 //     install REFUSES the bake) -> map query (probe points, environments) -> workers -> capture-reuse gate
 //   Run (BakeRun: RUN\bake.log, status.json, current_run.json): run header -> the shared GPU lock (WAITING while held) ->
@@ -86,6 +86,9 @@ namespace H2GpuLightmapper.Pipeline
         public string RealRoot, RealWork, OverlayRoot, OverlayWork;
         /// <summary>Lines written to bake.log's header ("pre| ...") and notes added to the plan text (the .map path, the output, the cube map choice ...).</summary>
         public List<string> PreLines = new List<string>(), PlanNotes = new List<string>();
+        /// <summary>1.0: the .map path's own map query result when it found instanced geometry with no visible geometry (its warning is already in the log):
+        /// the inner bake keeps it as a run note and in the run summary without writing the log line again.</summary>
+        public MapInfo EmptyInstances;
     }
 
     public sealed class RefusedException : Exception { public RefusedException(string m) : base(m) { } }
@@ -187,6 +190,23 @@ namespace H2GpuLightmapper.Pipeline
             }
             try { run.Warn(StageWarning.WarningText(w)); } catch (Exception) { }
         }
+
+        /// <summary>1.0: the map query found instanced geometry instances with no visible geometry (a % object holding only +portal faces). A warning,
+        /// never a refusal: the pre-stage log line when the query returns, a run note when the run starts, a sentence in the run summary.</summary>
+        private MapInfo _emptyInst;
+
+        /// <summary>1.0: the run-summary sentence for instanced geometry with no visible geometry (empty when there is none).</summary>
+        public IList<string> EmptyInstanceWarnings
+        {
+            get { lock (_lock) return _emptyInst == null ? new List<string>() : new List<string> { _emptyInst.EmptyInstanceShort() }; }
+        }
+
+        private void NoteEmptyInstances(MapInfo m)
+        {
+            if (m == null || m.EmptyInstanceWarning() == null) return;
+            lock (_lock) { if (_emptyInst != null) return; _emptyInst = m; }
+            Say("  WARNING: " + m.EmptyInstanceWarning());
+        }
         /// <summary>The live tags were written by this run (the shell's install, or gpu_bake -WriteBack's [4b] / [4]).</summary>
         private bool _installed;
         // 0.6.8 bounded temp: this bake's hold on its Temp farm folders (.lock + sentinel); a vanished folder fails the run with
@@ -198,7 +218,7 @@ namespace H2GpuLightmapper.Pipeline
         private string Farms { get { return _rt != null ? _rt.Farms : _host.Installer.FarmRootOf(_work); } }
         private readonly List<RecoveryItem> _markers = new List<RecoveryItem>();
         private PreflightItem _hybridFail;
-        /// <summary>Compatibility mode (DF64): every engine this bake runs has it (gpu_bake.ps1 validates GPULM_COMPAT); the kernel set the bake runs
+        /// <summary>Compatibility mode (DF64): every engine this bake runs has it (its parameter list names GPULM_COMPAT); the kernel set the bake runs
         /// (Unknown = decided by the GPU at run time); and fullgpu's own "Compatibility mode" line as the engine reported it.</summary>
         private bool _engineHasCompat;
         private PrecisionMode _precision;
@@ -207,6 +227,8 @@ namespace H2GpuLightmapper.Pipeline
         public BakeSession(AppHost host, BakeOptions o, SessionOptions so = null)
         {
             _host = host; _o = o.Clone(); _so = so ?? new SessionOptions();
+            // 1.0: the .map path already warned about empty instanced geometry (its own map query): kept for the run note / summary, not logged twice
+            if (_so.Overlay != null && _so.Overlay.EmptyInstances != null && _so.Overlay.EmptyInstances.EmptyInstanceWarning() != null) _emptyInst = _so.Overlay.EmptyInstances;
         }
 
         public BakeOptions Options { get { return _o; } }
@@ -332,7 +354,7 @@ namespace H2GpuLightmapper.Pipeline
             // review fix (finding 16): Custom only on the N3 guarded fullgpu unless explicitly allowed unguarded
             if (_o.Quality == Quality.Custom && BakePlanner.GpuBakeRel(_o, _host.Manifest) == InstLayout.GpuBake && !_host.CustomUnguardedAllowed)
                 Refuse("Custom quality needs the N3 guarded fullgpu (engine_custom), which this payload does not carry -- without it a photon count past the uint32 limit wraps silently; dev: --dev-custom-unguarded");
-            // "Scenery Multi Permutation Fix": only an engine whose gpu_bake.ps1 declares -SceneryOwnPermutationOnly may be given it -- PowerShell fails a
+            // "Scenery Multi Permutation Fix": only an engine whose bake program takes -SceneryOwnPermutationOnly may be given it -- the bake program fails a
             // bake that is passed an unknown parameter, so this is refused up front (dry runs too), never passed on
             if (_o.SceneryPermutationFix)
             {
@@ -356,7 +378,7 @@ namespace H2GpuLightmapper.Pipeline
             try { full = Path.GetFullPath(_o.Root.Trim().Trim('"')); } catch (Exception e) { Refuse("not a usable folder: " + _o.Root + " (" + e.Message + ")"); }
             if (ShellPaths.IsDriveRoot(full))
             {
-                // X1 (was review fix, finding 23): an H2EK at "D:\" bakes only with a payload whose gpu_bake.ps1 has the P1b handling
+                // X1 (was review fix, finding 23): an H2EK at "D:\" bakes only with a payload whose bake programs have the P1b handling
                 string dwhy;
                 if (!_host.DriveRootEnabled(out dwhy)) Refuse(ShellPaths.DriveRootMessage + " (" + full + "): " + dwhy);
                 _driveRootOk = true;
@@ -374,7 +396,7 @@ namespace H2GpuLightmapper.Pipeline
             _set = TagSet.For(_root, rel, _o.Bsp);
             if (!File.Exists(_set.ScenarioFile)) Refuse("no scenario tag " + _set.ScenarioFile);
             // 0.6.4 cross-folder BSP: the BSP's tag may live in ANOTHER folder than the scenario (01b_spacestation -> 01a_tutorial\01_bsp_1). Only an engine whose
-            // gpu_bake.ps1 resolves it from the scenario's structure_bsps (AppHost.CrossFolderBspWhy) may be given one; an older engine keeps the beside-the-scenario rule.
+            // bake program resolves it from the scenario's structure_bsps (AppHost.CrossFolderBspWhy) may be given one; an older engine keeps the beside-the-scenario rule.
             string crossWhy = _host.CrossFolderBspWhy(_o);
             if (_o.BspRel != null)
             {
@@ -495,7 +517,7 @@ namespace H2GpuLightmapper.Pipeline
             }
             CheckCancel();
 
-            // ---- GPU + pwsh policy (needs the extracted runtime)
+            // ---- GPU (needs the extracted runtime)
             GpuCheckResult gpuRes = null;
             if (!dry && !_so.SkipPreflight)
             {
@@ -509,11 +531,11 @@ namespace H2GpuLightmapper.Pipeline
                     FarmsInTemp = _host.Manifest.FarmsInTemp,
                     GpuCheckExe = gpu ? _rt.GpuCheckExe : null,
                     GpuCheckPlainExe = gpu ? InstLayout.FindByName(inst, _rt.InstDir, InstLayout.GpuCheckPlain) : null,
-                    PwshExe = _rt.PwshExe, PwshEnv = _env, FullgpuSelectsDgpu = dgpuExports, CompatEngine = _engineHasCompat,
+                    FullgpuSelectsDgpu = dgpuExports, CompatEngine = _engineHasCompat,
                 });
                 gpuRes = pf2.Gpu;
                 if (pf2.Precision != PrecisionMode.Unknown) _precision = pf2.Precision;
-                foreach (var id in new[] { "gpu", "gpu.precision", "gpu.advice", "gpu.hybrid", "pwsh.policy" })
+                foreach (var id in new[] { "gpu", "gpu.precision", "gpu.advice", "gpu.hybrid" })
                 {
                     var it = pf2.Get(id);
                     if (it != null) Say("    " + it);
@@ -607,6 +629,7 @@ namespace H2GpuLightmapper.Pipeline
                     Say("  map query: " + q.CommandLine.Substring(0, Math.Min(160, q.CommandLine.Length)) + " ...");
                     _map = MapQuery.Run(q.FileName, q.Args, q.Cwd, _env);
                     if (!_map.Ok) Refuse("the map query failed: " + (_map.Error ?? _map.PointsError));
+                    NoteEmptyInstances(_map);       // 1.0: instanced geometry with no visible geometry: a warning only, the bake goes on
                     if (_bspFromScenario) ResolveBspFromScenario(_map);
                     if (!needQuery) _map = null;        // Lightmap Only: the query only located the BSP; the probe / lightmap facts stay unread as before
                 }
@@ -709,7 +732,7 @@ namespace H2GpuLightmapper.Pipeline
                 {
                     // Windows' Graphics settings can only add an exe that exists: put the exact file gpu_bake will copy there
                     // (its own Copy-Item -Force replaces it with the same bytes), so the user can register it
-                    string src = InstLayout.Full(_rt.InstDir, BakePlanner.GpuBakeRel(_o, _host.Manifest).Replace("gpu_bake.ps1", "v041-fullgpu/fullgpu.exe"));
+                    string src = InstLayout.Full(_rt.InstDir, InstLayout.Sibling(BakePlanner.GpuBakeRel(_o, _host.Manifest), "v041-fullgpu/fullgpu.exe"));
                     var made = new List<string>();
                     foreach (var e in missing.Where(e => !File.Exists(e)))
                     {
@@ -938,6 +961,10 @@ namespace H2GpuLightmapper.Pipeline
                 string[] pre;
                 lock (_lock) pre = _pre.ToArray();
                 foreach (var l in pre) run.Shell("pre| " + l);
+                // 1.0: empty instanced geometry is one of the run's visible notes (status.json notes, a yellow line in the live log)
+                MapInfo ei;
+                lock (_lock) ei = _emptyInst;
+                if (ei != null) { try { run.Warn("WARNING: " + ei.EmptyInstanceWarning()); } catch (Exception) { } }
                 plan = BuildPlan(run.RunDir, false);
                 Plan = plan;
                 var hp = Planned; if (hp != null) { try { hp(plan); } catch { } }
@@ -953,7 +980,7 @@ namespace H2GpuLightmapper.Pipeline
                 StartCancelWatch(run);
                 try
                 {
-                    var hdr = RunHeader.Collect(_rt.PwshExe, _rt.PyExe, _env, _work);
+                    var hdr = RunHeader.Collect(_rt.PyExe, _env, _work);
                     foreach (var l in hdr.Lines()) run.Shell(l);
                     CheckRuntimeHeader(run, hdr);
                     run.ThrowIfCancelled();
@@ -1052,6 +1079,15 @@ namespace H2GpuLightmapper.Pipeline
                     reason = (reason != null ? reason + "; " : "") + string.Join("; ", sws);
                     lock (run.Status) run.Status.Extra["stageWarnings"] = sws.Cast<object>().ToList();
                 }
+                // 1.0: instanced geometry with no visible geometry (the bake still ends as it ended: it is a warning only)
+                var eis = EmptyInstanceWarnings;
+                if (eis.Count > 0)
+                {
+                    reason = (reason != null ? reason + "; " : "") + string.Join("; ", eis);
+                    MapInfo ei2;
+                    lock (_lock) ei2 = _emptyInst;
+                    lock (run.Status) run.Status.Extra["emptyInstances"] = ei2.EmptyInstances.Cast<object>().ToList();
+                }
             }
             catch { }
             Reason = reason;
@@ -1083,17 +1119,17 @@ namespace H2GpuLightmapper.Pipeline
         }
 
         /// <summary>
-        /// Review fix (finding 20): the children must report the pinned runtime -- pwsh 7.6.6, `& py` = the bundle's py.exe,
+        /// Review fix (finding 20): the children must report the pinned runtime -- `py` on the child PATH = the bundle's py.exe,
         /// sys.executable inside the bundle, numpy 2.2.6 -- or the run stops (exit 3) BEFORE the GPU lock. Only the dev runtime
-        /// overrides (--rt-pwsh / --rt-py, which also skip the runtime md5 check) may go on, loudly.
+        /// override (--rt-py, which also skips the runtime md5 check) may go on, loudly.
         /// </summary>
         private void CheckRuntimeHeader(BakeRun run, RunHeaderInfo hdr)
         {
             var mism = hdr.Mismatches(_rt.PyExe, _rt.PyDir);
-            bool dev = _host.Config.RtPwshDir != null || _host.Config.RtPyDir != null;
-            if (dev) run.Shell("*** DEV RUNTIME OVERRIDE (--rt-pwsh / --rt-py): these runtimes were NOT md5-verified" + (mism.Count > 0 ? "; NOT THE PINNED RUNTIME: " + string.Join("; ", mism) : " (versions match the pin)"));
+            bool dev = _host.Config.RtPyDir != null;
+            if (dev) run.Shell("*** DEV RUNTIME OVERRIDE (--rt-py): this runtime was NOT md5-verified" + (mism.Count > 0 ? "; NOT THE PINNED RUNTIME: " + string.Join("; ", mism) : " (versions match the pin)"));
             else if (mism.Count > 0) throw new StepFailedException("the bake would not run on the pinned runtime: " + string.Join("; ", mism) + " -- Repair runtime, then bake again");
-            else run.Shell("    runtime = the pinned bundle (pwsh " + RunHeader.PinnedPwsh + ", bundle py, numpy " + RunHeader.PinnedNumpy + ")");
+            else run.Shell("    runtime = the pinned bundle (bundle py, numpy " + RunHeader.PinnedNumpy + ")");
         }
 
         private string LayerText()
@@ -1275,7 +1311,7 @@ namespace H2GpuLightmapper.Pipeline
             return true;
         }
 
-        /// <summary>U3: gpu_bake.ps1's own pre-flight refusal "-WriteBackMode direct cannot run: ..." (a writer file, the skeleton
+        /// <summary>U3: the bake program's own pre-flight refusal "-WriteBackMode direct cannot run: ..." (a writer file, the skeleton
         /// DLL or numpy missing), thrown before any phase banner -- with -WriteBack production falls back to tool mode there.</summary>
         public static bool DirectWriterCannotRun(ProcOutcome oc)
         {
@@ -1324,7 +1360,7 @@ namespace H2GpuLightmapper.Pipeline
                     + " characters (limit " + PathBudget.Limit + "). Nothing was written to your tags. Move the H2EK to a shorter path, then bake again.");
             }
             var args = BakePlanner.GpuBakeArgs(_o, plan.Worker.Value, true, skipCapture, plan.Limits);
-            var spec = PwshInvocation.GpuBake(WithEngine(plan.Engine), _env, args, StepIds.GpuBakeFallback);
+            var spec = BakeInvocation.GpuBake(WithEngine(plan.Engine), _env, args, StepIds.GpuBakeFallback);
             var fs = new PlanStep { Id = StepIds.GpuBakeFallback, UiStep = StepId.Install, Kind = PlanStepKind.Process, FileName = spec.FileName, Cwd = spec.Cwd };
             fs.Args.AddRange(spec.Args);
             BakePlanner.ApplyCompatEnv(_o, fs);      // --force-compat: the tool write-back fallback re-runs gpu_bake (a fresh capture), so it gets the variable too
@@ -1514,8 +1550,8 @@ namespace H2GpuLightmapper.Pipeline
         {
             return new ResolvedRuntime
             {
-                AppVersion = _rt.AppVersion, Root = _rt.Root, Work = _rt.Work, InstDir = _rt.InstDir, SlotBase = _rt.SlotBase, PwshDir = _rt.PwshDir, PwshExe = _rt.PwshExe,
-                PyDir = _rt.PyDir, PyExe = _rt.PyExe, GpuBakePs1 = script, LmwInstallPy = _rt.LmwInstallPy, BoundsDb = _rt.BoundsDb, ScanSceneryPy = _rt.ScanSceneryPy, GpuCheckExe = _rt.GpuCheckExe,
+                AppVersion = _rt.AppVersion, Root = _rt.Root, Work = _rt.Work, InstDir = _rt.InstDir, SlotBase = _rt.SlotBase,
+                PyDir = _rt.PyDir, PyExe = _rt.PyExe, BakeExe = script, LmwInstallPy = _rt.LmwInstallPy, BoundsDb = _rt.BoundsDb, ScanSceneryPy = _rt.ScanSceneryPy, GpuCheckExe = _rt.GpuCheckExe,
                 FarmRoot = _rt.FarmRoot,
             };
         }

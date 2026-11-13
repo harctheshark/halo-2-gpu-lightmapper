@@ -87,6 +87,8 @@ namespace H2GpuLightmapper.Core.Payload
     public static class PayloadExtractor
     {
         public const string CompleteMarker = ".complete";
+        /// <summary>1.0: a component's pack entry may be followed by "&lt;packEntry&gt;.index", the builder's list of the pack.</summary>
+        public const string PackIndexSuffix = ".index";
         public static readonly DateTime StampUtc = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         const int Buf = 1 << 20;
         /// <summary>".tmp_" + 8 hex.</summary>
@@ -146,42 +148,87 @@ namespace H2GpuLightmapper.Core.Payload
                         using (var zip = new ZipArchive(rs, ZipArchiveMode.Read, false))
                         using (var md5 = SafeFs.NewMd5())
                         {
-                            foreach (var e in zip.Entries)
+                            // one file: "exact" reads exactly the manifest size from a stream that goes on (the pack);
+                            // otherwise the stream is one zip entry and is read to its end
+                            Action<Stream, PayloadFile, bool> writeOne = (zs, mf, exact) =>
                             {
-                                o.Cancel.ThrowIfCancellationRequested();
-                                if (e.FullName.EndsWith("/", StringComparison.Ordinal)) continue; // dir entry
-                                PayloadFile mf;
-                                if (!want.TryGetValue(e.FullName, out mf)) throw new InvalidDataException("zip entry not in manifest: " + e.FullName);
-                                if (!seen.Add(e.FullName)) throw new InvalidDataException("duplicate zip entry: " + e.FullName);
-                                string dst = Path.GetFullPath(Path.Combine(tmp, e.FullName.Replace('/', '\\')));
-                                if (!dst.StartsWith(tmpFull, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("zip-slip entry: " + e.FullName);
+                                string dst = Path.GetFullPath(Path.Combine(tmp, mf.Path.Replace('/', '\\')));
+                                if (!dst.StartsWith(tmpFull, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("zip-slip entry: " + mf.Path);
                                 Directory.CreateDirectory(Path.GetDirectoryName(dst));
 
                                 md5.Initialize();
                                 long n = 0;
-                                using (var zs = e.Open())
                                 using (var fs = new FileStream(dst, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16))
                                 {
                                     if (mf.Size > 0) fs.SetLength(mf.Size);
                                     int r;
-                                    while ((r = zs.Read(buf, 0, buf.Length)) > 0)
+                                    while (true)
                                     {
+                                        int ask = exact ? (int)Math.Min(buf.Length, mf.Size - n) : buf.Length;
+                                        if (ask <= 0) break;
+                                        r = zs.Read(buf, 0, ask);
+                                        if (r <= 0) break;
                                         md5.TransformBlock(buf, 0, r, null, 0);
                                         fs.Write(buf, 0, r);
                                         n += r;
                                         p.BytesDone += r;
                                         if (o.Progress != null && p.BytesDone - lastReport >= (8 << 20)) { lastReport = p.BytesDone; o.Progress.Report(p); }
+                                        o.Cancel.ThrowIfCancellationRequested();
                                     }
-                                    if (n != mf.Size) throw new InvalidDataException(e.FullName + ": size " + n + " != manifest " + mf.Size);
+                                    if (n != mf.Size) throw new InvalidDataException(mf.Path + ": size " + n + " != manifest " + mf.Size);
                                     fs.Flush();
                                     StampMtime(fs.SafeFileHandle);
                                 }
                                 md5.TransformFinalBlock(buf, 0, 0);
                                 string h = SafeFs.Hex(md5.Hash);
                                 if (!string.Equals(h, mf.Md5, StringComparison.OrdinalIgnoreCase))
-                                    throw new InvalidDataException(e.FullName + ": md5 " + h + " != manifest " + mf.Md5);
+                                    throw new InvalidDataException(mf.Path + ": md5 " + h + " != manifest " + mf.Md5);
                                 p.FilesDone++;
                                 res.Bytes += n;
+                            };
+
+                            bool packSeen = false;
+                            foreach (var e in zip.Entries)
+                            {
+                                o.Cancel.ThrowIfCancellationRequested();
+                                if (e.FullName.EndsWith("/", StringComparison.Ordinal)) continue; // dir entry
+                                if (!string.IsNullOrEmpty(c.PackEntry) && string.Equals(e.FullName, c.PackEntry, StringComparison.Ordinal))
+                                {
+                                    // 1.0: the packed files, back to back in manifest order, as one LZMA stream
+                                    if (packSeen) throw new InvalidDataException("duplicate zip entry: " + e.FullName);
+                                    packSeen = true;
+                                    using (var es = e.Open())
+                                    using (var lz = new LzmaAloneStream(es))
+                                    {
+                                        foreach (var pf in c.Files)
+                                        {
+                                            if (!pf.Packed) continue;
+                                            if (!seen.Add(pf.Path)) throw new InvalidDataException("duplicate packed file: " + pf.Path);
+                                            writeOne(lz, pf, true);
+                                        }
+                                        if (lz.Read(buf, 0, 1) != 0) throw new InvalidDataException(c.PackEntry + ": holds more data than the manifest lists");
+                                    }
+                                    continue;
+                                }
+                                if (!string.IsNullOrEmpty(c.PackEntry) && string.Equals(e.FullName, c.PackEntry + PackIndexSuffix, StringComparison.Ordinal))
+                                {
+                                    // the builder's own list of the pack ("size<TAB>path" per line, in pack order), kept for the
+                                    // build tools; it must say what the manifest says
+                                    string idx;
+                                    using (var es = e.Open())
+                                    using (var sr = new StreamReader(es, new System.Text.UTF8Encoding(false)))
+                                        idx = sr.ReadToEnd();
+                                    var wantIdx = new System.Text.StringBuilder();
+                                    foreach (var pf in c.Files) if (pf.Packed) wantIdx.Append(pf.Size).Append('\t').Append(pf.Path).Append('\n');
+                                    if (!string.Equals(idx, wantIdx.ToString(), StringComparison.Ordinal))
+                                        throw new InvalidDataException(e.FullName + ": the pack index differs from the manifest");
+                                    continue;
+                                }
+                                PayloadFile mf;
+                                if (!want.TryGetValue(e.FullName, out mf)) throw new InvalidDataException("zip entry not in manifest: " + e.FullName);
+                                if (mf.Packed) throw new InvalidDataException("zip entry for a packed file: " + e.FullName);
+                                if (!seen.Add(e.FullName)) throw new InvalidDataException("duplicate zip entry: " + e.FullName);
+                                using (var zs = e.Open()) writeOne(zs, mf, false);
                             }
                         }
                     }
@@ -216,7 +263,28 @@ namespace H2GpuLightmapper.Core.Payload
         public static bool IsMarkedComplete(string dir, PayloadComponent c)
         {
             var m = ReadMarker(dir);
-            return m != null && string.Equals(m.Str("zipMd5"), c.ZipMd5, StringComparison.OrdinalIgnoreCase);
+            if (m == null) return false;
+            if (string.Equals(m.Str("zipMd5"), c.ZipMd5, StringComparison.OrdinalIgnoreCase)) return true;
+            // 1.0: the same files can arrive in a differently packed archive (0.6.12 shipped plain zips, 1.0 packs them), and
+            // the runtime folders keep their names from one app version to the next. A folder left by the other archive is
+            // this component when its NAME carries the hash of this component's file list (path + md5 of every file) and its
+            // marker counts the same files and bytes. The start-up quick check (size + stamp of every file) and the full md5
+            // verify before every bake still run on it.
+            string leaf = Path.GetFileName(dir.TrimEnd('\\', '/'));
+            return string.Equals(leaf, c.DirName, StringComparison.OrdinalIgnoreCase)
+                && c.DirName.EndsWith("-" + ContentHash8(c), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(m.Str("name"), c.Name, StringComparison.Ordinal)
+                && m.Long("fileCount") == c.FileCount
+                && m.Long("totalBytes") == c.TotalBytes;
+        }
+
+        /// <summary>The first 8 hex digits of the md5 over the component's sorted "&lt;path&gt; &lt;md5&gt;\n" lines: the content hash
+        /// the payload builder puts at the end of every extraction folder name.</summary>
+        public static string ContentHash8(PayloadComponent c)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var f in c.Files.OrderBy(x => x.Path, StringComparer.Ordinal)) sb.Append(f.Path).Append(' ').Append(f.Md5).Append('\n');
+            return SafeFs.Md5Hex(new System.Text.UTF8Encoding(false).GetBytes(sb.ToString())).Substring(0, 8);
         }
 
         /// <summary>Start-up check: marker matches, every manifest file exists with its size and the extraction mtime stamp.</summary>
@@ -315,6 +383,16 @@ namespace H2GpuLightmapper.Core.Payload
                         if (rs == null) throw new InvalidDataException("missing payload resource " + c.Resource);
                         using (var zip = new ZipArchive(rs, ZipArchiveMode.Read, false))
                         {
+                            // 1.0: packed files are read out of the pack in one forward pass
+                            Dictionary<string, byte[]> packed = null;
+                            Exception packError = null;
+                            var wantPacked = new HashSet<string>(StringComparer.Ordinal);
+                            foreach (var rel in todo) { var pf = c.Find(rel); if (pf != null && pf.Packed) wantPacked.Add(pf.Path); }
+                            if (wantPacked.Count > 0)
+                            {
+                                try { packed = ReadPacked(zip, c, wantPacked, ct); }
+                                catch (Exception ex) when (!(ex is OperationCanceledException)) { packError = ex; }
+                            }
                             foreach (var rel in todo)
                             {
                                 ct.ThrowIfCancellationRequested();
@@ -322,14 +400,22 @@ namespace H2GpuLightmapper.Core.Payload
                                 try
                                 {
                                     if (mf == null) throw new InvalidDataException("not in the manifest");
-                                    var e = zip.GetEntry(mf.Path);
-                                    if (e == null) throw new InvalidDataException("not in the zip");
                                     byte[] data;
-                                    using (var zs = e.Open())
-                                    using (var ms = new MemoryStream((int)Math.Max(0, Math.Min(int.MaxValue, mf.Size))))
+                                    if (mf.Packed)
                                     {
-                                        zs.CopyTo(ms);
-                                        data = ms.ToArray();
+                                        if (packError != null) throw packError;
+                                        if (packed == null || !packed.TryGetValue(mf.Path, out data)) throw new InvalidDataException("not in the pack");
+                                    }
+                                    else
+                                    {
+                                        var e = zip.GetEntry(mf.Path);
+                                        if (e == null) throw new InvalidDataException("not in the zip");
+                                        using (var zs = e.Open())
+                                        using (var ms = new MemoryStream((int)Math.Max(0, Math.Min(int.MaxValue, mf.Size))))
+                                        {
+                                            zs.CopyTo(ms);
+                                            data = ms.ToArray();
+                                        }
                                     }
                                     if (data.LongLength != mf.Size || !string.Equals(SafeFs.Md5Hex(data), mf.Md5, StringComparison.OrdinalIgnoreCase))
                                         throw new InvalidDataException("the zip copy does not match the manifest");
@@ -365,6 +451,73 @@ namespace H2GpuLightmapper.Core.Payload
                 finally { if (owned) mtx.ReleaseMutex(); }
             }
             return res;
+        }
+
+        /// <summary>1.0: the bytes of the named packed files of one component (one forward pass over its pack entry; the
+        /// files before the last wanted one are decoded and dropped). Nothing is md5-checked here.</summary>
+        static Dictionary<string, byte[]> ReadPacked(ZipArchive zip, PayloadComponent c, HashSet<string> wantPaths, CancellationToken ct)
+        {
+            var got = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(c.PackEntry)) throw new InvalidDataException("the component has no pack entry");
+            var e = zip.GetEntry(c.PackEntry);
+            if (e == null) throw new InvalidDataException("the pack entry " + c.PackEntry + " is not in the zip");
+            var skip = new byte[1 << 16];
+            using (var es = e.Open())
+            using (var lz = new LzmaAloneStream(es))
+            {
+                foreach (var pf in c.Files)
+                {
+                    if (!pf.Packed) continue;
+                    if (got.Count == wantPaths.Count) break;
+                    ct.ThrowIfCancellationRequested();
+                    if (wantPaths.Contains(pf.Path))
+                    {
+                        if (pf.Size > int.MaxValue) throw new InvalidDataException(pf.Path + ": too large to repair in memory");
+                        var data = new byte[pf.Size];
+                        lz.ReadExact(data, 0, data.Length);
+                        got[pf.Path] = data;
+                    }
+                    else
+                    {
+                        long left = pf.Size;
+                        while (left > 0) { int n = (int)Math.Min(skip.Length, left); lz.ReadExact(skip, 0, n); left -= n; }
+                    }
+                }
+            }
+            return got;
+        }
+
+        /// <summary>The bytes of one file of a component, straight from its payload resource (nothing is extracted): a zip
+        /// entry of its own, or, for a packed file, read out of the pack. Size and md5 are checked against the manifest.</summary>
+        public static byte[] ReadFileBytes(IPayloadSource src, PayloadComponent c, PayloadFile f)
+        {
+            using (var rs = src.OpenResource(c.Resource))
+            {
+                if (rs == null) throw new InvalidDataException("missing payload resource " + c.Resource);
+                using (var zip = new ZipArchive(rs, ZipArchiveMode.Read, false))
+                {
+                    byte[] data;
+                    if (f.Packed)
+                    {
+                        var got = ReadPacked(zip, c, new HashSet<string>(StringComparer.Ordinal) { f.Path }, CancellationToken.None);
+                        if (!got.TryGetValue(f.Path, out data)) throw new InvalidDataException(f.Path + ": not in the pack");
+                    }
+                    else
+                    {
+                        var e = zip.GetEntry(f.Path);
+                        if (e == null) throw new InvalidDataException(f.Path + ": not in the zip");
+                        using (var zs = e.Open())
+                        using (var ms = new MemoryStream())
+                        {
+                            zs.CopyTo(ms);
+                            data = ms.ToArray();
+                        }
+                    }
+                    if (data.LongLength != f.Size || !string.Equals(SafeFs.Md5Hex(data), f.Md5, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException(f.Path + ": the payload copy does not match the manifest");
+                    return data;
+                }
+            }
         }
 
         [DllImport("kernel32.dll", SetLastError = true)]

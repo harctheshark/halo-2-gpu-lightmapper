@@ -50,15 +50,40 @@ namespace H2GpuLightmapper.Tests
         public const string ProdDllMd5 = "d6147fce6e3979a37178d2e14d092227";      // W3 2026-10-21: the 0.6.4-promoted engine_v373 DLL (W1: b2370477, was aaf10a0f)
         public const string SkelDllMd5 = "56b774df2fce703a9a63da793aab7c8c";      // 0.6.9: engine_v374 skeleton-mode DLL with the fast NeuQuant (was 5c6aeea9 in 0.6.4-0.6.8)
 
-        public string Project, Exe, PwshDir, PyDir, MineRoot, FixturesDir, SandboxParent, ShortParent;
+        public string Project, Exe, PyDir, MineRoot, FixturesDir, SandboxParent, ShortParent;
         public bool Keep;
         public Sandbox Sb, Short;
         public string PayloadDir, Lad, Vol;
         public string FxLmwInstall, FxTagIo, FxTagDefs, FxProdDll, FxSkelDll, FxCycScenario, FxTriScenario, FxTriLtmp;
         private int _roots;
 
-        public string PwshExe { get { return Path.Combine(PwshDir, "pwsh.exe"); } }
         public string PyExe { get { return Path.Combine(PyDir, "py.exe"); } }
+        /// <summary>1.0: the fake bake program (tests\FakeBakeEngine, built next to this runner as h2lm-bake.exe). The test payload ships it as
+        /// h2lm-bake.exe beside fixtures\fake_gpu_bake.py and a bake_params.txt in every engine folder (engine_v373, engine_custom, the AO engine copy).</summary>
+        public string FakeBakeExe { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "h2lm-bake.exe"); } }
+
+        private string _fakeParams;
+        /// <summary>The parameter list the fake bake program reports (`--list-params` of the python fake, run with the bundle py), as the payload builder
+        /// writes it to bake_params.txt: a comment line, then "Name&lt;TAB&gt;type" per parameter and "NAME&lt;TAB&gt;env" per environment variable the engine validates.
+        /// <paramref name="drop"/> names are left out: an older engine, which then refuses the parameter (the fake takes only what its list names).</summary>
+        public string ParamsText(IEnumerable<string> drop)
+        {
+            if (_fakeParams == null)
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo(PyExe, "-I -B \"" + Fixture("fake_gpu_bake.py") + "\" --list-params")
+                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                using (var p = System.Diagnostics.Process.Start(psi))
+                {
+                    _fakeParams = p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd(); p.WaitForExit();
+                    if (p.ExitCode != 0) throw new InvalidOperationException("the fake bake program's --list-params exited " + p.ExitCode);
+                }
+            }
+            var dropped = new HashSet<string>(drop ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            var sb = new StringBuilder("# bake_params.txt: the parameters h2lm-bake.exe takes (--list-params), written by the payload builder\n");
+            foreach (var l in _fakeParams.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                if (!dropped.Contains(l.Split('\t')[0])) sb.Append(l).Append('\n');
+            return sb.ToString();
+        }
         public string MineWork { get { return Path.Combine(MineRoot, "GPU Lightmap Work"); } }
         /// <summary>0.6.8 (2026-10-29): the folder that holds the production engine files the tests COPY (engine_v373\, v043-tagwriter\, _research\):
         /// H2LM_TEST_MINE_GLW when set (a read-only mirror of those files), else MineWork itself when it holds engine_v373 (the old dev layout),
@@ -86,13 +111,12 @@ namespace H2GpuLightmapper.Tests
             Project = d;
             FixturesDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fixtures");
             Exe = Exe ?? Path.Combine(Project, @"src\H2GpuLightmapper\bin\Release\net48\H2 GPU Lightmapper.exe");
-            PwshDir = PwshDir ?? Path.Combine(Project, @"cache\pwsh-7.6.6-win-x64");
             PyDir = PyDir ?? Path.Combine(Project, @"build\s03\out\py310-np226");
             MineRoot = MineRoot ?? Environment.GetEnvironmentVariable("H2LM_TEST_MINE_ROOT");
             if (string.IsNullOrEmpty(MineRoot)) throw new InvalidOperationException("no production-like H2EK root: pass --mine DIR or set H2LM_TEST_MINE_ROOT (a tool_fast 3a889d37 H2EK whose GPU Lightmap Work holds engine_v373; it is only read)");
             SandboxParent = SandboxParent ?? Path.Combine(Project, @"build\s25\t");
             ShortParent = ShortParent ?? Path.Combine(Path.GetTempPath(), "s25");
-            foreach (var f in new[] { Exe, PwshExe, PyExe })
+            foreach (var f in new[] { Exe, FakeBakeExe, PyExe })
                 if (!File.Exists(f)) throw new InvalidOperationException("missing " + f);
             Sb = new Sandbox(SandboxParent, DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N").Substring(0, 4)) { Keep = Keep };
             Short = new Sandbox(ShortParent, Guid.NewGuid().ToString("N").Substring(0, 2)) { Keep = Keep };
@@ -131,18 +155,18 @@ namespace H2GpuLightmapper.Tests
         /// <summary>The INST dir name of a payload built with customEngine (another file set, so another extraction dir).</summary>
         public const string GuardedInstDir = "0.5.0-s25cccg";
 
-        /// <param name="customEngine">E1 (0.6.1): the INST carries engine_custom/gpu_bake.ps1 (the N3 guarded Custom engine), so Custom is offered
+        /// <param name="customEngine">E1 (0.6.1): the INST carries engine_custom/h2lm-bake.exe (the N3 guarded Custom engine), so Custom is offered
         /// with no dev switch.</param>
-        /// <param name="sceneryEngine">engine 0.6.4: engine_v373/gpu_bake.ps1 declares [switch]$SceneryOwnPermutationOnly (false = an older engine: the parameter line is dropped).</param>
-        /// <param name="customSceneryEngine">the same for engine_custom/gpu_bake.ps1 (only with customEngine).</param>
-        /// <param name="compatEngine">engine 0.6.4 Compatibility mode (DF64): engine_v373/gpu_bake.ps1 validates GPULM_COMPAT (false = an older engine, the 0.6.3 shape: every FAKE_COMPAT_ENGINE
-        /// line is dropped, so the script never mentions the variable). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
-        /// <param name="customCompatEngine">the same for engine_custom/gpu_bake.ps1 (only with customEngine); default = compatEngine.</param>
-        /// <param name="aoCompatEngine">the same for the AO engine copy _research/ao/dev_AO/gpu_bake.ps1; default = compatEngine.</param>
-        /// <param name="crossBspEngine">engine 0.6.4 cross-folder BSP (dev_S): the engine_v373 / engine_custom gpu_bake.ps1 declare [switch]$WriterOnly and [switch]$ToolOverlay (false = an older
-        /// engine: the two parameter lines are dropped). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
+        /// <param name="sceneryEngine">engine 0.6.4: engine_v373's bake_params.txt lists the switch SceneryOwnPermutationOnly (false = an older engine: the name is left out of the list, and the fake refuses it).</param>
+        /// <param name="customSceneryEngine">the same for engine_custom (only with customEngine).</param>
+        /// <param name="compatEngine">engine 0.6.4 Compatibility mode (DF64): engine_v373's bake_params.txt has the line "GPULM_COMPAT" + TAB + "env" (false = an older engine, the 0.6.3 shape: the
+        /// list never names the variable, the fake never validates it and prints no Compatibility line). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
+        /// <param name="customCompatEngine">the same for engine_custom (only with customEngine); default = compatEngine.</param>
+        /// <param name="aoCompatEngine">the same for the AO engine copy _research/ao/dev_AO; default = compatEngine.</param>
+        /// <param name="crossBspEngine">engine 0.6.4 cross-folder BSP (dev_S): the engine_v373 / engine_custom parameter lists name the switches WriterOnly and ToolOverlay (false = an older
+        /// engine: the two names are left out). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
         /// <param name="splitBspDrivers">0.6.5: which research drivers carry the marker line SPLIT_BSP_SUPPORT = 1 (they read the BSP from the file the scenario's structure_bsps names):
-        /// 1 = gpu_ao.py (+ the AO engine copy's gpu_bake.ps1 declares -WriterOnly / -ToolOverlay), 2 = gpu_lightprobes.py, 3 = both; 0 = a 0.6.4 payload. Use with crossBspEngine.</param>
+        /// 1 = gpu_ao.py (+ the AO engine copy's parameter list names -WriterOnly / -ToolOverlay), 2 = gpu_lightprobes.py, 3 = both; 0 = a 0.6.4 payload. Use with crossBspEngine.</param>
         public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null,
                                    bool sceneryEngine = true, bool customSceneryEngine = true, bool compatEngine = false, bool? customCompatEngine = null, bool? aoCompatEngine = null,
                                    bool crossBspEngine = false, int splitBspDrivers = 0, bool mapbakeComponent = false, bool? farmsFeature = null)
@@ -169,31 +193,31 @@ namespace H2GpuLightmapper.Tests
             // 0.6.8 bounded temp: the farms in WORK\Temp (safe to delete) (MANIFEST features.farms) + the engine-owned slim list: another file set, another dir name (13)
             if (farmsFeature == true) instDirName = "0.5.0-s25ffff";
             Func<byte[], bool, byte[]> mark = (b, on) => on ? b.Concat(new UTF8Encoding(false).GetBytes("\nSPLIT_BSP_SUPPORT = 1\n")).ToArray() : b;
-            Func<bool, bool, byte[]> fakeBake = (withScenery, withCompat) =>
+            // One engine folder = the fake bake program + the fake script it runs + its parameter list. The variants (older engines) leave names out of the list.
+            Func<string, bool, bool, bool, List<F>> engineFiles = (folder, withScenery, withCrossBsp, withCompat) =>
             {
-                string t = File.ReadAllText(Fixture("fake_gpu_bake.ps1"));
-                var lines = t.Replace("\r\n", "\n").Split('\n').AsEnumerable();
-                if (!withScenery) lines = lines.Where(l => l.IndexOf("SceneryOwnPermutationOnly", StringComparison.Ordinal) < 0);
-                if (!withCompat) lines = lines.Where(l => l.IndexOf("FAKE_COMPAT_ENGINE", StringComparison.Ordinal) < 0);
-                if (!crossBspEngine) lines = lines.Where(l => l.IndexOf("FAKE_CROSSBSP_ENGINE", StringComparison.Ordinal) < 0);
-                return new UTF8Encoding(false).GetBytes(string.Join("\r\n", lines));
+                var drop = new List<string>();
+                if (!withScenery) drop.Add("SceneryOwnPermutationOnly");
+                if (!withCrossBsp) { drop.Add("WriterOnly"); drop.Add("ToolOverlay"); }
+                if (!withCompat) drop.Add("GPULM_COMPAT");
+                return new List<F>
+                {
+                    new F { Path = folder + "/h2lm-bake.exe", Data = File.ReadAllBytes(FakeBakeExe) },
+                    new F { Path = folder + "/fake_gpu_bake.py", Data = File.ReadAllBytes(Fixture("fake_gpu_bake.py")) },
+                    new F { Path = folder + "/bake_params.txt", Data = new UTF8Encoding(false).GetBytes(ParamsText(drop)) },
+                };
             };
             var rnd = new Random(25);
             Func<int, byte[]> blob = n => { var b = new byte[n]; rnd.NextBytes(b); return b; };
             Func<string, byte[]> txt = s => new UTF8Encoding(false).GetBytes(s);
             var comps = new List<Tuple<string, string, string, List<F>>>
             {
-                Tuple.Create("rt-pwsh-test", "pwsh-test-s25aaaa", "rt", new List<F>
-                {
-                    new F { Path = "pwsh.exe", Data = blob(3000) }, new F { Path = "Modules/Microsoft.PowerShell.Utility/x.psd1", Data = txt("@{ fake = 1 }") },
-                }),
                 Tuple.Create("rt-py-test", "py310-s25bbbb", "rt", new List<F>
                 {
                     new F { Path = "py.exe", Data = blob(2000) }, new F { Path = "python310._pth", Data = txt("python310.zip\n.\nsite-packages\nimport site\n") },
                 }),
                 Tuple.Create("engine-test", instDirName, "inst", new List<F>
                 {
-                    new F { Path = "engine_v373/gpu_bake.ps1", Data = fakeBake(sceneryEngine, compatEngine) },
                     new F { Path = "engine_v373/v043-tagwriter/lmw_install.py", Data = File.ReadAllBytes(FxLmwInstall) },
                     new F { Path = "engine_v373/v043-tagwriter/lmw_validate.py", Data = File.ReadAllBytes(Fixture("fake_lmw_validate.py")) },
                     new F { Path = "engine_v373/v014-inject-estimator/gpulm_estimator.dll", Data = File.ReadAllBytes(FxProdDll), Role = "dllslot" },
@@ -201,7 +225,6 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "engine_v373/v041-fullgpu/fullgpu.exe", Data = blob(4000) },
                     new F { Path = "_research/ao/gpu_ao.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_ao.py")), (splitBspDrivers & 1) != 0) },
                     new F { Path = "_research/ao/ao_existing.py", Data = File.ReadAllBytes(Fixture("fake_ao_existing.py")) },      // 0.6.8 xc8: AO only
-                    new F { Path = "_research/ao/dev_AO/gpu_bake.ps1", Data = txt(((splitBspDrivers & 1) != 0 ? "param([switch]$WriterOnly, [switch]$ToolOverlay)\n" : "") + (aoCompat ? "if (Test-Path Env:GPULM_COMPAT) { }   # the AO engine copy of an engine with Compatibility mode (DF64)\n" : "") + "throw 'the test dev_AO gpu_bake is never run directly'\n") },
                     new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")), (splitBspDrivers & 2) != 0) },
                     new F { Path = "standalone/sh_stage.py", Data = File.ReadAllBytes(Fixture("fake_sh_stage.py")) },
                     new F { Path = "standalone/scan_scenery_bounds.py", Data = File.ReadAllBytes(Fixture("fake_scan_scenery_bounds.py")) },
@@ -209,8 +232,10 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "v043-tagwriter/lmw_defs.json", Data = File.ReadAllBytes(FxTagDefs) },
                 }),
             };
-            if (customEngine) comps[2].Item4.Add(new F { Path = "engine_custom/gpu_bake.ps1", Data = fakeBake(customSceneryEngine, custCompat) });
-            if (farmsFeature == true) comps[2].Item4.Add(new F { Path = "standalone/farm_products.json", Data = File.ReadAllBytes(Path.Combine(Project, @"src\standalone\farm_products.json")) });
+            comps[1].Item4.AddRange(engineFiles("engine_v373", sceneryEngine, crossBspEngine, compatEngine));
+            comps[1].Item4.AddRange(engineFiles("_research/ao/dev_AO", false, (splitBspDrivers & 1) != 0, aoCompat));      // the AO engine copy: the gpu_ao driver starts its bake program
+            if (customEngine) comps[1].Item4.AddRange(engineFiles("engine_custom", customSceneryEngine, crossBspEngine, custCompat));
+            if (farmsFeature == true) comps[1].Item4.Add(new F { Path = "standalone/farm_products.json", Data = File.ReadAllBytes(Path.Combine(Project, @"src\standalone\farm_products.json")) });
             // milestone 2: the rt component with the mapbake entry point (stubs: the dry-run tests never start it)
             if (mapbakeComponent)
                 comps.Add(Tuple.Create("rt-mapbake-test", "mapbake-test-s25dddd", "rt", new List<F>
@@ -320,7 +345,7 @@ namespace H2GpuLightmapper.Tests
         public ChildEnvironment ExeEnv()
         {
             return ChildEnvironment.FromCurrentProcess().Set("GPULM_SKY_HI", "1").Set("GPULM_SURF_SAMPCHUNK", "8").Set("OSOYOOS_INJECTOR_PATCH_QUALITY", "x")
-                .Set("PYTHONPATH", @"C:\bogus\pythonpath").Set("PYTHONHOME", @"C:\bogus\pythonhome").Set("H2LM_ROOT", @"C:\bogus\root").Set("PSModulePath", @"C:\bogus\modules")
+                .Set("PYTHONPATH", @"C:\bogus\pythonpath").Set("PYTHONHOME", @"C:\bogus\pythonhome").Set("H2LM_ROOT", @"C:\bogus\root").Set("PSModulePath", @"C:\bogus\modules")     // PSModulePath: an inherited shell variable never reaches the children
                 .Set("DEVP_SB_PAD", "3").Set("DEVP_PROF_EXIT", "1").Set(SecretName, SecretValue);
         }
 
@@ -333,11 +358,11 @@ namespace H2GpuLightmapper.Tests
             return res;
         }
 
-        /// <summary>--cli VERB --payload-dir .. --localappdata .. --alias-volume-root .. --rt-pwsh .. --rt-py .. [extra]</summary>
+        /// <summary>--cli VERB --payload-dir .. --localappdata .. --alias-volume-root .. --rt-py .. [extra]</summary>
         public List<string> Base(string verb, bool rt = true)
         {
             var l = new List<string> { "--cli", verb, "--payload-dir", PayloadDir, "--localappdata", Lad, "--alias-volume-root", Vol };
-            if (rt) { l.Add("--rt-pwsh"); l.Add(PwshDir); l.Add("--rt-py"); l.Add(PyDir); }
+            if (rt) { l.Add("--rt-py"); l.Add(PyDir); }
             return l;
         }
 

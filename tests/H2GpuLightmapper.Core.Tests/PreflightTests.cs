@@ -26,11 +26,11 @@ namespace H2GpuLightmapper.Core.Tests
             yield return T("preflight: W2 a GPU without FP64 is refused in plain words (NVIDIA / AMD advice, CPU tool), technical detail kept", W2NoFp64Plain);
             yield return T("preflight: DF64 a GPU without FP64 runs in Compatibility mode (DF64) when the engine has it (gpucheck 1.2.0 and older JSON); an engine without it keeps the plain refusal", Df64Compat);
             yield return T("preflight: DF64 an FP64 GPU is 'Precision: Full FP64'; ApplyEngine flips with the engine; software adapter / device failure never become Compatibility mode; hybrid rules", Df64FullAndHybrid);
-            yield return T("engine: DF64 marker = the engine's gpu_bake.ps1 reads $env:GPULM_COMPAT in code (a comment or a string mention does not count)", Df64EngineMarker);
+            yield return T("engine: DF64 marker = the engine's parameter list names GPULM_COMPAT as an environment variable (a comment, a parameter or another name does not count)", Df64EngineMarker);
             yield return T("preflight: write probe on a scratch root (leaves nothing)", WriteProbe);
             yield return T("preflight: bounds DB copied only if absent; never overwritten", BoundsDb);
             yield return T("preflight: gpucheck JSON parse (ok and no-FP64) and a real gpucheck run", GpuCheckTests);
-            yield return T("preflight: pwsh policy / language mode through the bundled pwsh", PwshPolicy);
+            yield return T("preflight: no shell policy check any more (no 'pwsh.policy' item)", PwshPolicy);
             yield return T("preflight: tool_fast smoke run of a COPY in a scratch root (10 s, hidden)", ToolSmoke);
         }
 
@@ -402,25 +402,22 @@ namespace H2GpuLightmapper.Core.Tests
         private static void Df64EngineMarker()
         {
             Func<string, bool> reads = s => Core.Payload.EngineSwitches.ReadsEnvVar(s, "GPULM_COMPAT");
-            // the real 0.6.4 shape (gpu_bake.ps1 of dev_DF): Test-Path Env:X ... $env:X
-            Assert.True(reads("param([string]$Scenario)\nif (Test-Path Env:GPULM_COMPAT) {\n  if ($env:GPULM_COMPAT -ne '' -and $env:GPULM_COMPAT -ne '0') { throw \"GPULM_COMPAT='$($env:GPULM_COMPAT)' -- expected 0, 1 or unset\" } }"), "validation in code");
-            Assert.True(reads("if ($env:gpulm_compat -eq '1') { 1 }"), "case-insensitive, code");
-            Assert.True(reads("$x = Test-Path Env:GPULM_COMPAT"), "Env: provider path");
-            Assert.True(!reads("param([switch]$Responsive)\nif ($env:GPULM_RESPONSIVE) { 1 }"), "an engine with other GPULM_ variables only (0.6.3)");
-            Assert.True(!reads("# GPULM_COMPAT=1 arrives in 0.6.4: $env:GPULM_COMPAT\nWrite-Host hi"), "named only in a comment");
-            Assert.True(!reads("<# $env:GPULM_COMPAT #>\nWrite-Host hi"), "named only in a block comment");
-            Assert.True(!reads("Write-Host 'set $env:GPULM_COMPAT to 1'"), "named only inside a single-quoted string");
-            Assert.True(!reads("Write-Host \"set `$env:GPULM_COMPAT\""), "named only inside a double-quoted string");
-            Assert.True(!reads("$env:GPULM_COMPAT_LIB = 1"), "a longer name is not the name");
-            Assert.True(!reads("$myenv:GPULM_COMPAT = 1"), "not another provider / variable ending in env");
-            Assert.True(!reads(""), "empty script"); Assert.True(!reads(null), "null script");
-            // the production engine of this PC (read only): promoted to 0.6.4 on 2026-10-21 it HAS the marker; the 0.6.3 script (kept as the promotion's backup) has none
-            string prod = Path.Combine(C.MineGlw, @"engine_v373\gpu_bake.ps1");
-            if (File.Exists(prod)) Assert.True(reads(File.ReadAllText(prod)), "production engine_v373 (0.6.4) validates GPULM_COMPAT");
-            string old063 = Path.Combine(C.MineGlw, @"engine_v373\_backup_20261021_145623_pre_064\gpu_bake.ps1");
-            if (File.Exists(old063)) Assert.True(!reads(File.ReadAllText(old063)), "engine_v373 as of 0.6.3 (the pre-promotion backup) has no Compatibility mode");
-            string dev = Path.Combine(C.MineGlw, @"_research\df64\dev_DF\gpu_bake.ps1");
-            if (File.Exists(dev)) Assert.True(reads(File.ReadAllText(dev)), "dev_DF (engine 0.6.4 candidate) validates GPULM_COMPAT");
+            // the real shape of an engine's parameter list: "Name<TAB>type" lines, "NAME<TAB>env" for a variable the engine validates
+            Assert.True(reads("# bake_params.txt\nScenario\tstring\nWorker\tint\nGPULM_COMPAT\tenv\n"), "the variable is listed as env");
+            Assert.True(reads("Scenario\tstring\r\nGPULM_COMPAT\tenv\r\n"), "CRLF line ends");
+            Assert.True(reads("gpulm_compat\tENV"), "case-insensitive");
+            Assert.True(!reads("Scenario\tstring\nResponsive\tswitch\n"), "an engine without the mode (0.6.3): the name is not listed");
+            Assert.True(!reads("# GPULM_COMPAT\tenv arrives in 0.6.4\nScenario\tstring\n"), "named only in a comment");
+            Assert.True(!reads("GPULM_COMPAT\tstring\n"), "listed as a parameter, not as an environment variable");
+            Assert.True(!reads("GPULM_COMPAT_LIB\tenv\n"), "a longer name is not the name");
+            Assert.True(!reads("XGPULM_COMPAT\tenv\n"), "a name that merely ends in it is not the name");
+            Assert.True(!reads("GPULM_COMPAT\n"), "a name without a type is not a list line");
+            Assert.True(!reads(""), "empty list"); Assert.True(!reads(null), "null list");
+            Assert.True(!Core.Payload.EngineSwitches.DeclaresSwitch("GPULM_COMPAT\tenv\n", "GPULM_COMPAT"), "an env line never declares a switch");
+            // the production engine's parameter list, when this PC has one (read only): the engine validates GPULM_COMPAT (0.6.4 and newer)
+            string prod = Path.Combine(C.MineGlw, @"engine_v373\bake_params.txt");
+            if (File.Exists(prod)) Assert.True(reads(File.ReadAllText(prod)), "production engine_v373 validates GPULM_COMPAT");
+            // (no production check otherwise: the engine's script is no longer parsed, and an engine folder without a parameter list is not trusted with anything)
         }
 
         private static void GpuCheckTests()
@@ -477,12 +474,9 @@ namespace H2GpuLightmapper.Core.Tests
         {
             if (C.NoProcesses) throw new TestSkip("--no-processes");
             var o = ReadOnly();
-            o.PwshExe = C.PwshExe;
-            o.PwshEnv = BakeEnv.Build(new H2Lm.Proc.BakeEnvSpec { PwshDir = C.PwshDir, PyDir = C.PyDir });
             var r = PreflightChecks.Run(C.MineRoot, o);
-            var p = r.Get("pwsh.policy");
-            Assert.Eq(CheckLevel.Ok, p.Level, "policy: " + p.Message + " / " + p.Detail);
-            Assert.Contains(p.Detail, "MachinePolicy=", "scopes listed");
+            Assert.True(r.Get("pwsh.policy") == null, "the shell policy check is gone: there is no shell to check");
+            Assert.True(!r.Items.Any(i => i.Id.IndexOf("pwsh", StringComparison.OrdinalIgnoreCase) >= 0), "no preflight item names a shell");
         }
 
         private static void ToolSmoke()

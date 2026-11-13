@@ -265,7 +265,7 @@ namespace H2GpuLightmapper.Core.Tests
                 PyExe = C.PyExe, LmwInstallPy = lmw ?? C.FxLmwInstall, Root = f.Root, Work = f.Work, Stage = stage, TargetDir = f.TagDir,
                 BackupDir = Path.Combine(runDir, "tag_backup_before_writeback"), AutoBackupRoot = Path.Combine(f.Work, "_TAGBAK_auto"),
                 Marker = Path.Combine(Path.GetDirectoryName(stage), StartupRecovery.MarkerName),
-                Env = BakeEnv.Build(new H2Lm.Proc.BakeEnvSpec { PwshDir = C.PwshDir, PyDir = C.PyDir, Root = f.Root, Work = f.Work }),
+                Env = BakeEnv.Build(new H2Lm.Proc.BakeEnvSpec { PyDir = C.PyDir, Root = f.Root, Work = f.Work }),
             };
         }
 

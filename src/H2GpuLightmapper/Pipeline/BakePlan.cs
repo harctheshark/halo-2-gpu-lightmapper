@@ -165,7 +165,7 @@ namespace H2GpuLightmapper.Pipeline
 
         /// <summary>
         /// Review fix (finding 18, privacy): the plan prints the environment variables the shell SETS or overrides with their
-        /// values (ChildEnvironment.IsLoggable: H2LM_*, PATH, PSModulePath, PSExecutionPolicyPreference, NO_COLOR, POWERSHELL_*,
+        /// values (ChildEnvironment.IsLoggable: H2LM_*, PATH, NO_COLOR,
         /// PYTHON*, and the stripped pipeline prefixes so a leak stays visible). Every other variable is inherited unchanged
         /// and listed by NAME only ("envInherited"): it may hold an API key or a token, and bake.log / --dry-run output gets
         /// shared and committed.
@@ -213,7 +213,7 @@ namespace H2GpuLightmapper.Pipeline
                     .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting).Add("sceneryPermutationFix", o.SceneryPermutationFix).Add("forceCompat", o.ForceCompat)
                     .Add("guarded", CustomGuarded.HasValue ? (object)CustomGuarded.Value : null))
                 .Add("root", Root).Add("work", Work).Add("inst", InstDir).Add("slotBase", SlotBase).Add("runDir", RunDir).Add("runDirPredicted", RunDirPredicted)
-                .Add("pwsh", Rt == null ? null : Rt.PwshExe).Add("py", Rt == null ? null : Rt.PyExe).Add("engine", Engine)
+                .Add("py", Rt == null ? null : Rt.PyExe).Add("engine", Engine)
                 .Add("worker", Worker.HasValue ? (object)(long)Worker.Value : null).Add("workerNote", WorkerNote)
                 .Add("probeWorker", ProbeWorker.HasValue ? (object)(long)ProbeWorker.Value : null).Add("probeWorkerNote", ProbeWorkerNote)
                 .Add("out", Out).Add("outProbe", OutProbe)
@@ -241,7 +241,7 @@ namespace H2GpuLightmapper.Pipeline
             sb.AppendLine("  root      " + Root);
             sb.AppendLine("  work      " + Work);
             sb.AppendLine("  inst      " + InstDir + (SlotBase != null ? "   (DLL slot base " + SlotBase + ")" : ""));
-            if (Rt != null) sb.AppendLine("  runtimes  pwsh " + Rt.PwshExe + "   py " + Rt.PyExe);
+            if (Rt != null) sb.AppendLine("  runtimes  py " + Rt.PyExe);
             sb.AppendLine("  engine    " + Engine);
             sb.AppendLine("  map       " + o.ScenarioRel + "   bsp " + o.Bsp);
             sb.AppendLine("  options   " + o.Summary());

@@ -686,6 +686,182 @@ class Stager:
                                  'x86 one): %s' % '; '.join(x64_vc))
         return rows
 
+    # ------------------------------------------------------------------ 1.0: the native bake program replaces gpu_bake.ps1
+    def stage_bake_engine(self):
+        """1.0 (2026-11-11): every staged gpu_bake.ps1 (engine_v373, engine_custom, _research/ao/dev_AO) is REPLACED by the native bake
+        program h2lm-bake.exe (inst.bake_engine; the environment variable H2LM_BAKE_EXE overrides its path for a trial build) in the same
+        folder, plus that folder's parameter list bake_params.txt = `h2lm-bake.exe --list-params` (one 'Name<TAB>type' line per
+        parameter) + one 'NAME<TAB>env' line per inst.bake_engine.env_features variable the replaced script validates in its code. The
+        program must take every parameter of the script it replaces, with the same type (else REFUSED). The scripts were staged first
+        (the gpu_bake series, the code-reference / drive-root / farms checks read them as the reference the program ports); they leave
+        the stage here, so the payload ships no script and no shell runtime."""
+        be = self.spec['inst'].get('bake_engine')
+        if not be:
+            return {'shipped': False, 'reason': 'the payload spec has no inst.bake_engine'}
+        exe_p = os.environ.get('H2LM_BAKE_EXE') or L.resolve(be['exe'], self.roots)
+        if not os.path.isfile(exe_p):
+            raise Refused('the bake program %s is missing (build src\\H2GpuLightmapper.BakeEngine, or set H2LM_BAKE_EXE)' % exe_p)
+        if L.is_reparse(exe_p):
+            raise Refused('%s is a reparse point' % exe_p)
+        data, m = self._read_source(exe_p)
+        if data[:2] != b'MZ':
+            raise Refused('%s is not a Windows program' % exe_p)
+        name, pname, repl = be.get('name', 'h2lm-bake.exe'), be.get('params_file', 'bake_params.txt'), be.get('replaces', 'gpu_bake.ps1')
+        scripts = sorted(d for d in self.entries if d.split('/')[-1] == repl)
+        if not scripts:
+            raise Refused('inst.bake_engine: no staged %s to replace' % repl)
+        folders = []
+        for gb in scripts:
+            folder = gb.rsplit('/', 1)[0]
+            sp = os.path.join(self.inst, *gb.split('/'))
+            text = open(sp, 'rb').read().decode('utf-8-sig', errors='replace')
+            want = script_params(text)
+            if not want:
+                raise Refused('%s: no param block found (cannot check the bake program against it)' % gb)
+            code = ps_code_text(text)
+            envs = [e for e in be.get('env_features', []) if re.search(r'(?<![\w])\$?env:' + re.escape(e) + r'(?![\w])', code, re.I)]
+            old = self.entries.pop(gb)
+            # the replaced script is kept OUTSIDE inst (<stage>\replaced\<path>; never zipped): the reference the program ports, for the tests
+            keep = os.path.join(os.path.dirname(self.inst), 'replaced', *gb.split('/'))
+            os.makedirs(os.path.dirname(keep), exist_ok=True)
+            os.replace(sp, keep)
+            exe_dest = folder + '/' + name
+            self._add(exe_dest, data, {'kind': 'built', 'role': be.get('role', 'built:BAKE10'), 'source': exe_p, 'label': be.get('label'),
+                                       'replaces': gb, 'replacedScriptMd5': old['md5'], 'sourceMd5': m})
+            got, raw = list_params(os.path.join(self.inst, *exe_dest.split('/')))
+            missing = sorted(n for n in want if n.lower() not in got)
+            wrong = sorted('%s (%s, the program says %s)' % (n, t, got[n.lower()][1]) for n, t in want.items()
+                           if n.lower() in got and t in PARAM_TYPES and got[n.lower()][1] != t)
+            ao_dest = next((g['to'] for g in self.spec['inst']['groups'] if g['id'] == (self.spec['inst'].get('ao_engine') or {}).get('group')), None)
+            if missing and not wrong and folder == ao_dest:
+                # the program silently ignores an unknown parameter: an AO copy without -AOOnly etc. would run a FULL bake on the AO farm.
+                # The payload is still built, with AO DISABLED (features.ao), so the shell never plans an AO trace with it.
+                self.ao_block = '%s in %s does not take the AO parameters of the script it replaces (%s): ambient occlusion is disabled in this payload' % (
+                    name, folder, ', '.join(missing[:8]))
+                self.warnings.append('AO DISABLED in this payload: ' + self.ao_block)
+            elif missing or wrong:
+                raise Refused('%s --list-params (in %s) does not take every parameter of the %s it replaces: missing %s; other type %s'
+                              % (name, folder, repl, ', '.join(missing[:12]) or '-', ', '.join(wrong[:6]) or '-'))
+            lines = ['# %s: the parameters %s takes (%s --list-params), written by the payload builder' % (pname, name, name),
+                     '# one "Name<TAB>type" per line; "NAME<TAB>env" = an environment variable the engine validates']
+            lines += ['%s\t%s' % (n, t) for n, t in got.values()]
+            lines += ['%s\tenv' % e for e in envs]
+            ptext = ('\n'.join(lines) + '\n').encode('utf-8')
+            self._add(folder + '/' + pname, ptext, {'kind': 'new', 'role': 'generated:bake_params', 'source': exe_p, 'label': be.get('label'),
+                                                    'generatedFrom': exe_dest})
+            folders.append({'folder': folder, 'replaced': gb, 'replaced_md5': old['md5'], 'params': len(got), 'script_params': len(want),
+                            'extra_params': sorted(got[k][0] for k in got if k not in set(n.lower() for n in want)), 'env': envs})
+        self.notes.append('bake program %s (%s, md5 %s) replaces %s in %s' % (name, exe_p, m[:8], repl, ', '.join(f['folder'] for f in folders)))
+        return {'shipped': True, 'exe': exe_p, 'md5': m, 'size': len(data), 'folders': folders}
+
+
+PARAM_TYPES = ('switch', 'string', 'int', 'long', 'double')
+_PS_TYPE = {'switch': 'switch', 'switchparameter': 'switch', 'system.management.automation.switchparameter': 'switch',
+            'string': 'string', 'int': 'int', 'int32': 'int', 'long': 'long', 'int64': 'long', 'double': 'double', 'float': 'double',
+            'single': 'double'}
+
+
+def ps_code_text(script):
+    """a PowerShell script with comments removed and string contents blanked (the param block / env reads are then found in code only)"""
+    out, i, n = [], 0, len(script)
+    while i < n:
+        c = script[i]
+        if c == '<' and script.startswith('<#', i):
+            e = script.find('#>', i + 2)
+            if e < 0:
+                break
+            out.append('\n' * script.count('\n', i, e + 2))
+            i = e + 2
+        elif c == '#':
+            e = script.find('\n', i)
+            if e < 0:
+                break
+            i = e
+        elif c in '\'"':
+            out.append(c)
+            j = i + 1
+            while j < n:
+                d = script[j]
+                if c == '"' and d == '`':
+                    j += 2
+                    continue
+                if d == c:
+                    if j + 1 < n and script[j + 1] == c:
+                        j += 2
+                        continue
+                    break
+                if d == '\n':
+                    out.append('\n')
+                j += 1
+            out.append(c)
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def script_params(script):
+    """{Name: type} of the script's first param(...) block (type = switch / string / int / long / double, else the lowercase .NET name;
+    an untyped parameter is a string)"""
+    t = ps_code_text(script)
+    m = re.search(r'(?<![\w$\-.])param\s*\(', t, re.I)
+    if not m:
+        return {}
+    p, depth, seg, segs = m.end(), 1, [], []
+    while p < len(t) and depth > 0:
+        ch = t[p]
+        if ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            depth -= 1
+        if depth == 1 and ch == ',':
+            segs.append(''.join(seg))
+            seg = []
+        elif depth > 0:
+            seg.append(ch)
+        p += 1
+    segs.append(''.join(seg))
+    out = {}
+    for s in segs:
+        v = re.search(r'\$(\w+)\s*(?:=|$)', s.strip())
+        if not v:
+            continue
+        before = s[:s.rfind('$' + v.group(1))]
+        types = re.findall(r'\[\s*([A-Za-z_][\w.]*)\s*\]', before)
+        ty = types[-1].lower() if types else 'string'
+        out[v.group(1)] = _PS_TYPE.get(ty, ty)
+    return out
+
+
+CREATE_NO_WINDOW = 0x08000000
+
+
+def list_params(exe):
+    """{lower name: (Name, type)} from `exe --list-params` (one 'Name<TAB>type' per line, types in PARAM_TYPES), and the raw text"""
+    import subprocess
+    try:
+        p = subprocess.run([exe, '--list-params'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           creationflags=CREATE_NO_WINDOW, timeout=120, cwd=os.path.dirname(exe))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Refused('%s --list-params did not run: %s' % (exe, e))
+    if p.returncode != 0:
+        raise Refused('%s --list-params exit %d: %s' % (exe, p.returncode, p.stderr.decode('utf-8', 'replace')[-300:]))
+    raw = p.stdout.decode('utf-8', 'replace')
+    got = {}
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        parts = line.strip().split('\t')
+        if len(parts) != 2 or not re.match(r'^[A-Za-z_]\w*$', parts[0]) or parts[1] not in PARAM_TYPES:
+            raise Refused('%s --list-params: bad line %r (want "Name<TAB>type", type one of %s)' % (exe, line[:80], ', '.join(PARAM_TYPES)))
+        if parts[0].lower() in got:
+            raise Refused('%s --list-params lists %s twice' % (exe, parts[0]))
+        got[parts[0].lower()] = (parts[0], parts[1])
+    if not got:
+        raise Refused('%s --list-params printed no parameter' % exe)
+    return got, raw
+
 
 def regenerate_engine_manifest(entries, glw, out_path):
     """ENGINE_MANIFEST.txt regenerated INTO THE BUILD DIR (never production's): the production md5 of every staged production
@@ -776,6 +952,10 @@ def main(argv=None):
             st.tag_roles()
             refs = st.check_gpu_bake_refs()
             imps = st.check_imports()
+            bake = st.stage_bake_engine()       # 1.0: last change to the stage (the checks above read the scripts it removes)
+            if getattr(st, 'ao_block', None):
+                ao = dict(ao, enabled=False, reason=st.ao_block)
+                bake['ao_disabled'] = st.ao_block
             pe = st.pe_audit()
             st.recheck()
         except Refused:
@@ -794,9 +974,12 @@ def main(argv=None):
             'roots': roots, 'built': time.strftime('%Y-%m-%dT%H:%M:%S'), 'seconds': round(time.time() - t0, 1),
             'inst_dir': os.path.join(out, 'inst'), 'counts': counts, 'file_count': len(files),
             'total_bytes': sum(r['size'] for r in files), 'content_hash': L.content_hash(files),
-            'engine': {k: st.entries[k]['md5'] for k in ('engine_v373/gpu_bake.ps1', 'engine_v373/v041-fullgpu/fullgpu.exe',
-                                                          '_research/ao/dev_AO/gpu_bake.ps1', '_research/ao/dev_AO/v041-fullgpu/fullgpu.exe',
+            'engine': {k: st.entries[k]['md5'] for k in ('engine_v373/gpu_bake.ps1', 'engine_v373/h2lm-bake.exe', 'engine_v373/bake_params.txt',
+                                                          'engine_v373/v041-fullgpu/fullgpu.exe',
+                                                          '_research/ao/dev_AO/gpu_bake.ps1', '_research/ao/dev_AO/h2lm-bake.exe',
+                                                          '_research/ao/dev_AO/bake_params.txt', '_research/ao/dev_AO/v041-fullgpu/fullgpu.exe',
                                                           'osoyoos/osoy_launch.exe') if k in st.entries},
+            'bake_engine': bake,
             'custom_engine': custom, 'ao_engine': ao, 'probes_gate': probes, 'driveroot': driveroot, 'farms': farms,
             'features': {'ao': {'enabled': ao['enabled'], 'reason': ao['reason']},
                          'probes': {'enabled': probes['enabled'], 'reason': probes['reason']},

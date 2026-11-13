@@ -108,7 +108,7 @@
   ],
   "ao_engine": {"group": "dev_AO", "proof": "PROJ:tests/rc0612/results_f/AO_ENGINE_PROOF_0612.json",
    "comment": "stage_engine.check_ao_engine: features.ao is enabled only when this group's v041-fullgpu + v015-direct kernel files equal engine_v373's AND the proof (written by tests/v1_ao_engine/write_proof.py after the static check, the keyed-identical stage-only bake and the deterministic AO trace passed) names the AO fullgpu.exe, production fullgpu.exe and both gather.cpp md5s on disk now"},
-  "probes_gate": {"proof": "PROJ:tests/rc0612/results_f/T4_PROOF_0612.json",
+  "probes_gate": {"proof": "PROJ:tests/rel100/T4_PROOF_100.json",
    "comment": "V5 gate T4 (stage_engine.check_probes): features.probes (Standard on a probe BSP, Lightprobes only) is enabled only when the T4 proof (written by tests/t4/write_proof.py after Standard super on triplicate scored >= 99.53% SH light vs the CPU super cubes, the lightmap stage was md5-equal to a Lightmap Only run, sh_stage refused a corrupted non-SH byte and Lightprobes only installed into a scratch copy) names the md5 on disk now of every file below (the sources the probe path's INST copies come from; gpu_bake.ps1 / gpu_lightprobes.py are the P1-P3 / P5 bases, their patched results are pinned by the series; U1 2026-10-15: production gpu_bake.ps1 now IS the upstreamed series, so its entry is checked against the pre-upstream base that stage_series verified production was built from; U2 2026-10-15: the two lmw_tagio.py entries are the U2 bases, their patched results are pinned by series_tagio -- U2 changes nothing for equal-size elements, proven by tests/u2_stock_decorators: all 775 production-root scnr / sbsp / ltmp / lightmap bitmaps that walked before walk to identical records (10 more stock-layout scenarios now walk), and the cyclotron / headlong re-stages are byte-identical)",
    "files": {"engine_v373/gpu_bake.ps1": "GLW:engine_v373/gpu_bake.ps1",
              "engine_v373/v041-fullgpu/fullgpu.exe": "GLW:engine_v373/v041-fullgpu/fullgpu.exe",
@@ -129,14 +129,16 @@
              "standalone/sh_stage.py": "PROJ:src/standalone/sh_stage.py"}},
   "dllslot": ["engine_v373/v014-inject-estimator/gpulm_estimator.dll", "engine_v373/v043-tagwriter/dll/gpulm_estimator.dll",
               "_research/ao/dev_AO/v014-inject-estimator/gpulm_estimator.dll", "_research/ao/dev_AO/v043-tagwriter/dll/gpulm_estimator.dll"],
+  "bake_engine": {
+   "comment": "1.0: the native bake program h2lm-bake.exe (project src/H2GpuLightmapper.BakeEngine) REPLACES every staged gpu_bake.ps1 (engine_v373, engine_custom, _research/ao/dev_AO): same folder, same arguments, same output. The scripts are still taken through the gpu_bake series first (the reference the program ports; the stage checks and the features.driveRoot / farms verdicts read them), then removed from the stage; each folder gets the program and its parameter list bake_params.txt (`h2lm-bake.exe --list-params`, which must take every parameter of the script it replaces, plus one 'NAME<TAB>env' line per environment variable of env_features the script validates). The environment variable H2LM_BAKE_EXE overrides exe (a trial build).",
+   "exe": "PROJ:build/bakeengine/h2lm-bake.exe", "name": "h2lm-bake.exe", "params_file": "bake_params.txt", "replaces": "gpu_bake.ps1",
+   "env_features": ["GPULM_COMPAT"], "role": "built:BAKE10", "label": "1.0 native bake program"},
   "custom_engine": {
    "comment": "OPTIONAL engine_custom/ = engine_v373 with the N3 guarded fullgpu. Shipped ONLY with --with-custom-engine AND a LATEST.json whose gpu_identity_proof starts with PASS (gate T3a) and whose production_fullgpu_md5 is the current production fullgpu.",
    "latest": "PROJ:build/fullgpu_guard_069/LATEST.json"
   }
  },
  "rt": {
-  "pwsh": {"name": "pwsh-7.6.6", "zip": "rt-pwsh-7.6.6.zip", "dirName": "pwsh-7.6.6-{h8}",
-           "source_zip": "PROJ:cache/PowerShell-7.6.6-win-x64.zip", "verifier": "PROJ:build/fetch_pwsh.py"},
   "py": {"name": "py310-np226", "zip": "rt-py310-np226.zip", "dirName": "py310-np226-{h8}",
          "source_zip": "PROJ:build/s03/out/rt-py310-np226.zip",
          "rebuild": "\"C:\\Program Files\\Python310\\python.exe\" -I build\\s03\\make_pybundle.py <outdir> --zip build\\s03\\out\\rt-py310-np226.zip"}

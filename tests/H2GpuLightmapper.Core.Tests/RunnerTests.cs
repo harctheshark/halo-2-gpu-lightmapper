@@ -16,8 +16,8 @@ namespace H2GpuLightmapper.Core.Tests
     {
         private static ResolvedRuntime _rt;
 
-        /// <summary>A fake ROOT whose INST comes from the test payload (fake gpu_bake.ps1), run with the REAL portable pwsh 7.6.6
-        /// (S0.2 cache) and the REAL Python bundle (S0.3 build).</summary>
+        /// <summary>A fake ROOT whose INST comes from the test payload (the fake bake program h2lm-bake.exe + fake_gpu_bake.py), run with the REAL
+        /// Python bundle (S0.3 build).</summary>
         internal static ResolvedRuntime Rt
         {
             get
@@ -30,7 +30,7 @@ namespace H2GpuLightmapper.Core.Tests
                 inst.EnsureRuntimes();
                 inst.EnsureInst(root);
                 var rt = inst.Resolve(root);
-                rt.PwshDir = C.PwshDir; rt.PwshExe = C.PwshExe; rt.PyDir = C.PyDir; rt.PyExe = C.PyExe;
+                rt.PyDir = C.PyDir; rt.PyExe = C.PyExe;
                 _rt = rt;
                 return rt;
             }
@@ -38,15 +38,15 @@ namespace H2GpuLightmapper.Core.Tests
 
         public static IEnumerable<KeyValuePair<string, Action>> All()
         {
-            yield return T("runner: progress parser (banners, notes, GUARD FAIL, INSTALL, pwsh error block reason)", Parser);
-            yield return T("runner: pwsh argv guards (-?, -Cleanup, worker 149 / outside 200-299)", ArgvGuards);
+            yield return T("runner: progress parser (banners, notes, GUARD FAIL, INSTALL, error block reason)", Parser);
+            yield return T("runner: bake program argv guards (-?, -Cleanup, worker 149 / outside 200-299; the arguments pass as they are)", ArgvGuards);
             yield return T("runner: ok bake -> phases, notes, bake.log, status.json, current_run.json lifecycle", OkRun);
             yield return T("runner: failing bake -> exit 1 + the thrown message as the reason; exit 7 kept", FailRun);
             yield return T("runner: child environment built from scratch (H2LM_*, PATH, bundle py, no GPULM_/OSOYOOS_)", EnvRun);
             yield return T("runner: cancel outside a tag write -> TerminateJobObject at once", CancelNow);
             yield return T("runner: cancel during [4b] is deferred until the write ends, then applied", CancelDeferred);
-            yield return T("runner: cancel kills the whole tree (Start-Process grandchild + blocking child)", CancelTree);
-            yield return T("runner: run header = pwsh 7.6.6 + bundle sys.executable + numpy 2.2.6", Header);
+            yield return T("runner: cancel kills the whole tree (grandchild process + blocking child)", CancelTree);
+            yield return T("runner: run header = py on the child PATH is the bundle + its sys.executable + numpy 2.2.6 (no shell runtime)", Header);
             yield return T("runner: re-attach: current_run.json Inspect + LogTail", Reattach);
             yield return T("runner: IsAlive fails closed (access denied = alive, no such pid = dead)", IsAliveFailsClosed);
         }
@@ -84,13 +84,15 @@ namespace H2GpuLightmapper.Core.Tests
 
         private static void ArgvGuards()
         {
-            var rt = new ResolvedRuntime { PwshExe = "pwsh.exe", GpuBakePs1 = "gpu_bake.ps1", Work = "C:\\w" };
-            Assert.Throws<ArgumentException>(() => PwshInvocation.GpuBake(rt, null, new[] { "-Scenario", "x", "-?" }), "-? refused");
-            Assert.Throws<ArgumentException>(() => PwshInvocation.GpuBake(rt, null, new[] { "-Cleanup" }), "-Cleanup refused");
-            Assert.Throws<SafetyException>(() => PwshInvocation.GpuBake(rt, null, new[] { "-Worker", "149" }), "149 refused");
-            Assert.Throws<SafetyException>(() => PwshInvocation.GpuBake(rt, null, new[] { "-Worker", "60" }), "60 (launcher range) refused");
-            var ok = PwshInvocation.GpuBake(rt, null, new[] { "-Scenario", "s", "-Bsp", "b", "-Worker", "210", "-Quality", "super" });
-            Assert.Eq("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File gpu_bake.ps1 -Scenario s -Bsp b -Worker 210 -Quality super", string.Join(" ", ok.Args), "argv");
+            var rt = new ResolvedRuntime { BakeExe = "h2lm-bake.exe", Work = "C:\\w" };
+            Assert.Throws<ArgumentException>(() => BakeInvocation.GpuBake(rt, null, new[] { "-Scenario", "x", "-?" }), "-? refused");
+            Assert.Throws<ArgumentException>(() => BakeInvocation.GpuBake(rt, null, new[] { "-Cleanup" }), "-Cleanup refused");
+            Assert.Throws<SafetyException>(() => BakeInvocation.GpuBake(rt, null, new[] { "-Worker", "149" }), "149 refused");
+            Assert.Throws<SafetyException>(() => BakeInvocation.GpuBake(rt, null, new[] { "-Worker", "60" }), "60 (launcher range) refused");
+            var ok = BakeInvocation.GpuBake(rt, null, new[] { "-Scenario", "s", "-Bsp", "b", "-Worker", "210", "-Quality", "super" });
+            Assert.Eq("h2lm-bake.exe", ok.FileName, "the program is the engine's bake program");
+            Assert.Eq("-Scenario s -Bsp b -Worker 210 -Quality super", string.Join(" ", ok.Args), "argv = the bake arguments as they are");
+            Assert.Throws<InvalidOperationException>(() => BakeInvocation.GpuBake(new ResolvedRuntime { Work = "C:\\w" }, null, new[] { "-Worker", "210" }), "no bake program in the payload");
             Assert.Eq("C:\\w", ok.Cwd, "cwd = WORK");
         }
 
@@ -103,7 +105,7 @@ namespace H2GpuLightmapper.Core.Tests
         {
             var args = new List<string> { "-Scenario", @"scenarios\multi\fake\fake", "-Bsp", "fake", "-Worker", "201", "-Mode", mode };
             args.AddRange(extra);
-            return PwshInvocation.GpuBake(Rt, BakeEnv.Build(Rt), args);
+            return BakeInvocation.GpuBake(Rt, BakeEnv.Build(Rt), args);
         }
 
         private static void OkRun()
@@ -188,16 +190,15 @@ namespace H2GpuLightmapper.Core.Tests
                 Assert.Eq("utf-8", v("PYTHONIOENCODING"), "PYTHONIOENCODING");
                 Assert.Eq("1", v("PYTHONDONTWRITEBYTECODE"), "no bytecode in INST");
                 Assert.Eq("", v("PYTHONPATH"), "PYTHONPATH stripped");
-                Assert.Eq("Bypass", v("PSExecutionPolicyPreference"), "policy");
+                Assert.Eq("", v("PSExecutionPolicyPreference"), "no shell policy variable is set (the bake runs no shell)");
                 Assert.Eq("1", v("NO_COLOR"), "NO_COLOR");
-                Assert.Eq(Path.Combine(C.PwshDir, "Modules"), v("PSModulePath").Split(';').Last(), "PSModulePath ends with the bundle's Modules (pwsh prepends user paths, S0.2)");
+                Assert.Eq("", v("PSModulePath"), "no PSModulePath in the child");
                 Assert.Eq("0", v("pipeline-vars-count"), "no GPULM_ / OSOYOOS_ inherited");
-                // inside pwsh, PATH = $PSHOME (pwsh prepends its own folder) + exactly what the shell set: py; pwsh; System32...
+                // PATH = exactly what the shell set: the bundle py dir, System32, Windows, Wbem (nothing is prepended any more)
                 string sys = Environment.GetEnvironmentVariable("SystemRoot");
-                Assert.Eq((C.PwshDir + ";" + C.PyDir + ";" + C.PwshDir + ";" + Path.Combine(sys, "System32") + ";" + sys + ";" + Path.Combine(sys, @"System32\Wbem")).ToLowerInvariant(),
-                          v("PATH").ToLowerInvariant(), "PATH = PSHOME + py;pwsh;System32;Windows;Wbem");
+                Assert.Eq((C.PyDir + ";" + Path.Combine(sys, "System32") + ";" + sys + ";" + Path.Combine(sys, @"System32\Wbem")).ToLowerInvariant(),
+                          v("PATH").ToLowerInvariant(), "PATH = py;System32;Windows;Wbem");
                 Assert.Eq(C.PyExe, v("py"), "py resolves to the bundle");
-                Assert.True(v("pwsh").StartsWith("7.6.6 ", StringComparison.Ordinal) && v("pwsh").EndsWith(C.PwshDir, StringComparison.OrdinalIgnoreCase), "pwsh 7.6.6 from the bundle: " + v("pwsh"));
                 Assert.Contains(v("pyver"), "2.2.6", "numpy 2.2.6");
                 Assert.Contains(v("pyver"), C.PyDir, "sys.executable in the bundle");
                 Assert.Eq(Rt.Work, v("cwd"), "cwd = WORK");
@@ -259,7 +260,7 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.True(oc.Cancelled, "cancelled");
             int gpid = int.Parse(File.ReadAllText(pidFile).Trim());
             Thread.Sleep(500);
-            Assert.True(!ProcessInfo.IsAlive(gpid, 0), "the Start-Process grandchild " + gpid + " is dead");
+            Assert.True(!ProcessInfo.IsAlive(gpid, 0), "the grandchild " + gpid + " is dead");
             Assert.NotContains(Json.ReadAllTextShared(run.LogPath), "SHOULD NOT PRINT", "nothing ran on");
             run.Finish(RunState.Cancelled);
         }
@@ -267,18 +268,22 @@ namespace H2GpuLightmapper.Core.Tests
         private static void Header()
         {
             if (C.NoProcesses) throw new TestSkip("--no-processes");
-            var h = RunHeader.Collect(C.PwshExe, C.PyExe, BakeEnv.Build(Rt), Rt.Work);
+            var h = RunHeader.Collect(C.PyExe, BakeEnv.Build(Rt), Rt.Work);
             Assert.True(h.Problems.Count == 0, "no problems: " + string.Join("; ", h.Problems));
-            Assert.True(h.PwshVersion.StartsWith("7.6.6", StringComparison.Ordinal), "pwsh " + h.PwshVersion);
-            Assert.Contains(h.PwshVersion, C.PyExe, "py on the child PATH is the bundle");
+            Assert.True(string.Equals(C.PyExe, h.PyOnPath, StringComparison.OrdinalIgnoreCase), "py on the child PATH is the bundle's py.exe: " + h.PyOnPath);   // the extension comes from PATHEXT (.EXE)
+            Assert.True(!string.Join("\n", h.Lines()).Contains("pwsh"), "the header has no shell line");
+            Assert.True(string.Join("\n", h.Lines()).StartsWith("    py on PATH " + C.PyExe, StringComparison.OrdinalIgnoreCase), "the header's first line names the py on the PATH");
+            Assert.True(string.Equals(C.PyExe, RunHeader.FindOnPath(BakeEnv.Build(Rt), "py"), StringComparison.OrdinalIgnoreCase), "FindOnPath resolves py on the child PATH");
+            Assert.Eq(null, RunHeader.FindOnPath(BakeEnv.Build(Rt), "no_such_program_h2lm"), "a program that is not on the PATH: null");
             Assert.True(h.PyExecutable.StartsWith(C.PyDir, StringComparison.OrdinalIgnoreCase), "sys.executable " + h.PyExecutable);
             Assert.Eq("2.2.6", h.NumpyVersion, "numpy");
             // review fix (finding 20): the header is CHECKED against the pin, not only logged
             Assert.Eq(0, h.Mismatches(C.PyExe, C.PyDir).Count, "the bundle matches the pin: " + string.Join("; ", h.Mismatches(C.PyExe, C.PyDir)));
-            var bad = new RunHeaderInfo { PwshVersionOnly = "7.4.1", PyOnPath = @"C:\Windows\py.exe", PyExecutable = @"C:\Program Files\Python310\python.exe", NumpyVersion = "1.26.4" };
+            var bad = new RunHeaderInfo { PyOnPath = @"C:\Windows\py.exe", PyExecutable = @"C:\Program Files\Python310\python.exe", NumpyVersion = "1.26.4" };
             var mm = bad.Mismatches(C.PyExe, C.PyDir);
-            Assert.Eq(4, mm.Count, "pwsh, & py, sys.executable and numpy all flagged: " + string.Join("; ", mm));
-            Assert.Eq(4, new RunHeaderInfo().Mismatches(C.PyExe, C.PyDir).Count, "an empty header (the probes failed) fails closed");
+            Assert.Eq(3, mm.Count, "py on the PATH, sys.executable and numpy all flagged: " + string.Join("; ", mm));
+            Assert.Contains(mm[0], "`py` resolves to", "the py line");
+            Assert.Eq(3, new RunHeaderInfo().Mismatches(C.PyExe, C.PyDir).Count, "an empty header (the probes failed) fails closed");
         }
 
         /// <summary>Review fix (finding 8): only "no such process" is dead; a process we may not open is alive (fail closed).</summary>

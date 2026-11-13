@@ -1,190 +1,134 @@
-// Which switches does an engine script declare? Used by the shell to refuse (and grey out) an option whose gpu_bake.ps1 parameter the
-// engine it will run does not have: passing an unknown parameter to PowerShell fails the whole bake, so the option is never passed.
-// Pure text analysis of the script's FIRST param(...) block (comments and string contents ignored); reads nothing but the payload zip.
+// Which parameters does an engine's bake program take? Used by the shell to refuse (and grey out) an option whose parameter the
+// engine it will run does not have: the bake program (like the script before it) silently IGNORES an unknown parameter, so the option would
+// do nothing while the bake looked normal; it is never passed.
+// 1.0: read from the engine folder's parameter list (bake_params.txt beside h2lm-bake.exe, written by the payload builder from
+// `h2lm-bake.exe --list-params`); reads nothing but the payload zip.
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace H2GpuLightmapper.Core.Payload
 {
     public static class EngineSwitches
     {
-        /// <summary>The code text of the script's first top-level param(...) block with comments removed and string contents blanked
-        /// (null when the script has none).</summary>
-        public static string ParamBlock(string script)
+        /// <summary>The bake program of an engine folder.</summary>
+        public const string BakeExeName = "h2lm-bake.exe";
+        /// <summary>The parameter list of an engine folder, beside its bake program.</summary>
+        public const string ParamsFileName = "bake_params.txt";
+        /// <summary>The "type" of a parameter-list line that names an environment variable the engine validates (not a parameter).</summary>
+        public const string EnvType = "env";
+
+        /// <summary>The parameter list that belongs to the bake program <paramref name="exeRel"/> (e.g. engine_v373/h2lm-bake.exe ->
+        /// engine_v373/bake_params.txt; '/' separators).</summary>
+        public static string ParamsFileOf(string exeRel)
         {
-            string t = CodeText(script);
-            if (t == null) return null;
-            return ParamBlockOfCode(t);
+            if (string.IsNullOrEmpty(exeRel)) return null;
+            int i = exeRel.LastIndexOf('/');
+            return (i < 0 ? "" : exeRel.Substring(0, i + 1)) + ParamsFileName;
         }
 
-        /// <summary>The script with comments removed and string contents blanked (same length per line; null for an empty script).</summary>
-        public static string CodeText(string script)
+        /// <summary>The parameter list as name -> type (switch, string, int, long, double; <see cref="EnvType"/> for an environment
+        /// variable the engine validates). One "Name&lt;TAB&gt;type" per line; blank lines and lines starting with '#' are ignored; names are
+        /// case-insensitive (the first entry of a name wins). Null text -> an empty list.</summary>
+        public static Dictionary<string, string> ParseParams(string text)
         {
-            if (string.IsNullOrEmpty(script)) return null;
-            var code = new StringBuilder(script.Length);
-            int n = script.Length;
-            // pass 1: strip comments, blank string contents (a "param(" or "[switch]$X" inside a comment / string never counts)
-            for (int i = 0; i < n; i++)
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(text)) return d;
+            foreach (var raw in text.Split('\n'))
             {
-                char c = script[i];
-                if (c == '<' && i + 1 < n && script[i + 1] == '#')
-                {
-                    int e = script.IndexOf("#>", i + 2, StringComparison.Ordinal);
-                    if (e < 0) break;
-                    for (int k = i; k < e + 2; k++) code.Append(script[k] == '\n' ? '\n' : ' ');
-                    i = e + 1;
-                }
-                else if (c == '#')
-                {
-                    while (i < n && script[i] != '\n') i++;
-                    if (i < n) code.Append('\n');
-                }
-                else if (c == '\'' || c == '"')
-                {
-                    code.Append(c);
-                    int j = i + 1;
-                    for (; j < n; j++)
-                    {
-                        char d = script[j];
-                        if (c == '"' && d == '`') { code.Append("  "); j++; continue; }       // backtick escape
-                        if (d == c)
-                        {
-                            if (j + 1 < n && script[j + 1] == c) { code.Append("  "); j++; continue; }   // doubled quote
-                            break;
-                        }
-                        code.Append(d == '\n' ? '\n' : ' ');
-                    }
-                    if (j < n) code.Append(c);
-                    i = j;
-                }
-                else code.Append(c);
+                string line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                var parts = line.Split(new[] { '\t', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 2) continue;
+                string name = parts[0].TrimStart('-');
+                if (name.Length == 0 || d.ContainsKey(name)) continue;
+                d[name] = parts[1].ToLowerInvariant();
             }
-            return code.ToString();
+            return d;
         }
 
-        private static string ParamBlockOfCode(string t)
+        /// <summary>Does the parameter list declare the switch <paramref name="name"/>? (case-insensitive; fails closed: false for an empty list.)</summary>
+        public static bool DeclaresSwitch(string paramsText, string name)
         {
-            var m = Regex.Match(t, @"(?<![\w$\-.])param\s*\(", RegexOptions.IgnoreCase);
-            if (!m.Success) return null;
-            int start = m.Index + m.Length, depth = 1, p = start;
-            for (; p < t.Length && depth > 0; p++)
-            {
-                if (t[p] == '(') depth++;
-                else if (t[p] == ')') depth--;
-            }
-            if (depth != 0) return null;
-            return t.Substring(start, p - 1 - start);
+            if (string.IsNullOrEmpty(name)) return false;
+            string t;
+            return ParseParams(paramsText).TryGetValue(name, out t) && t == "switch";
         }
 
-        /// <summary>Does the script's param block declare <c>[switch]$name</c>? (case-insensitive; fails closed: false when there is no param block.)</summary>
-        public static bool DeclaresSwitch(string script, string name)
+        /// <summary>Does the parameter list name the environment variable <paramref name="name"/> as one the engine validates? This is the marker
+        /// for an engine feature that is an environment variable, not a parameter: engine 0.6.4 and newer validate <c>GPULM_COMPAT</c> (0, 1 or
+        /// unset, anything else fails the bake) and report fullgpu's "Compatibility mode" line; an engine whose list does not name it has no such
+        /// mode and is never given it. Fails closed (false) for an empty list.</summary>
+        public static bool ReadsEnvVar(string paramsText, string name)
         {
-            string pb = ParamBlock(script);
-            if (pb == null || string.IsNullOrEmpty(name)) return false;
-            return Regex.IsMatch(pb, @"\[\s*(?:System\.Management\.Automation\.)?Switch(?:Parameter)?\s*\]\s*\$" + Regex.Escape(name) + @"(?![\w])", RegexOptions.IgnoreCase);
-        }
-
-        /// <summary>Does the script's CODE (comments removed, string contents blanked) read the environment variable <paramref name="name"/>
-        /// (<c>$env:NAME</c> / <c>Env:NAME</c>)? This is the marker for an engine feature that is an environment variable, not a parameter:
-        /// gpu_bake.ps1 of engine 0.6.4 validates <c>GPULM_COMPAT</c> (0, 1 or unset, anything else throws) and copies fullgpu's
-        /// "Compatibility mode" line into the phase summary; an engine that never mentions the variable in code has no such mode and
-        /// is never given it. A mention only in a comment or a string does not count. Fails closed (false) for an empty script.</summary>
-        public static bool ReadsEnvVar(string script, string name)
-        {
-            string t = CodeText(script);
-            if (t == null || string.IsNullOrEmpty(name)) return false;
-            return Regex.IsMatch(t, @"(?<![\w])\$?env:" + Regex.Escape(name) + @"(?![\w])", RegexOptions.IgnoreCase);
+            if (string.IsNullOrEmpty(name)) return false;
+            string t;
+            return ParseParams(paramsText).TryGetValue(name, out t) && t == EnvType;
         }
 
         /// <summary>Does a PYTHON driver script carry the marker line <c>NAME = 1</c> (at column 0, optionally followed by a comment)? This is the marker for a driver
-        /// feature that is neither a PowerShell parameter nor an environment variable: gpu_ao.py / gpu_lightprobes.py of 0.6.5 declare <c>SPLIT_BSP_SUPPORT = 1</c> when they read
+        /// feature that is neither a bake parameter nor an environment variable: gpu_ao.py / gpu_lightprobes.py of 0.6.5 declare <c>SPLIT_BSP_SUPPORT = 1</c> when they read
         /// the BSP from the file the scenario's structure_bsps names (another folder than the scenario). An older driver never mentions it, so it is never trusted with such a
         /// BSP. Fails closed (false) for an empty script.</summary>
         public static bool HasPyMarker(string script, string name)
         {
             if (string.IsNullOrEmpty(script) || string.IsNullOrEmpty(name)) return false;
-            return Regex.IsMatch(script, @"^" + Regex.Escape(name) + @"[ \t]*=[ \t]*1(?![\w.])", RegexOptions.Multiline);
+            return System.Text.RegularExpressions.Regex.IsMatch(script, @"^" + System.Text.RegularExpressions.Regex.Escape(name) + @"[ \t]*=[ \t]*1(?![\w.])",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
         }
 
-        /// <summary>The text of one file of a payload component (read from its zip; nothing is extracted), or null when the zip / file is absent.</summary>
+        /// <summary>The text of one file of a payload component (read from its payload resource: a zip entry, or a file inside the
+        /// component's pack; nothing is extracted; size and md5 checked against the manifest), or null when the file is absent.</summary>
         public static string ReadComponentText(IPayloadSource src, PayloadComponent c, string relPath)
         {
-            if (src == null || c == null || !c.Has(relPath)) return null;
-            using (var rs = src.OpenResource(c.Resource))
-            {
-                if (rs == null) return null;
-                using (var zip = new ZipArchive(rs, ZipArchiveMode.Read, false))
-                {
-                    var e = zip.GetEntry(relPath);
-                    if (e == null) return null;
-                    using (var s = e.Open())
-                    using (var r = new StreamReader(s, new UTF8Encoding(false), true))
-                        return r.ReadToEnd();
-                }
-            }
+            if (src == null || c == null) return null;
+            var f = c.Find(relPath);
+            if (f == null) return null;
+            var data = PayloadExtractor.ReadFileBytes(src, c, f);
+            using (var r = new StreamReader(new MemoryStream(data), new UTF8Encoding(false), true))
+                return r.ReadToEnd();
         }
 
         private static readonly Dictionary<string, bool> Cache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>Does the payload's INST file <paramref name="relPath"/> (e.g. engine_v373/gpu_bake.ps1) declare <c>[switch]$name</c>?
-        /// Cached per (zip md5, file md5, switch); the file's md5 is the manifest's, which the shell verifies against the extracted file before every bake.</summary>
-        public static bool ComponentDeclares(IPayloadSource src, PayloadComponent c, string relPath, string name)
+        private static bool Cached(IPayloadSource src, PayloadComponent c, string relPath, string kind, Func<string, bool> test)
         {
             var f = c == null ? null : c.Find(relPath);
             if (f == null) return false;
-            string key = (c.ZipMd5 ?? c.Name) + "|" + f.Md5 + "|" + relPath + "|" + name;
+            string key = (c.ZipMd5 ?? c.Name) + "|" + f.Md5 + "|" + relPath + "|" + kind;
             lock (Cache)
             {
                 bool v;
                 if (Cache.TryGetValue(key, out v)) return v;
             }
             bool r;
-            try { r = DeclaresSwitch(ReadComponentText(src, c, relPath), name); }
+            try { r = test(ReadComponentText(src, c, relPath)); }
             catch (Exception) { r = false; }
             lock (Cache) Cache[key] = r;
             return r;
+        }
+
+        /// <summary>Does the payload's INST parameter list <paramref name="paramsRel"/> (e.g. engine_v373/bake_params.txt) declare the switch
+        /// <paramref name="name"/>? Cached per (zip md5, file md5, switch); the file's md5 is the manifest's, which the shell verifies against the
+        /// extracted file before every bake.</summary>
+        public static bool ComponentDeclares(IPayloadSource src, PayloadComponent c, string paramsRel, string name)
+        {
+            return Cached(src, c, paramsRel, "sw:" + name, t => DeclaresSwitch(t, name));
         }
 
         /// <summary>Does the payload's INST python file <paramref name="relPath"/> carry the marker line <c>name = 1</c> (see <see cref="HasPyMarker"/>)? Cached like
         /// <see cref="ComponentDeclares"/>.</summary>
         public static bool ComponentHasPyMarker(IPayloadSource src, PayloadComponent c, string relPath, string name)
         {
-            var f = c == null ? null : c.Find(relPath);
-            if (f == null) return false;
-            string key = (c.ZipMd5 ?? c.Name) + "|" + f.Md5 + "|" + relPath + "|py:" + name;
-            lock (Cache)
-            {
-                bool v;
-                if (Cache.TryGetValue(key, out v)) return v;
-            }
-            bool r;
-            try { r = HasPyMarker(ReadComponentText(src, c, relPath), name); }
-            catch (Exception) { r = false; }
-            lock (Cache) Cache[key] = r;
-            return r;
+            return Cached(src, c, relPath, "py:" + name, t => HasPyMarker(t, name));
         }
 
-        /// <summary>Does the payload's INST file <paramref name="relPath"/> read the environment variable <paramref name="name"/> in its code
+        /// <summary>Does the payload's INST parameter list <paramref name="paramsRel"/> name the environment variable <paramref name="name"/>
         /// (see <see cref="ReadsEnvVar"/>)? Cached like <see cref="ComponentDeclares"/>.</summary>
-        public static bool ComponentReadsEnv(IPayloadSource src, PayloadComponent c, string relPath, string name)
+        public static bool ComponentReadsEnv(IPayloadSource src, PayloadComponent c, string paramsRel, string name)
         {
-            var f = c == null ? null : c.Find(relPath);
-            if (f == null) return false;
-            string key = (c.ZipMd5 ?? c.Name) + "|" + f.Md5 + "|" + relPath + "|env:" + name;
-            lock (Cache)
-            {
-                bool v;
-                if (Cache.TryGetValue(key, out v)) return v;
-            }
-            bool r;
-            try { r = ReadsEnvVar(ReadComponentText(src, c, relPath), name); }
-            catch (Exception) { r = false; }
-            lock (Cache) Cache[key] = r;
-            return r;
+            return Cached(src, c, paramsRel, "env:" + name, t => ReadsEnvVar(t, name));
         }
     }
 }

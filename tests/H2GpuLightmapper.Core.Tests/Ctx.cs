@@ -16,7 +16,7 @@ namespace H2GpuLightmapper.Core.Tests
         public const string SkelDllMd5 = "56b774df2fce703a9a63da793aab7c8c";      // 0.6.9: engine_v374 skeleton-mode DLL with the fast NeuQuant (was 5c6aeea9 in 0.6.4-0.6.8)
         public const string LmwInstallMd5 = "4608af880327453b6e07844d6e7e95b9";
 
-        public string Project, SandboxParent, ShortParent, PwshDir, PyDir, MineRoot, FixturesDir;
+        public string Project, SandboxParent, ShortParent, PyDir, MineRoot, FixturesDir;
         public bool Keep, NoProcesses;
         public Sandbox Sb, Short;
         public string FxProdDll, FxSkelDll, FxLmwInstall, FxBoundsDb, FxGpuCheck, FxGpuCheckJson;
@@ -39,7 +39,31 @@ namespace H2GpuLightmapper.Core.Tests
                 return MineWork;
             }
         }
-        public string PwshExe { get { return Path.Combine(PwshDir, "pwsh.exe"); } }
+        /// <summary>1.0: the fake bake program (tests\FakeBakeEngine, built next to this runner as h2lm-bake.exe); the test payload ships it as
+        /// engine_v373/h2lm-bake.exe beside fixtures\fake_gpu_bake.py.</summary>
+        public string FakeBakeExe { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "h2lm-bake.exe"); } }
+
+        /// <summary>The parameter list the fake bake program reports (`--list-params` of the python fake, run with the bundle py): what the real
+        /// stage step writes as bake_params.txt (a comment line, then one "Name&lt;TAB&gt;type" per line; "NAME&lt;TAB&gt;env" for an environment variable).</summary>
+        public string ParamsText(string fixtureName = "fake_gpu_bake.py", params string[] dropNames)
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(PyExe, "-I -B \"" + Fixture(fixtureName) + "\" --list-params")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            string o;
+            using (var p = System.Diagnostics.Process.Start(psi))
+            {
+                o = p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd(); p.WaitForExit();
+                if (p.ExitCode != 0) throw new InvalidOperationException("the fake bake program's --list-params exited " + p.ExitCode);
+            }
+            var sb = new StringBuilder("# bake_params.txt: the parameters h2lm-bake.exe takes (--list-params), written by the payload builder\n");
+            foreach (var l in o.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string n = l.Split('\t')[0];
+                if (dropNames != null && dropNames.Contains(n, StringComparer.OrdinalIgnoreCase)) continue;
+                sb.Append(l).Append('\n');
+            }
+            return sb.ToString();
+        }
         public string PyExe { get { return Path.Combine(PyDir, "py.exe"); } }
 
         public void Init()
@@ -51,11 +75,10 @@ namespace H2GpuLightmapper.Core.Tests
             FixturesDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fixtures");
             SandboxParent = SandboxParent ?? Path.Combine(Project, "build", "s2", "t");
             ShortParent = ShortParent ?? Path.Combine(Path.GetTempPath(), "s2");
-            PwshDir = PwshDir ?? Path.Combine(Project, "cache", "pwsh-7.6.6-win-x64");
             PyDir = PyDir ?? Path.Combine(Project, "build", "s03", "out", "py310-np226");
             MineRoot = MineRoot ?? Environment.GetEnvironmentVariable("H2LM_TEST_MINE_ROOT");
             if (string.IsNullOrEmpty(MineRoot)) throw new InvalidOperationException("no production-like H2EK root: pass --mine DIR or set H2LM_TEST_MINE_ROOT (a tool_fast 3a889d37 H2EK whose GPU Lightmap Work holds engine_v373; it is only read)");
-            if (!File.Exists(PwshExe)) throw new InvalidOperationException("no portable pwsh at " + PwshDir + " (run tests\\S0.2_pwsh_spike\\run_spike.sh once)");
+            if (!File.Exists(FakeBakeExe)) throw new InvalidOperationException("no fake bake program at " + FakeBakeExe + " (tests\\FakeBakeEngine is built with this runner)");
             if (!File.Exists(PyExe)) throw new InvalidOperationException("no Python bundle at " + PyDir + " (build it with build\\s03\\make_pybundle.py)");
 
             Sb = new Sandbox(SandboxParent, DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N").Substring(0, 4)) { Keep = Keep };
@@ -106,6 +129,8 @@ namespace H2GpuLightmapper.Core.Tests
     internal sealed class FileSpec
     {
         public string Path; public byte[] Data; public string Role;
+        /// <summary>1.0: not a zip entry of its own; stored inside the component's pack entry (one LZMA stream).</summary>
+        public bool Packed;
         public FileSpec(string p, byte[] d, string role = null) { Path = p; Data = d; Role = role; }
         public FileSpec(string p, string text, string role = null) : this(p, new UTF8Encoding(false).GetBytes(text), role) { }
     }
@@ -113,6 +138,7 @@ namespace H2GpuLightmapper.Core.Tests
     internal sealed class CompSpec
     {
         public string Name, DirName, Target;
+        public bool NoPackIndex, BadPackIndex;   // 1.0 tests: leave the pack index out / write a wrong one
         public List<FileSpec> Files = new List<FileSpec>();
     }
 
@@ -132,20 +158,44 @@ namespace H2GpuLightmapper.Core.Tests
                 {
                     foreach (var f in c.Files.OrderBy(x => x.Path, StringComparer.Ordinal))
                     {
+                        if (f.Packed) continue;
                         var e = z.CreateEntry(f.Path, CompressionLevel.Optimal);
                         e.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
                         using (var s = e.Open()) s.Write(f.Data, 0, f.Data.Length);
+                    }
+                    if (c.Files.Any(x => x.Packed))
+                    {
+                        // 1.0: the packed files back to back, in manifest order, as one LZMA stream (stored, not deflated)
+                        var all = new MemoryStream();
+                        foreach (var f in c.Files.OrderBy(x => x.Path, StringComparer.Ordinal))
+                            if (f.Packed) all.Write(f.Data, 0, f.Data.Length);
+                        var pk = TestLzma.EncodeLiterals(all.ToArray());
+                        var e = z.CreateEntry(TestLzma.PackName, CompressionLevel.NoCompression);
+                        e.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                        using (var s = e.Open()) s.Write(pk, 0, pk.Length);
+                        if (!c.NoPackIndex)
+                        {
+                            var sb = new StringBuilder();
+                            foreach (var f in c.Files.OrderBy(x => x.Path, StringComparer.Ordinal))
+                                if (f.Packed) sb.Append(c.BadPackIndex ? f.Data.Length + 1 : f.Data.Length).Append('\t').Append(f.Path).Append('\n');
+                            var ib = new UTF8Encoding(false).GetBytes(sb.ToString());
+                            var ie = z.CreateEntry(TestLzma.PackName + PayloadExtractor.PackIndexSuffix, CompressionLevel.Optimal);
+                            ie.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                            using (var s = ie.Open()) s.Write(ib, 0, ib.Length);
+                        }
                     }
                 }
                 var files = c.Files.OrderBy(x => x.Path, StringComparer.Ordinal).Select(f =>
                 {
                     var o = new JObj().Add("path", f.Path).Add("size", (long)f.Data.Length).Add("md5", SafeFs.Md5Hex(f.Data)).Add("sourceMd5", SafeFs.Md5Hex(f.Data));
                     if (f.Role != null) o.Add("role", f.Role);
+                    if (f.Packed) o.Add("packed", true);
                     return (object)o;
                 }).ToList();
                 var jc = new JObj().Add("name", c.Name).Add("resource", "payload/" + zipName).Add("dirName", c.DirName).Add("target", c.Target)
                     .Add("zipSize", new FileInfo(zipPath).Length).Add("zipMd5", SafeFs.Md5File(zipPath)).Add("fileCount", (long)c.Files.Count)
                     .Add("totalBytes", c.Files.Sum(f => (long)f.Data.Length)).Add("maxPathLen", (long)c.Files.Max(f => f.Path.Length)).Add("files", files);
+                if (c.Files.Any(x => x.Packed)) jc.Add("packEntry", TestLzma.PackName);
                 carr.Add(jc);
             }
             var m = new JObj().Add("format", 1L).Add("appVersion", appVersion).Add("components", carr);
@@ -155,15 +205,16 @@ namespace H2GpuLightmapper.Core.Tests
         }
 
         /// <summary>The standard test payload: two small fake runtimes and an INST with the real (copied) estimator DLLs,
-        /// lmw_install.py, the bounds DB, gpucheck and the fake gpu_bake.ps1.</summary>
+        /// lmw_install.py, the bounds DB, gpucheck and the fake bake program (h2lm-bake.exe + fake_gpu_bake.py + bake_params.txt).</summary>
         public static List<CompSpec> Standard(Ctx c, string tag = "a")
         {
             var rnd = new Random(1234);
             Func<int, byte[]> blob = n => { var b = new byte[n]; rnd.NextBytes(b); return b; };
-            var pw = new CompSpec { Name = "rt-pwsh-test", DirName = "pwsh-test-" + tag + "1111111", Target = "rt" };
-            pw.Files.Add(new FileSpec("pwsh.exe", blob(5000)));
-            pw.Files.Add(new FileSpec("System.Management.Automation.dll", blob(9000)));
-            pw.Files.Add(new FileSpec("Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1", "@{ fake = 1 }"));
+            // a small extra runtime component (the app no longer needs a shell runtime; the pack and extraction tests still want a second rt component)
+            var pw = new CompSpec { Name = "rt-tool-test", DirName = "tool-test-" + tag + "1111111", Target = "rt" };
+            pw.Files.Add(new FileSpec("tool.exe", blob(5000)));
+            pw.Files.Add(new FileSpec("tool_core.dll", blob(9000)));
+            pw.Files.Add(new FileSpec("data/tool_data/tool_data.cfg", "fake = 1"));
             pw.Files.Add(new FileSpec("en-US/notes.txt", "not a key file"));
             var py = new CompSpec { Name = "rt-py-test", DirName = "py310-" + tag + "2222222", Target = "rt" };
             py.Files.Add(new FileSpec("py.exe", blob(4000)));
@@ -172,7 +223,9 @@ namespace H2GpuLightmapper.Core.Tests
             py.Files.Add(new FileSpec("site-packages/numpy/_core/_multiarray_umath.cp310-win_amd64.pyd", blob(3000)));
             py.Files.Add(new FileSpec("site-packages/numpy/__init__.py", "# fake"));
             var inst = new CompSpec { Name = "engine-test", DirName = "0.0.0-" + tag + "3333333", Target = "inst" };
-            inst.Files.Add(new FileSpec("engine_v373/gpu_bake.ps1", File.ReadAllBytes(c.Fixture("fake_gpu_bake.ps1"))));
+            inst.Files.Add(new FileSpec("engine_v373/h2lm-bake.exe", File.ReadAllBytes(c.FakeBakeExe)));
+            inst.Files.Add(new FileSpec("engine_v373/fake_gpu_bake.py", File.ReadAllBytes(c.Fixture("fake_gpu_bake.py"))));
+            inst.Files.Add(new FileSpec("engine_v373/bake_params.txt", c.ParamsText()));
             inst.Files.Add(new FileSpec("engine_v373/v014-inject-estimator/gpulm_estimator.dll", File.ReadAllBytes(c.FxProdDll), "dllslot"));
             inst.Files.Add(new FileSpec("engine_v373/v043-tagwriter/dll/gpulm_estimator.dll", File.ReadAllBytes(c.FxSkelDll), "dllslot"));
             inst.Files.Add(new FileSpec("engine_v373/v043-tagwriter/lmw_install.py", File.ReadAllBytes(c.FxLmwInstall)));

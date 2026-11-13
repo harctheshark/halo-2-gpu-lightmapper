@@ -69,8 +69,8 @@ namespace H2GpuLightmapper.App
         /// <summary>Advanced settings "Scenery Multi Permutation Fix (Experimental Improvement)" / CLI --scenery-permutation-fix: every gpu_bake the plan builds
         /// gets -SceneryOwnPermutationOnly (scenery that draws more than one shape from one tag: only the shape the game draws casts shadows, ground hidden
         /// inside scenery is filled from its surroundings, a variant's own pieces get lit). Differs from the 2004 tool on purpose. Default off: the argv is then
-        /// byte-identical to before. ENGINE-GATED: only an engine whose gpu_bake.ps1 declares the parameter may be given it (see AppHost.SceneryPermutationFixWhy):
-        /// the window greys the checkbox, the command line and the session refuse -- an unknown parameter is never passed to PowerShell.
+        /// byte-identical to before. ENGINE-GATED: only an engine whose bake program takes the parameter may be given it (see AppHost.SceneryPermutationFixWhy):
+        /// the window greys the checkbox, the command line and the session refuse -- an unknown parameter is never passed to the bake program.
         /// The capture is made WITH the option (the engine records the tool's permutation pick in phase 1), so it is part of the capture identity.</summary>
         public bool SceneryPermutationFix;
         /// <summary>0.6.8 Advanced settings "Re-bake speedup" / CLI --rebake-hint (default OFF): every lightmap gpu_bake of a bake that REUSES its capture
@@ -111,7 +111,7 @@ namespace H2GpuLightmapper.App
             + "Only the shape the game actually draws casts shadows, ground hidden inside scenery is filled from its surroundings, and a variant's own pieces get lit instead of rendering black. "
             + "Differs from the 2004 tool on purpose. Most maps never need this: giving each shape its own scenery tag avoids the problem.";
         /// <summary>CLI-ONLY testing override <c>--force-compat</c> (not in the window, not in Advanced settings): gives every gpu_bake / AO trace / light probe step
-        /// <c>GPULM_COMPAT=1</c> so a GPU WITH FP64 runs the FP32-only Compatibility-mode (DF64) kernels. ENGINE-GATED: only an engine whose gpu_bake.ps1 validates
+        /// <c>GPULM_COMPAT=1</c> so a GPU WITH FP64 runs the FP32-only Compatibility-mode (DF64) kernels. ENGINE-GATED: only an engine that validates
         /// GPULM_COMPAT (engine 0.6.4 or newer) may be given it (see AppHost.CompatEngineWhy); otherwise the bake is refused up front, dry runs too, and the
         /// variable is never passed. Compatibility mode itself is automatic (the engine picks it for a GPU without FP64) and has no option.</summary>
         public bool ForceCompat;
@@ -123,7 +123,7 @@ namespace H2GpuLightmapper.App
         /// still named and written in the SCENARIO's folder). Set by the window's BSP picker; the session also resolves it from the scenario when a command-line
         /// bake names a BSP that is not beside the scenario. ENGINE-GATED (see AppHost.CrossFolderBspWhy).</summary>
         public string BspRel;
-        /// <summary>gpu_bake.ps1 parameters that only an engine with the cross-folder BSP resolution (dev_S, merged into engine 0.6.4) declares: -WriterOnly and
+        /// <summary>Bake parameters that only an engine with the cross-folder BSP resolution (dev_S, merged into engine 0.6.4) declares: -WriterOnly and
         /// -ToolOverlay come from the same patch as lmw_skeleton.py resolve-bsp, so an engine that has them resolves the BSP from the scenario.</summary>
         public static readonly string[] CrossFolderBspSwitches = { "WriterOnly", "ToolOverlay" };
         public const string CrossFolderBspNeedsEngine = "Baking a BSP from another folder needs engine 0.6.4 or newer.";

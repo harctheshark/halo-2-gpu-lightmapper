@@ -578,6 +578,9 @@ namespace H2GpuLightmapper.Pipeline
                                                         Path.Combine(overlayRoot, "tags", BakeOptions.BspFolder(_scenarioRel), Path.GetFileName(_scenarioRel) + "_" + _bsp + "_lightmap.scenario_structure_lightmap")), _realWork, _env);
             if (mq.Ok) points = mq.Points ?? 0;
             else Say("  note: the probe-point query of the map's scenario failed (" + (mq.Error ?? mq.PointsError) + "); the bake's own query decides");
+            // 1.0: instanced geometry with no visible geometry (a % object holding only +portal faces): a warning only, the bake goes on
+            string emptyWarn = mq.EmptyInstanceWarning();
+            if (emptyWarn != null) Say("  WARNING: " + emptyWarn);
             bool probeWorker = BakePlanner.NeedsProbes(_o, points);
             Say("  light probes: the BSP has " + points + " probe point(s)" + (_o.Mode == BakeMode.Lightmap && points > 0 ? " -- Lightmap Only RESETS them to zero in the output map (as `tool lightmaps` does)" :
                 points > 0 && probeWorker ? " -- baked as for a scenario" : ""));
@@ -609,7 +612,7 @@ namespace H2GpuLightmapper.Pipeline
             no.MapPath = null; no.MapOut = null; no.SkyCubemaps = new List<KeyValuePair<string, string>>();
             no.Root = overlayRoot; no.ScenarioRel = _scenarioRel; no.Bsp = _bsp; no.BspRel = _bspRel;
             no.StageOnly = true; no.ReuseCapture = false; no.Worker = lmWorker ? (int?)_worker : null; no.ProbeWorker = probeWorker ? (int?)_pworker : null;      // mode / AO / quality as chosen
-            var ctx = new OverlayContext { RealRoot = _root, RealWork = _realWork, OverlayRoot = overlayRoot, OverlayWork = overlayWork };
+            var ctx = new OverlayContext { RealRoot = _root, RealWork = _realWork, OverlayRoot = overlayRoot, OverlayWork = overlayWork, EmptyInstances = emptyWarn != null ? mq : null };
             ctx.PreLines.Add("  source map " + _mapPath + "   (read only)");
             ctx.PreLines.Add("  output map " + _outPath + "   (a COPY of the map with only the lightmap and its bitmap replaced" + (_o.Mode == BakeMode.Probes ? " -- Lightprobes only: the lightmap tag alone" : "") + "; set aside as .old_<time> if it exists)");
             if (_vista) ctx.PreLines.Add("  Vista map: converted to its MCC form with h2conv; " + (_o.VistaOut ? "the injected MCC result is converted back to a Vista map (h2conv --to-vista)" : "the result stays an MCC map (not converted back)"));
@@ -669,6 +672,7 @@ namespace H2GpuLightmapper.Pipeline
             }
             GuardLive(snapA, "after_inject");
             reason = "baked from the map: " + _outPath;
+            if (emptyWarn != null) reason += "; " + mq.EmptyInstanceShort();      // 1.0: repeated in the run summary (a warning only)
             _runOk = true;
             Say("RESULT map baked: " + _outPath);
             return 0;

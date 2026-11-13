@@ -59,8 +59,8 @@ namespace H2GpuLightmapper.Core.Payload
         public bool DriveRootEnabled(out string why)
         {
             var f = Features == null ? null : Features.DriveRoot;
-            if (f == null) { why = "this payload's gpu_bake.ps1 predates drive-root support (no features.driveRoot record)"; return false; }
-            why = f.Enabled ? null : "drive roots are disabled in this build: " + (f.Reason ?? "the payload's gpu_bake.ps1 has no drive-root handling");
+            if (f == null) { why = "this payload's engine predates drive-root support (no features.driveRoot record)"; return false; }
+            why = f.Enabled ? null : "drive roots are disabled in this build: " + (f.Reason ?? "the payload's engine has no drive-root handling");
             return f.Enabled;
         }
 
@@ -124,6 +124,15 @@ namespace H2GpuLightmapper.Core.Payload
                         throw new InvalidDataException(c.Name + ": unsafe path '" + f.Path + "'");
                     if (!seen.Add(f.Path)) throw new InvalidDataException(c.Name + ": duplicate path " + f.Path);
                     if (string.IsNullOrEmpty(f.Md5) || f.Md5.Length != 32) throw new InvalidDataException(c.Name + ": " + f.Path + " has no md5");
+                    if (f.Packed && string.IsNullOrEmpty(c.PackEntry)) throw new InvalidDataException(c.Name + ": " + f.Path + " is packed but the component names no pack entry");
+                    if (f.Packed && f.Size < 0) throw new InvalidDataException(c.Name + ": " + f.Path + " is packed and has no size");
+                }
+                if (!string.IsNullOrEmpty(c.PackEntry))
+                {
+                    if (c.PackEntry.IndexOfAny(new[] { '/', '\\', ':' }) >= 0 || c.PackEntry == "." || c.PackEntry == "..")
+                        throw new InvalidDataException(c.Name + ": unsafe pack entry name '" + c.PackEntry + "'");
+                    if (seen.Contains(c.PackEntry)) throw new InvalidDataException(c.Name + ": the pack entry has the name of a file");
+                    if (!c.Files.Any(f => f.Packed)) throw new InvalidDataException(c.Name + ": a pack entry is named but no file is packed");
                 }
             }
         }
@@ -131,8 +140,6 @@ namespace H2GpuLightmapper.Core.Payload
         public IEnumerable<PayloadComponent> RtComponents { get { return Components.Where(c => c.Target == TargetRt); } }
         public IEnumerable<PayloadComponent> InstComponents { get { return Components.Where(c => c.Target == TargetInst); } }
 
-        /// <summary>The rt component whose root holds pwsh.exe.</summary>
-        public PayloadComponent PwshComponent { get { return RtComponents.FirstOrDefault(c => c.Has("pwsh.exe")); } }
         /// <summary>The rt component whose root holds py.exe (the S0.3 bundle).</summary>
         public PayloadComponent PyComponent { get { return RtComponents.FirstOrDefault(c => c.Has("py.exe")); } }
         /// <summary>The rt component whose root holds mapbake.py: the internal "bake straight from a .map" entry point plus the separate program h2conv it starts
@@ -178,9 +185,9 @@ namespace H2GpuLightmapper.Core.Payload
     public sealed class PayloadComponent
     {
         [DataMember(Name = "name", Order = 0)] public string Name { get; set; }
-        /// <summary>Manifest resource name of the zip, e.g. "payload/rt-pwsh-7.6.6.zip".</summary>
+        /// <summary>Manifest resource name of the zip, e.g. "payload/rt-py310-np226.zip".</summary>
         [DataMember(Name = "resource", Order = 1)] public string Resource { get; set; }
-        /// <summary>Versioned, content-hash-named extraction dir leaf, e.g. "pwsh-7.6.6-1a2b3c4d".</summary>
+        /// <summary>Versioned, content-hash-named extraction dir leaf, e.g. "py310-np226-1a2b3c4d".</summary>
         [DataMember(Name = "dirName", Order = 2)] public string DirName { get; set; }
         /// <summary>"rt" = %LOCALAPPDATA%\H2GpuLightmapper\rt\ ; "inst" = WORK\_runtime\.</summary>
         [DataMember(Name = "target", Order = 3)] public string Target { get; set; }
@@ -190,6 +197,11 @@ namespace H2GpuLightmapper.Core.Payload
         [DataMember(Name = "totalBytes", Order = 7)] public long TotalBytes { get; set; }
         [DataMember(Name = "maxPathLen", Order = 8)] public int MaxPathLen { get; set; }
         [DataMember(Name = "files", Order = 9)] public List<PayloadFile> Files { get; set; }
+        /// <summary>1.0: name of the zip entry that holds every "packed" file of this component as ONE LZMA stream (the
+        /// files' bytes back to back, in the order they are listed in <see cref="Files"/>); null when nothing is packed.
+        /// Files that are nearly the same (the engine programs) pack far smaller this way than as separate zip entries.</summary>
+        [DataMember(Name = "packEntry", Order = 10, IsRequired = false, EmitDefaultValue = false)] public string PackEntry { get; set; }
+        public IEnumerable<PayloadFile> PackedFiles { get { return Files == null ? Enumerable.Empty<PayloadFile>() : Files.Where(f => f.Packed); } }
 
         public bool Has(string relPath) { return Files != null && Files.Any(f => string.Equals(f.Path, relPath, StringComparison.OrdinalIgnoreCase)); }
         public PayloadFile Find(string relPath) { return Files == null ? null : Files.FirstOrDefault(f => string.Equals(f.Path, relPath, StringComparison.OrdinalIgnoreCase)); }
@@ -215,6 +227,8 @@ namespace H2GpuLightmapper.Core.Payload
         [DataMember(Name = "sourceMd5", Order = 3, IsRequired = false, EmitDefaultValue = false)] public string SourceMd5 { get; set; }
         /// <summary>Free-form role tag ("engine", "patched:P1", "dllslot", "key", ...).</summary>
         [DataMember(Name = "role", Order = 4, IsRequired = false, EmitDefaultValue = false)] public string Role { get; set; }
+        /// <summary>1.0: the file is not a zip entry of its own; its bytes are inside the component's pack entry.</summary>
+        [DataMember(Name = "packed", Order = 5, IsRequired = false, EmitDefaultValue = false)] public bool Packed { get; set; }
 
         public bool HasRole(string role)
         {

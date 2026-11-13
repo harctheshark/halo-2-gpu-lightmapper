@@ -9,7 +9,7 @@ namespace H2GpuLightmapper.Core.Tests
     /// <summary>
     /// S2.1-S2.4 unit tests. Usage:
     ///   H2GpuLightmapper.Core.Tests.exe [--filter text] [--keep] [--sandbox-parent dir] [--short-parent dir]
-    ///                                   [--pwsh dir] [--py dir] [--mine root] [--no-processes]
+    ///                                   [--py dir] [--mine root] [--no-processes]
     /// Production files are only READ (md5-checked copies of the estimator DLLs, lmw_install.py, the bounds DB; discovery
     /// and preflight on ProdRoot / H2EK read-only). Scratch: &lt;project&gt;\build\s2\t\&lt;id&gt;\ and a short
     /// %TEMP%\s2\&lt;hh&gt;\ (DLL-slot alias candidates and a root whose WORK fits the 60-char slot). No GPU, no bake, no
@@ -33,7 +33,6 @@ namespace H2GpuLightmapper.Core.Tests
                 else if (a == "--keep") c.Keep = true;
                 else if (a == "--sandbox-parent") c.SandboxParent = next();
                 else if (a == "--short-parent") c.ShortParent = next();
-                else if (a == "--pwsh") c.PwshDir = next();
                 else if (a == "--py") c.PyDir = next();
                 else if (a == "--mine") c.MineRoot = next();
                 else if (a == "--no-processes") c.NoProcesses = true;
@@ -45,7 +44,7 @@ namespace H2GpuLightmapper.Core.Tests
             C = c;
             Console.WriteLine("S2.1-S2.4 core tests  project=" + c.Project);
             Console.WriteLine("  sandbox=" + c.Sb.Root + "  short=" + c.Short.Root);
-            Console.WriteLine("  pwsh=" + c.PwshDir + "  py=" + c.PyDir);
+            Console.WriteLine("  py=" + c.PyDir);
 
             var tests = new List<KeyValuePair<string, Action>>();
             tests.AddRange(PayloadTests.All());
@@ -61,6 +60,7 @@ namespace H2GpuLightmapper.Core.Tests
             tests.AddRange(TempJanitorTests.All());      // 0.6.8 bounded temp
             tests.AddRange(QuarantineTests.All());       // 0.6.8 RC antivirus quarantine re-check
             tests.AddRange(WorkMigrationTests.All());    // 0.6.12 GPU Lightmap Work -> GPU Work
+            tests.AddRange(PackTests.All());             // 1.0 packed payload files (one LZMA stream per component)
 
             int pass = 0, fail = 0, skip = 0;
             var sw = Stopwatch.StartNew();

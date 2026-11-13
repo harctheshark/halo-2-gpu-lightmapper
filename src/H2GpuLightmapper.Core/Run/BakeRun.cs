@@ -60,8 +60,8 @@ namespace H2GpuLightmapper.Core.Run
     }
 
     /// <summary>The child environment of every pipeline process (design section 5): S0.2's ChildEnvironment.ForBake --
-    /// GPULM_*, OSOYOOS_*, H2LM_*, PYTHON*, PSModulePath... removed; H2LM_ROOT / WORK / CODE / NOWINDOW=1 set; PATH = rt py;
-    /// rt pwsh; System32; Windows; Wbem -- plus PYTHONDONTWRITEBYTECODE=1 (S0.3: keeps __pycache__ out of INST).</summary>
+    /// GPULM_*, OSOYOOS_*, H2LM_*, PYTHON*... removed; H2LM_ROOT / WORK / CODE / NOWINDOW=1 set; PATH = rt py;
+    /// System32; Windows; Wbem -- plus PYTHONDONTWRITEBYTECODE=1 (S0.3: keeps __pycache__ out of INST).</summary>
     public static class BakeEnv
     {
         public static ChildEnvironment Build(ResolvedRuntime rt)
@@ -75,25 +75,19 @@ namespace H2GpuLightmapper.Core.Run
         }
     }
 
-    /// <summary>pwsh argv (S0.2): -NoProfile -NonInteractive -ExecutionPolicy Bypass -File script args. Refuses "-?" (on
-    /// gpu_bake it RUNS the body with defaults), "-Cleanup" (never), and a worker outside 200-299.</summary>
-    public static class PwshInvocation
+    /// <summary>The bake program's argv: the engine folder's h2lm-bake.exe with the bake arguments as they are (1.0: the program that
+    /// replaced the old bake script takes the same arguments). Refuses "-?" (the old script RAN its body with the defaults on it; never
+    /// passed), "-Cleanup" (never), and a worker outside 200-299.</summary>
+    public static class BakeInvocation
     {
-        public static List<string> FileArgs(string script, IEnumerable<string> scriptArgs)
-        {
-            var a = new List<string> { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script };
-            if (scriptArgs != null) a.AddRange(scriptArgs);
-            return a;
-        }
-
         public static ProcSpec GpuBake(ResolvedRuntime rt, ChildEnvironment env, IList<string> args, string name = "gpu_bake", bool probeWorker = false)
         {
-            if (rt.GpuBakePs1 == null) throw new InvalidOperationException("the payload has no engine_v373\\gpu_bake.ps1");
+            if (rt.BakeExe == null) throw new InvalidOperationException("the payload has no engine_v373\\h2lm-bake.exe");
             for (int i = 0; i < args.Count; i++)
             {
                 string a = args[i];
                 if (a == "-?" || a == "/?" || a.Equals("-Help", StringComparison.OrdinalIgnoreCase))
-                    throw new ArgumentException("refused: '" + a + "' makes gpu_bake.ps1 RUN with its defaults (S0.2) -- use Get-Command -Syntax for help");
+                    throw new ArgumentException("refused: '" + a + "' is never passed to the bake program");
                 if (a.Equals("-Cleanup", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("refused: -Cleanup is never passed by the standalone");
                 if (a.Equals("-Worker", StringComparison.OrdinalIgnoreCase))
                 {
@@ -102,7 +96,7 @@ namespace H2GpuLightmapper.Core.Run
                     Safety.Guards.AssertWorker(w);
                 }
             }
-            return new ProcSpec { Name = name, FileName = rt.PwshExe, Args = FileArgs(rt.GpuBakePs1, args), Cwd = rt.Work, Env = env, ProbeWorker = probeWorker };
+            return new ProcSpec { Name = name, FileName = rt.BakeExe, Args = new List<string>(args), Cwd = rt.Work, Env = env, ProbeWorker = probeWorker };
         }
     }
 
@@ -416,27 +410,25 @@ namespace H2GpuLightmapper.Core.Run
 
     public sealed class RunHeaderInfo
     {
-        /// <summary>"7.6.6 (py on PATH: X)" as logged; <see cref="PwshVersionOnly"/> / <see cref="PyOnPath"/> are the parts.</summary>
-        public string PwshVersion, PyExecutable, NumpyVersion;
-        public string PwshVersionOnly, PyOnPath;
+        /// <summary>The py.exe the child PATH resolves (what the bake program starts as `py`), sys.executable and numpy as the child sees them.</summary>
+        public string PyOnPath, PyExecutable, NumpyVersion;
         public List<string> Problems = new List<string>();
         public IEnumerable<string> Lines()
         {
-            yield return "    pwsh " + (PwshVersion ?? "?");
+            yield return "    py on PATH " + (PyOnPath ?? "?");
             yield return "    python " + (PyExecutable ?? "?") + "   numpy " + (NumpyVersion ?? "?");
             foreach (var p in Problems) yield return "    *** header: " + p;
         }
 
         /// <summary>
-        /// Review fix (finding 20): what the children report vs the pinned runtime -- pwsh <see cref="RunHeader.PinnedPwsh"/>,
-        /// `& py` resolving to <paramref name="pyExe"/>, sys.executable inside <paramref name="pyDir"/>, numpy
-        /// <see cref="RunHeader.PinnedNumpy"/>. Empty = the bake runs on the verified bundle.
+        /// Review fix (finding 20): what the children report vs the pinned runtime -- `py` on the child PATH resolving to
+        /// <paramref name="pyExe"/>, sys.executable inside <paramref name="pyDir"/>, numpy <see cref="RunHeader.PinnedNumpy"/>.
+        /// Empty = the bake runs on the verified bundle.
         /// </summary>
         public List<string> Mismatches(string pyExe, string pyDir)
         {
             var m = new List<string>();
-            if (PwshVersionOnly != RunHeader.PinnedPwsh) m.Add("pwsh is " + (PwshVersionOnly ?? "unknown") + ", not the pinned " + RunHeader.PinnedPwsh);
-            if (!SamePath(PyOnPath, pyExe)) m.Add("`& py` resolves to " + (PyOnPath ?? "nothing") + ", not the bundle's " + pyExe);
+            if (!SamePath(PyOnPath, pyExe)) m.Add("`py` resolves to " + (PyOnPath ?? "nothing") + ", not the bundle's " + pyExe);
             if (PyExecutable == null || pyDir == null || !SafeFs.IsUnderOrSame(SafeTrim(PyExecutable), pyDir)) m.Add("python's sys.executable is " + (PyExecutable ?? "unknown") + ", not inside " + pyDir);
             if (NumpyVersion != RunHeader.PinnedNumpy) m.Add("numpy is " + (NumpyVersion ?? "unknown") + ", not the pinned " + RunHeader.PinnedNumpy);
             return m;
@@ -450,28 +442,43 @@ namespace H2GpuLightmapper.Core.Run
         }
     }
 
-    /// <summary>The run header (plan S2.3): the pwsh version, sys.executable and the numpy version, as the CHILD environment
-    /// sees them (proves the bundle, not a system Python, runs the bake).</summary>
+    /// <summary>The run header (plan S2.3): the py.exe the child PATH resolves, sys.executable and the numpy version, as the CHILD
+    /// environment sees them (proves the bundle, not a system Python, runs the bake).</summary>
     public static class RunHeader
     {
-        /// <summary>The runtime versions the payload pins (FINAL_DESIGN: pwsh 7.6.6, CPython 3.10.5 + numpy 2.2.6).</summary>
-        public const string PinnedPwsh = "7.6.6", PinnedNumpy = "2.2.6";
+        /// <summary>The runtime version the payload pins (FINAL_DESIGN: CPython 3.10.5 + numpy 2.2.6).</summary>
+        public const string PinnedNumpy = "2.2.6";
 
-        public static RunHeaderInfo Collect(string pwshExe, string pyExe, ChildEnvironment env, string cwd)
+        /// <summary>The first "<paramref name="name"/>" + a PATHEXT extension found on <paramref name="env"/>'s PATH, in PATH order
+        /// (how a child process resolves a bare program name); null when none is found.</summary>
+        public static string FindOnPath(ChildEnvironment env, string name)
+        {
+            string path = env == null ? null : env.Get("PATH");
+            if (string.IsNullOrEmpty(path)) return null;
+            string pext = env.Get("PATHEXT");
+            var exts = string.IsNullOrEmpty(pext) ? new[] { ".COM", ".EXE", ".BAT", ".CMD" } : pext.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var d in path.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string dir = d.Trim().Trim('"');
+                if (dir.Length == 0) continue;
+                foreach (var x in exts)
+                {
+                    try
+                    {
+                        string p = System.IO.Path.Combine(dir, name + x.Trim());
+                        if (System.IO.File.Exists(p)) return p;
+                    }
+                    catch (ArgumentException) { break; }
+                }
+            }
+            return null;
+        }
+
+        public static RunHeaderInfo Collect(string pyExe, ChildEnvironment env, string cwd)
         {
             var h = new RunHeaderInfo();
-            try
-            {
-                var r = ProcessRunner.RunCapture(pwshExe, new[] { "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString(); (Get-Command py -CommandType Application | Select-Object -First 1).Source" }, cwd, env, 60000);
-                if (r.ExitCode == 0 && r.StdoutLines.Count > 0)
-                {
-                    h.PwshVersionOnly = r.StdoutLines[0].Trim();
-                    h.PyOnPath = r.StdoutLines.Count > 1 ? r.StdoutLines[1].Trim() : null;
-                    h.PwshVersion = h.PwshVersionOnly + (h.PyOnPath != null ? " (py on PATH: " + h.PyOnPath + ")" : "");
-                }
-                else h.Problems.Add("pwsh version probe exit " + ProcessRunner.FormatExit(r.ExitCode) + " " + r.Stderr);
-            }
-            catch (Exception e) { h.Problems.Add("pwsh: " + e.Message); }
+            h.PyOnPath = FindOnPath(env, "py");
+            if (h.PyOnPath == null) h.Problems.Add("no py on the child PATH");
             try
             {
                 var r = ProcessRunner.RunCapture(pyExe, new[] { "-c", "import sys,numpy;print(sys.executable);print(numpy.__version__)" }, cwd, env, 60000);

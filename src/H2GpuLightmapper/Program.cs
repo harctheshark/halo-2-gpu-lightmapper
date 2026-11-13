@@ -68,7 +68,6 @@ namespace H2GpuLightmapper
                     case "--localappdata": g.Host.LocalAppData = next(); break;
                     case "--alias-localappdata": g.Host.AliasLocalAppData = next(); break;
                     case "--alias-volume-root": g.Host.AliasVolumeRoot = next(); break;
-                    case "--rt-pwsh": g.Host.RtPwshDir = next(); break;
                     case "--rt-py": g.Host.RtPyDir = next(); break;
                     case "--dev-custom": break;      // accepted and ignored since 0.6.1: Custom needs no switch
                     case "--dev-custom-unguarded": g.Host.DevCustomUnguarded = true; break;

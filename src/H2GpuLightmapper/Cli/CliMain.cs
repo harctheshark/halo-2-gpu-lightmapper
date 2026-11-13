@@ -23,7 +23,7 @@ namespace H2GpuLightmapper.Cli
     {
         public const int ExitOk = 0, ExitRefused = 2, ExitFailed = 3, ExitCancelled = 4;
 
-        private static readonly string[] HostValues = { "--payload-dir", "--localappdata", "--alias-localappdata", "--alias-volume-root", "--rt-pwsh", "--rt-py", "--dev-h2conv-home" };
+        private static readonly string[] HostValues = { "--payload-dir", "--localappdata", "--alias-localappdata", "--alias-volume-root", "--rt-py", "--dev-h2conv-home" };
         // --dev-custom: accepted and IGNORED since 0.6.1 (Custom needs no switch; old scripts keep working)
         private static readonly string[] HostSwitches = { "--dev-custom", "--dev-custom-unguarded", "--dev-probes" };
 
@@ -105,11 +105,11 @@ namespace H2GpuLightmapper.Cli
   --scenery-permutation-fix = the window's Advanced settings ""Scenery Multi Permutation Fix (Experimental Improvement)"": every gpu_bake of the bake gets
   -SceneryOwnPermutationOnly (a fallback for scenery that draws more than one shape from one tag: only the shape the game draws casts shadows, ground hidden
   inside scenery is filled from its surroundings, a variant's own pieces get lit; it differs from the 2004 tool on purpose, and a capture is reusable only by a
-  bake with the same setting). Needs engine 0.6.4 or newer: when the payload's gpu_bake.ps1 does not declare that parameter the bake is refused (exit 2),
+  bake with the same setting). Needs engine 0.6.4 or newer: when the payload's engine does not take that parameter the bake is refused (exit 2),
   also with --dry-run, and the parameter is never passed. Off = the argv is exactly what it was before the option existed.
   Precision (Compatibility mode, DF64): automatic, there is no option. A GPU with FP64 (NVIDIA, AMD) runs the engine's native FP64 kernels; a GPU
   without FP64 (Intel integrated / Arc, Qualcomm Adreno) runs its FP32-only double-single (DF64) kernels, which the engine picks itself. Needs engine
-  0.6.4 or newer (its gpu_bake.ps1 validates GPULM_COMPAT); with an older engine a GPU without FP64 is refused, as before. The window, the bake log,
+  0.6.4 or newer (it validates GPULM_COMPAT); with an older engine a GPU without FP64 is refused, as before. The window, the bake log,
   the plan (--dry-run, --json) and the run summary all state it as ""Precision: ..."". Experimental: results matched full precision in testing; may be slower.
   --force-compat (testing only, not in the window): run the DF64 kernels on a GPU that has FP64 too (every GPU step gets GPULM_COMPAT=1). Refused (exit 2),
   also with --dry-run, when the engine has no Compatibility mode; GPULM_COMPAT is never passed to such an engine.
@@ -122,7 +122,7 @@ namespace H2GpuLightmapper.Cli
   dev: --worker N --probe-worker M (200-299) [--dev-custom-unguarded] --dev-probes --dev-no-fixes
        --dev-skip-preflight (tool_fast's identity is still checked) --dev-skip-gpucheck
        --reuse-unrecorded --lock-wait-min N --lock-poll-s N --cancel-file F
-       --payload-dir DIR --localappdata DIR --alias-localappdata DIR --alias-volume-root DIR --rt-pwsh DIR --rt-py DIR";
+       --payload-dir DIR --localappdata DIR --alias-localappdata DIR --alias-volume-root DIR --rt-py DIR";
 
         public static int Run(string[] args)
         {
@@ -171,7 +171,7 @@ namespace H2GpuLightmapper.Cli
             return new HostConfig
             {
                 PayloadDir = a.Get("--payload-dir"), LocalAppData = a.Get("--localappdata"), AliasLocalAppData = a.Get("--alias-localappdata"),
-                AliasVolumeRoot = a.Get("--alias-volume-root"), RtPwshDir = a.Get("--rt-pwsh"), RtPyDir = a.Get("--rt-py"), DevH2convHome = a.Get("--dev-h2conv-home"),
+                AliasVolumeRoot = a.Get("--alias-volume-root"), RtPyDir = a.Get("--rt-py"), DevH2convHome = a.Get("--dev-h2conv-home"),
                 DevCustomUnguarded = a.Has("--dev-custom-unguarded"), DevProbes = a.Has("--dev-probes"),
             };
         }
@@ -874,7 +874,6 @@ namespace H2GpuLightmapper.Cli
                 FarmsInTemp = host.HasPayload && host.Manifest.FarmsInTemp,
                 GpuCheckExe = !noGpu && rt != null ? rt.GpuCheckExe : null,
                 GpuCheckPlainExe = !noGpu && rt != null && inst != null ? InstLayout.FindByName(inst, rt.InstDir, InstLayout.GpuCheckPlain) : null,
-                PwshExe = rt == null ? null : rt.PwshExe, PwshEnv = env,
                 CompatEngine = host.HasPayload && host.EngineHasCompat(BakeOptions.Defaults()),      // the default bake's engine (Super, no AO): does it have Compatibility mode (DF64)?
             });
             foreach (var it in pf.Items) lines.Add("  " + it);

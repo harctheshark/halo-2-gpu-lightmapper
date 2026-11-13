@@ -788,7 +788,12 @@ def cmd_inject(a):
         if not vo.get('ok') or vo.get('failures'):
             raise MapbakeError('the conversion back to Vista reported problems: failed tags %s, validate_file %s, encode failures %s'
                                % (vo.get('failures'), vo.get('validate_file'), vo.get('encode_failures')))
-    reps = [t for t in (ir.get('tags') or []) if str(t.get('action', '')).startswith('replace')]
+        # 1.0: a sound h2conv could not convert is skipped with a warning only (0 failed tags); a Vista map that silently lacks sounds is not a
+        # result to hand over.  (An older h2conv does not report the count: nothing is checked then.)
+        if vo.get('sounds_failed'):
+            raise MapbakeError('the conversion back to Vista could not convert %d sound(s), so the Vista map would be missing them (first: %s)'
+                               % (vo.get('sounds_failed'), '; '.join((vo.get('sounds_failed_examples') or ['see write_report.json'])[:2])[:400]))
+    reps =[t for t in (ir.get('tags') or []) if str(t.get('action', '')).startswith('replace')]
     replaced = sorted('%s:%s' % (t.get('group'), t.get('name')) for t in reps)
     say('injected: %s' % (', '.join(replaced) if replaced else '(see write_report.json)'))
     added = (ir.get('build') or {}).get('tags_added') or []

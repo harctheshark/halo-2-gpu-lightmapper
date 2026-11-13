@@ -12,7 +12,6 @@ namespace H2Lm.Proc
     /// <summary>What the bake child needs to know about the installed runtimes and the H2EK root (all absolute paths).</summary>
     public sealed class BakeEnvSpec
     {
-        public string PwshDir;   // %LOCALAPPDATA%\H2GpuLightmapper\rt\pwsh-7.6.6-<h8>   (contains pwsh.exe, Modules\)
         public string PyDir;     // %LOCALAPPDATA%\H2GpuLightmapper\rt\py310-<h8>        (contains py.exe); may be null in spikes
         public string Root;      // H2LM_ROOT  = the H2EK root (tool_fast.exe, tags\)
         public string Work;      // H2LM_WORK  = <ROOT>\GPU Lightmap Work   (the REAL path, never the DLL-slot alias)
@@ -32,20 +31,21 @@ namespace H2Lm.Proc
 
         /// <summary>
         /// Variables a log / a dry-run plan may print WITH their value (review fix, privacy): the ones the shell sets or
-        /// overrides (H2LM_*, PATH, PSModulePath, PSExecutionPolicyPreference, NO_COLOR, POWERSHELL_*, PYTHON*) and the pipeline
+        /// overrides (H2LM_*, PATH, NO_COLOR, PYTHON*) and the pipeline
         /// prefixes that must never be present at all (shown so a leak stays visible). Every other inherited variable is
         /// passed to the child unchanged but logged by NAME only: it may hold an API key or a token.
         /// </summary>
         public static bool IsLoggable(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
-            foreach (var p in new[] { "H2LM_", "GPULM_", "OSOYOOS_", "DEVP_", "V370_", "PYTHON", "POWERSHELL_", "PY_PYTHON" })
+            foreach (var p in new[] { "H2LM_", "GPULM_", "OSOYOOS_", "DEVP_", "V370_", "PYTHON", "PY_PYTHON" })
                 if (name.StartsWith(p, StringComparison.OrdinalIgnoreCase)) return true;
-            foreach (var n in new[] { "PATH", "PSModulePath", "PSExecutionPolicyPreference", "NO_COLOR" })
+            foreach (var n in new[] { "PATH", "NO_COLOR" })
                 if (string.Equals(name, n, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
-        /// <summary>Removed by exact name (case-insensitive) before the bake values are added.</summary>
+        /// <summary>Removed by exact name (case-insensitive) before the bake values are added. 1.0: the payload ships no shell runtime; these
+        /// inherited console-shell variables are still removed, so the child environment does not depend on the console the app was started from.</summary>
         public static readonly string[] StrippedNames = { "PSModulePath", "PSExecutionPolicyPreference", "NO_COLOR",
                                                           "POWERSHELL_TELEMETRY_OPTOUT", "POWERSHELL_UPDATECHECK" };
 
@@ -69,7 +69,7 @@ namespace H2Lm.Proc
         /// <summary>The bake child environment of FINAL_DESIGN.md section 5.</summary>
         public static ChildEnvironment ForBake(BakeEnvSpec s)
         {
-            if (s == null || string.IsNullOrEmpty(s.PwshDir)) throw new ArgumentException("BakeEnvSpec.PwshDir is required");
+            if (s == null) throw new ArgumentNullException("s");
             var e = FromCurrentProcess();
             foreach (var p in StrippedPrefixes) e.RemovePrefix(p);
             foreach (var n in StrippedNames) e.Remove(n);
@@ -81,15 +81,10 @@ namespace H2Lm.Proc
             string sysRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows";
             var path = new List<string>();
             if (!string.IsNullOrEmpty(s.PyDir)) path.Add(s.PyDir);      // bundle py.exe BEFORE C:\Windows\py.exe
-            path.Add(s.PwshDir);
             path.Add(Path.Combine(sysRoot, "System32"));
             path.Add(sysRoot);
             path.Add(Path.Combine(sysRoot, @"System32\Wbem"));
             e.Set("PATH", string.Join(";", path));
-            e.Set("PSModulePath", Path.Combine(s.PwshDir, "Modules"));
-            e.Set("PSExecutionPolicyPreference", "Bypass");
-            e.Set("POWERSHELL_TELEMETRY_OPTOUT", "1");
-            e.Set("POWERSHELL_UPDATECHECK", "Off");
             e.Set("NO_COLOR", "1");
             e.Set("PYTHONIOENCODING", "utf-8");
             return e;

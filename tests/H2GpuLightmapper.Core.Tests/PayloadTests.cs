@@ -29,9 +29,12 @@ namespace H2GpuLightmapper.Core.Tests
             }
         }
 
+        /// <summary>The extra runtime component of the test payload (a stand-in for a runtime other than py: tool.exe at its root).</summary>
+        internal static PayloadComponent ToolComp(PayloadManifest m) { return m.RtComponents.First(c => c.Name == "rt-tool-test"); }
+
         public static IEnumerable<KeyValuePair<string, Action>> All()
         {
-            yield return T("payload: manifest loads, validates, finds pwsh / py / inst by content", Manifest);
+            yield return T("payload: manifest loads, validates, finds py / inst by content (no shell runtime is needed)", Manifest);
             yield return T("payload: rt first extraction, already-present fast path, quick check", RtExtract);
             yield return T("payload: INST on a long WORK -> LocalAppData alias; slot DLLs patched to it; marker", InstLongAlias);
             yield return T("payload: INST on a short WORK -> Direct slot base WORK\\", InstShortDirect);
@@ -53,7 +56,7 @@ namespace H2GpuLightmapper.Core.Tests
             string root = C.Sb.Dir("sroot");
             var q = inst.StartupEnsure(root);
             Assert.True(q.Ok && q.Components.Count == 3, "first start extracts and checks everything: " + q);
-            string notes = Path.Combine(inst.RtDir(inst.Manifest.PwshComponent), @"en-US\notes.txt");
+            string notes = Path.Combine(inst.RtDir(ToolComp(inst.Manifest)), @"en-US\notes.txt");
             File.Delete(notes);
             Assert.True(inst.VerifyBeforeBake(root).Ok, "a non-key runtime file is not part of the pre-bake check");
             Assert.True(!inst.QuickCheck(root).Ok, "... but the start-up quick check sees it");
@@ -66,12 +69,13 @@ namespace H2GpuLightmapper.Core.Tests
         {
             var m = Inst.Manifest;
             Assert.Eq(1, m.Format, "format");
-            Assert.Eq("rt-pwsh-test", m.PwshComponent.Name, "pwsh component");
+            Assert.Eq("rt-tool-test", ToolComp(m).Name, "the extra runtime component");
             Assert.Eq("rt-py-test", m.PyComponent.Name, "py component");
             Assert.Eq("engine-test", m.InstComponent.Name, "inst component");
             Assert.Eq(3, m.InstComponent.Files.Count(f => f.IsDllSlot), "slot DLLs (2 by role, 1 by name)");
-            Assert.True(PayloadInstaller.IsKeyFile(m.PwshComponent.Find("pwsh.exe")), "pwsh.exe is key");
-            Assert.True(!PayloadInstaller.IsKeyFile(m.PwshComponent.Find("en-US/notes.txt")), "notes is not key");
+            Assert.True(PayloadInstaller.IsKeyFile(ToolComp(m).Find("tool.exe")), "tool.exe is key");
+            Assert.True(!PayloadInstaller.IsKeyFile(ToolComp(m).Find("en-US/notes.txt")), "notes is not key");
+            Assert.True(PayloadInstaller.IsKeyFile(m.InstComponent.Find("engine_v373/h2lm-bake.exe")) == false, "the bake program is an INST file, verified like every INST file");
             Assert.True(PayloadInstaller.IsKeyFile(m.PyComponent.Find("site-packages/numpy/_core/_multiarray_umath.cp310-win_amd64.pyd")), "numpy core is key");
         }
 
@@ -144,9 +148,9 @@ namespace H2GpuLightmapper.Core.Tests
             var all = Inst.VerifyBeforeBake(_longRoot, default(System.Threading.CancellationToken), true);
             Assert.True(all.Ok, "verify all runtime files");
             var rt = Inst.Resolve(_longRoot);
-            Assert.Eq(Path.Combine(rt.InstDir, @"engine_v373\gpu_bake.ps1"), rt.GpuBakePs1, "gpu_bake path");
-            Assert.True(File.Exists(rt.GpuBakePs1) && File.Exists(rt.LmwInstallPy) && File.Exists(rt.BoundsDb), "resolved files exist");
-            Assert.Eq(Path.Combine(Inst.Paths.RtRoot, Inst.Manifest.PwshComponent.DirName, "pwsh.exe"), rt.PwshExe, "pwsh exe");
+            Assert.Eq(Path.Combine(rt.InstDir, @"engine_v373\h2lm-bake.exe"), rt.BakeExe, "bake program path");
+            Assert.True(File.Exists(rt.BakeExe) && File.Exists(rt.LmwInstallPy) && File.Exists(rt.BoundsDb), "resolved files exist");
+            Assert.True(File.Exists(Path.Combine(rt.InstDir, @"engine_v373\bake_params.txt")), "the parameter list is beside the bake program");
             Assert.Eq(Path.Combine(Inst.Paths.RtRoot, Inst.Manifest.PyComponent.DirName, "py.exe"), rt.PyExe, "py exe");
             Assert.Eq(ShellPaths.WorkOf(_longRoot), rt.Work, "work is the REAL path");
             Assert.True(rt.InstDir.StartsWith(Path.Combine(rt.Work, "_runtime"), StringComparison.OrdinalIgnoreCase), "INST under WORK\\_runtime");
@@ -158,7 +162,7 @@ namespace H2GpuLightmapper.Core.Tests
         {
             Inst.EnsureRuntimes();
             var r = Inst.EnsureInst(_longRoot);
-            string p = Path.Combine(r.InstDir, @"engine_v373\gpu_bake.ps1");
+            string p = Path.Combine(r.InstDir, @"engine_v373\fake_gpu_bake.py");
             var b = File.ReadAllBytes(p);
             b[10] ^= 0x20;
             File.WriteAllBytes(p, b);
@@ -167,7 +171,7 @@ namespace H2GpuLightmapper.Core.Tests
             var v = Inst.VerifyBeforeBake(_longRoot);
             Assert.True(!v.Ok, "full verify catches it");
             var ic = v.Components.First(x => x.Component.Target == "inst");
-            Assert.Eq("engine_v373/gpu_bake.ps1", ic.Result.BadFiles.Single(), "bad file named");
+            Assert.Eq("engine_v373/fake_gpu_bake.py", ic.Result.BadFiles.Single(), "bad file named");
             var after = Inst.Repair(_longRoot, v);
             Assert.True(after.Ok, "repaired: " + after);
             Assert.True(Inst.VerifyBeforeBake(_longRoot).Ok, "verify ok after repair");
@@ -242,7 +246,7 @@ namespace H2GpuLightmapper.Core.Tests
         private static void BadMarker()
         {
             Inst.EnsureRuntimes();
-            var c = Inst.Manifest.PwshComponent;
+            var c = ToolComp(Inst.Manifest);
             string d = Inst.RtDir(c);
             File.WriteAllText(Path.Combine(d, PayloadExtractor.CompleteMarker), "{\"zipMd5\":\"00000000000000000000000000000000\"}");
             var q = Inst.QuickCheck();
@@ -301,9 +305,9 @@ namespace H2GpuLightmapper.Core.Tests
         {
             Inst.EnsureRuntimes();
             string rt = Inst.Paths.RtRoot;
-            string old1 = Path.Combine(rt, "pwsh-7.5.0-deadbeef");
+            string old1 = Path.Combine(rt, "tool-test-0.5-deadbeef");
             Directory.CreateDirectory(Path.Combine(old1, "sub"));
-            File.WriteAllText(Path.Combine(old1, "pwsh.exe"), "old");
+            File.WriteAllText(Path.Combine(old1, "tool.exe"), "old");
             File.WriteAllText(Path.Combine(old1, "sub", "x.dll"), "old");
             string old2 = Path.Combine(rt, "py310-cafebabe");
             Directory.CreateDirectory(old2);
@@ -322,7 +326,7 @@ namespace H2GpuLightmapper.Core.Tests
             int n = Inst.RemoveOldVersion(list.First(v => v.Path == old1));
             Assert.Eq(2, n, "files removed");
             Assert.True(!Directory.Exists(old1), "old1 gone");
-            Assert.Throws<InvalidOperationException>(() => Inst.RemoveOldVersion(new OldVersionInfo { Path = Path.Combine(rt, Inst.Manifest.PwshComponent.DirName), Parent = rt, Kind = "rt" }), "the current version is refused");
+            Assert.Throws<InvalidOperationException>(() => Inst.RemoveOldVersion(new OldVersionInfo { Path = Path.Combine(rt, ToolComp(Inst.Manifest).DirName), Parent = rt, Kind = "rt" }), "the current version is refused");
             Junction.Remove(j, target);
             File.Delete(Path.Combine(old2, "py.exe"));
             Directory.Delete(old2, false);

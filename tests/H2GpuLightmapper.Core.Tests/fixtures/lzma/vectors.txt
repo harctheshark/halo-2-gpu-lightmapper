@@ -1,0 +1,9 @@
+empty 0 d41d8cd98f00b204e9800998ecf8427e no data at all
+one 1 21c2e59531c8710156d34a3c30ac81d5 a single literal
+text 45450 8d426fe2bcf89dd13717b13cdd0457a2 short matches and repeats
+runs 200004 8fc05c715a6a9dcbf529c44223123b14 very long runs (distance 1 and 2)
+random 65536 9196f5692623ba646a4890d975a05f23 incompressible: literals only
+wrap4k 340000 88257c6b7ac7d8d33d63d7c8fa0a46f0 window of 4096 bytes wraps
+longdist 552000 750e3dec80297e7722f47c0003b4786e near-copies 200 KB apart
+lc0lp2pb0 50450 e7e25e6703528b5d2642609cedb90ffb other literal / position settings
+lc4lp0pb4 120000 602bc7debfdd6684134047e4228a8313 other literal / position settings

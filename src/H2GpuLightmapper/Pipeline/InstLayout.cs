@@ -7,10 +7,11 @@ namespace H2GpuLightmapper.Pipeline
 {
     public static class InstLayout
     {
-        public const string GpuBake = "engine_v373/gpu_bake.ps1";
+        /// <summary>1.0: the engine's bake program (it replaced the old bake script, same arguments); bake_params.txt beside it lists its parameters.</summary>
+        public const string GpuBake = "engine_v373/h2lm-bake.exe";
         /// <summary>Optional: a Custom engine copy carrying the N3 guarded fullgpu (S1.9 ships it only after gate T3a). When
         /// absent, Custom runs engine_v373 (the feature flag keeps Custom hidden until then).</summary>
-        public const string GpuBakeCustom = "engine_custom/gpu_bake.ps1";
+        public const string GpuBakeCustom = "engine_custom/h2lm-bake.exe";
         public const string EngineDir = "engine_v373";
         public const string EngineCustomDir = "engine_custom";
         public const string LmwInstall = "engine_v373/v043-tagwriter/lmw_install.py";
@@ -22,7 +23,15 @@ namespace H2GpuLightmapper.Pipeline
         public const string AoEngineDir = "_research/ao/dev_AO";
         /// <summary>0.6.8 xc8: AO only (adds ambient occlusion to the lightmap that is already installed; ships beside gpu_ao.py).</summary>
         public const string AoExisting = "_research/ao/ao_existing.py";
-        public const string AoGpuBake = "_research/ao/dev_AO/gpu_bake.ps1";
+        public const string AoGpuBake = "_research/ao/dev_AO/h2lm-bake.exe";
+        /// <summary>The parameter list (bake_params.txt) beside a bake program, e.g. engine_v373/h2lm-bake.exe -> engine_v373/bake_params.txt.</summary>
+        public static string ParamsOf(string bakeRel) { return EngineSwitches.ParamsFileOf(bakeRel); }
+        /// <summary>A file of the same engine folder as the bake program <paramref name="bakeRel"/> (e.g. "v041-fullgpu/fullgpu.exe").</summary>
+        public static string Sibling(string bakeRel, string rel)
+        {
+            int i = bakeRel.LastIndexOf('/');
+            return (i < 0 ? "" : bakeRel.Substring(0, i + 1)) + rel;
+        }
         public const string ProbeDriver = "_research/lightprobes/gpu_lightprobes.py";
         public const string ShStage = "standalone/sh_stage.py";
         /// <summary>The Scenery Fix Dependencies scanner (builds / extends SceneryFixDependencies.db from the H2EK's tags).</summary>
@@ -31,7 +40,7 @@ namespace H2GpuLightmapper.Pipeline
         public const string TagIoDir = "v043-tagwriter";
         public const string TagIo = "v043-tagwriter/lmw_tagio.py";
         public const string GpuCheckPlain = "gpucheck_plain.exe";
-        /// <summary>0.6.8: the engine-owned list of a farm's phase-3/4 products (pipeline_guard.py BAKE_PRODUCTS + what gpu_bake.ps1 deletes
+        /// <summary>0.6.8: the engine-owned list of a farm's phase-3/4 products (pipeline_guard.py BAKE_PRODUCTS + what the bake program deletes
         /// before its phase 3), which the after-bake slim removes. Backslash form: joined with Path.Combine. Absent = farms are never kept.</summary>
         public const string FarmProductsRel = "standalone\\farm_products.json";
 
