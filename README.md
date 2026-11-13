@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.0.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.0.1** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -45,6 +45,9 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   faster; the engine uses RT only when a short self-check shows it is clearly faster and agrees with the normal tracer, and otherwise bakes
   the old way. Nothing to switch on. Tested on an RTX 4090 only.
 - **Repeatable (0.6.9).** Baking an unchanged map again gives the same lightmap.
+- **Instanced geometry at the world origin (fixed in 1.0.1).** A `%` object left exactly at position 0, 0, 0 with no rotation and scale 1
+  was not recognised as an instance, and the bake fell back to an older model for the sky lights. It now bakes on the validated path
+  like every other level. Levels without such an object are byte-identical to 1.0.0.
 - **A small exe, no PowerShell (1.0.0).** The exe is about 26 MB (it was 167.6 MB). The bake is driven by a small native program, so
   the app uses no PowerShell at all. Results are unchanged: on the release's test maps the lightmap tags are byte-identical to 0.6.12's.
 - **Many surface lights, large search distance (0.6.12).** A map with thousands of surface lights and a large lightmap search

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1 (2026-11-13)
+
+Exe SHA-256 `bfb4397d5ea6c2b6afac3495222d71d1dbe2ee16a893d7bcdefe77e9c0c50fa7` (26,436,096 bytes).
+
+- **Fixed: instanced geometry placed exactly at the world origin.** An instanced-geometry instance at position 0, 0, 0 with no rotation and scale 1 was not recognised as an instance. This is common in levels made in Blender, where a `%` object is often left at the origin. Three things followed: the object-grid rebuild refused the level ("build_objgrids.py REFUSED ... root element count"), the bake continued with the older instanced model for the sky lights and listed that under "NOT THE VALIDATED CONFIGURATION", and the instance's triangles were traced as level geometry and not through the instance's own grid. The engine now tells an instance by its place in the instance table and not by its matrix, as the original tool does, so such a level takes the validated path like every other level. On the test level the rebuilt root grid equals the tool's own, element for element (24 of 24), and the sky lights run on the full chain. Compared with 1.0.0 on that level (Super with AO), both lightmap bitmaps and every vertex colour are identical; fewer than a hundred per-vertex light directions differ, in the last float digit (at most 2.4e-7). The fix removes the fallback; on this level it does not change the picture.
+- **Levels without such an instance are unchanged.** On the release's test maps the baked lightmap tags are byte-identical to 1.0.0's: Custom, AO, light probes and the `.map` path.
+- **The GPU programs were rebuilt for the fix.** Only the host program around the GPU kernels changed; no kernel changed. `fullgpu.exe` is md5 `0b7fefb0` (1.0.0: `f04032ae`) and the AO engine's is `ebf4f31a` (1.0.0: `d1ac121c`). Every engine gate was run again for them: the AO neutrality gates, the light-probe gate and the Custom-quality guard's identity gate (cyclotron, headlong, mainmenu).
+- **First start.** 1.0.1 unpacks its own engine folder once (`GPU Work\_runtime\1.0.1-2e35a0e4`); the Python runtime folder of 1.0.0 is reused.
+- **Known and not fixed:** On a graphics card with about 4 GB the part planner can stop with "a single row band of chart 0 ... past the per-part limit (video memory)" and advise adding portals or splitting the BSP. In that case the advice is wrong: the fixed memory the bake needs is larger than what the planner allows itself on that card (the card minus a 1.5 GiB reserve), and no change to the level helps. Cards under 6 GB remain untested. A scenario bake in Lightmap Only mode still does not log the empty-instanced-geometry warning (the window shows it).
+- Nothing else changed: the same options, quality levels, command line and work folders.
+
 ## 1.0.0 (2026-11-12)
 
 Exe SHA-256 `9bd5833071236017ee8a9bcfd0d4e3b65767fe9974a30b7af5099ca7a8d41cfe`.
