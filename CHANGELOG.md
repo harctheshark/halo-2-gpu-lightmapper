@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2 (2026-11-14)
+
+Exe SHA-256 `71898cfd27fc2f9895a4168d810ade53ea5df75db485a28bd1f5a81f41127e41` (26,436,096 bytes).
+
+- **Fixed: a `.map` bake of an original Halo 2 Vista map was refused at the end.** A `.map` bake of an original Halo 2 Vista map ran to the end and was then refused: "REFUSED: the injection touched more than the lightmap and its bitmap (replaced 2, added 1 ...)", exit 3, and no map was written. A map made with the original Halo 2 Vista tools has no true-colour lightmap bitmap; the maps that came with the game are such maps. The baked bitmap is therefore added to the map, not put in the place of an old one, and the last check of the `.map` path counted every added tag as an error. Every version since 0.6.7 did this. The check now accepts exactly that one addition, the lightmap's own true-colour bitmap next to the structure BSP and the lightmap that are replaced, and still refuses any other added or replaced tag. Tested on the stock Vista map triplicate (Standard, Super): the bake ends with exit 0, the result passes the Vista file check, and the map loads and looks right in Halo 2 Vista (the map loaded in the game was baked by a development build with the same fix; the release build gives the same file, byte for byte, except for the time of writing in the file header). The result is larger than the input (39,948,800 to 56,076,800 bytes).
+- **Other maps and scenario bakes are unchanged.** A map that already holds the bitmap (a map built with the Halo 2 Editing Kit, in MCC or Vista form) takes the same path as before, and a scenario bake does not use this check. Of the 1,166 files inside the exe, four differ from 1.0.1: the map-bake script and the three copies of the bake program `h2lm-bake.exe`, which carry the version number (their source did not change). The GPU programs are the same files.
+- **Checks.** The check is covered by a new unit test (23 cases on the changed-tag lists of two real maps), an original Vista map is now one of the release gates, and the CPU test suite passed on this build. Through the app, on this exact exe: the MCC `.map` gate gives the same output map as 1.0.1 (md5-identical); a Vista map built with the Halo 2 Editing Kit bakes and comes back as a Vista map as before; the stock Vista map triplicate bakes with exit 0 and the log names the added bitmap (byte for byte the map that was checked in the game, except for the time of writing in the file header). The three scenario gates (Custom, AO, light probes) were not repeated: no file they use changed (see the file-by-file comparison above). One scenario bake of a custom map (Super with ambient occlusion, stage only) was run through this exe and through the 1.0.1 exe: the staged tags are the same under the comparison the release gates use, which sets aside the few bytes that differ between any two runs (the lightmap tag itself is byte-identical).
+- **First start.** 1.0.2 unpacks its own engine folder (`GPU Work\_runtime\1.0.2-6d167265`) and its map-bake scripts once; the Python runtime folder of 1.0.0 is reused.
+- **Known and not fixed:** the two items listed under 1.0.1 still apply.
+- Nothing else changed: the same options, quality levels, command line and work folders.
+
 ## 1.0.1 (2026-11-13)
 
 Exe SHA-256 `bfb4397d5ea6c2b6afac3495222d71d1dbe2ee16a893d7bcdefe77e9c0c50fa7` (26,436,096 bytes).

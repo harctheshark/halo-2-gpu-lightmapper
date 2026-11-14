@@ -723,6 +723,27 @@ def newest_stage_file(stage, suffix):
     return hits
 
 
+def injection_verdict(ir, folder, lm_base, ltmp_only):
+    """What the injection's own report says was changed -> (ok, replaced 'group:name' list, number of tags added, name of the added true-colour
+    bitmap or None).  Allowed: the structure bsp and the lightmap replaced (and the lightmap's true-colour bitmap, unless the bake changed the
+    lightmap tag only), nothing added.
+    1.0.2: a map made before the true-colour lightmap bitmap existed (an original Halo 2 Vista map) has no such tag, so the baked one is ADDED,
+    not replaced.  That single addition, the lightmap's own true-colour bitmap next to the bsp and the lightmap being replaced, is accepted; any
+    other addition is still refused."""
+    tags = ir.get('tags') or []
+    reps = [t for t in tags if str(t.get('action', '')).startswith('replace')]
+    adds = [t for t in tags if str(t.get('action', '')).startswith('add')]
+    replaced = sorted('%s:%s' % (t.get('group'), t.get('name')) for t in reps)
+    added = (ir.get('build') or {}).get('tags_added') or []
+    odd = [r for r in reps if r.get('group') not in ('sbsp', 'ltmp', 'bitm')]
+    tc_tag = ((folder + BS if folder else '') + lm_base + '_truecolor_bitmaps').replace('/', BS).lower()
+    tc_added = (not ltmp_only and len(added) == 1 and len(adds) == 1 and adds[0].get('group') == 'bitm'
+                and str(adds[0].get('name', '')).replace('/', BS).lower() == tc_tag
+                and sorted(str(r.get('group')) for r in reps) == ['ltmp', 'sbsp'])
+    ok = not ((added and not tc_added) or odd or len(reps) + (1 if tc_added else 0) != (2 if ltmp_only else 3))
+    return ok, replaced, len(added), (adds[0].get('name') if tc_added else None)
+
+
 def cmd_inject(a):
     below_normal()
     home = h2conv_home(a)
@@ -793,14 +814,13 @@ def cmd_inject(a):
         if vo.get('sounds_failed'):
             raise MapbakeError('the conversion back to Vista could not convert %d sound(s), so the Vista map would be missing them (first: %s)'
                                % (vo.get('sounds_failed'), '; '.join((vo.get('sounds_failed_examples') or ['see write_report.json'])[:2])[:400]))
-    reps =[t for t in (ir.get('tags') or []) if str(t.get('action', '')).startswith('replace')]
-    replaced = sorted('%s:%s' % (t.get('group'), t.get('name')) for t in reps)
+    ok, replaced, n_added, tc_added = injection_verdict(ir, folder, lm_base, ltmp_only)
     say('injected: %s' % (', '.join(replaced) if replaced else '(see write_report.json)'))
-    added = (ir.get('build') or {}).get('tags_added') or []
-    odd = [r for r in reps if r.get('group') not in ('sbsp', 'ltmp', 'bitm')]
-    if added or odd or len(reps) != (2 if ltmp_only else 3):
+    if tc_added:
+        say('the map had no true-colour lightmap bitmap: the baked one was added (%s)' % tc_added)
+    if not ok:
         raise MapbakeError('the injection touched more than the lightmap and its bitmap (replaced %d, added %d: %s)'
-                           % (len(reps), len(added), ', '.join(replaced)[:300]))
+                           % (len(replaced), n_added, ', '.join(replaced)[:300]))
     # ---- validate the product (the MCC map h2conv made; a Vista result is validated too: header / directory / XOR checksum / tag table)
     vrc, vtail = run_h2conv(home, 'h2conv._rp', [out_tmp, '--kit', 'none', '--validate', '--out', os.path.join(logs, 'validate.json')], os.path.join(logs, 'validate.json.log'))
     vj = json.load(open(os.path.join(logs, 'validate.json'), encoding='utf-8')) if os.path.isfile(os.path.join(logs, 'validate.json')) else {}

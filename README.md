@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.0.1** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.0.2** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -45,6 +45,8 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   faster; the engine uses RT only when a short self-check shows it is clearly faster and agrees with the normal tracer, and otherwise bakes
   the old way. Nothing to switch on. Tested on an RTX 4090 only.
 - **Repeatable (0.6.9).** Baking an unchanged map again gives the same lightmap.
+- **Original Halo 2 Vista maps (fixed in 1.0.2).** A `.map` bake of a map made with the original Halo 2 Vista tools, the game's own
+  maps included, was refused at the very end, after the bake itself had finished. Such a map now bakes and comes back as a Vista map.
 - **Instanced geometry at the world origin (fixed in 1.0.1).** A `%` object left exactly at position 0, 0, 0 with no rotation and scale 1
   was not recognised as an instance, and the bake fell back to an older model for the sky lights. It now bakes on the validated path
   like every other level. Levels without such an object are byte-identical to 1.0.0.
@@ -262,6 +264,9 @@ the lightmap and its bitmap change in the copy. Temporary work files are cleaned
   cube-map reference decides, and an empty one stays empty, as a bake from your tags would have it.
 - **Not supported yet:** stock compressed MCC maps (the ones that keep their textures in a separate `textures.dat`).
 - A map with several BSPs asks which BSP to bake.
+- **Fixed in 1.0.2:** an original Halo 2 Vista map (one without a true-colour lightmap bitmap, like the maps that came with the game)
+  was refused at the end of the bake with "the injection touched more than the lightmap and its bitmap". The baked bitmap is now
+  added to such a map. Tested on the stock map triplicate; the result loads and looks right in Halo 2 Vista.
 - **Fixed in 1.0.0:** a Vista map that was baked and converted back to a Vista map could lose a small number of sounds on a PC that
   had never run the standalone map converter, while the bake reported success. The conversion now resamples those sounds itself,
   and a result that lost any sound is refused instead of being handed over.
