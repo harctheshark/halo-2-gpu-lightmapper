@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0 (2026-11-15)
+
+Exe SHA-256 `8def26e4d42b022a36d7910674c33a0f8dc378d0d206b09b1453e4e1d5354c5f` (26,457,088 bytes).
+
+- **Fixed: dark splotches along creases and edges.** Where every sample of a texel looks like it is inside geometry (typically where two surfaces meet), the texel gets no light of its own. The original tool fills such a texel from its lit neighbours, in two passes over the 3x3 texels around it. The GPU lightmapper copied the way the tool's 28-process farm does this fill, where each process only sees every 28th texel, so almost none were filled and they stayed black: dark splotches along creases and edges. The fill now runs over the whole chart, as a single tool process does, which is what Bungie's own lightmaps show. On triplicate: 20,057 such texels; 19,631 stayed black before, 5,334 now (clusters too wide for a two-pass fill; the original tool leaves those dark too).
+- **Changed: double precision for the distance test and the sample position.** The ray-to-surface distance test and each texel's sample position are now computed in double precision inside the GPU programs (the original Halo 2 Vista tool computes them in double; the MCC tool in single). The per-texel noise lands differently; the brightness does not change. Cost on triplicate: about 1 second with RT, about 7 seconds without.
+- **New: the H2EK folder is easier to see.** The window shows the H2EK folder it bakes in much more clearly: its name in large type in the Halo 2 Editing Kit box, the full path right above the Bake button ("This bake writes to ..."), in the window title and in the confirm dialog.
+- **Accuracy.** Lightmaps change where these texels are. The CPU reference the accuracy numbers are measured against is a 28-process farm bake, which leaves those texels black, so filling them lowers the score against it by about a quarter of a point; the double-precision change alone moves it by less than 0.01 of a point. Accuracy against the CPU farm reference, Super, one fresh capture per map: headlong 99.73% floored / 98.46% un-floored (1.0.2 on the same capture: 100.00% / 98.73%; 1.2.0 with the farm fill: 99.99% / 98.72%), cyclotron 99.72% / 98.45% (1.0.2: 99.96% / 98.69%; farm fill: 99.96% / 98.69%).
+- **Checks.** Through the app, on the release candidate (whose payload this exe carries file for file, apart from the version-stamped bake program): Custom, ambient occlusion and light probes (cyclotron / triplicate), the MCC `.map` bake, a Vista map built with the Halo 2 Editing Kit and the stock Vista map triplicate all end with exit 0, with the input maps and the live tags unchanged and the composer using the single-process fill. Engine gates: the AO engine reproduces the main engine (bake products keyed-identical), the Custom engine reproduces the main engine on cyclotron, headlong and mainmenu (D3D11 and RT), and the light-probe light equals 1.0.2's (spherical-harmonics recon 100.000%; 1.0.2's probes are the ones that matched the CPU at 99.53%). On this exact exe: the MCC `.map` bake gives the same output map as on that candidate (md5-identical), and the CPU test suite passed.
+- **First start.** 1.2.0 unpacks its own engine folder (`GPU Work\_runtime\1.2.0-05ae31da`) once; the Python runtime folder of 1.0.0 is reused.
+- **Known and not fixed:** the two items listed under 1.0.1 still apply.
+- Nothing else changed: the same options, quality levels, command line and work folders.
+
 ## 1.0.2 (2026-11-14)
 
 Exe SHA-256 `71898cfd27fc2f9895a4168d810ade53ea5df75db485a28bd1f5a81f41127e41` (26,436,096 bytes).

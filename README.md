@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.0.2** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.2.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -45,6 +45,8 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
   faster; the engine uses RT only when a short self-check shows it is clearly faster and agrees with the normal tracer, and otherwise bakes
   the old way. Nothing to switch on. Tested on an RTX 4090 only.
 - **Repeatable (0.6.9).** Baking an unchanged map again gives the same lightmap.
+- **No more dark splotches along creases (fixed in 1.2.0).** Texels whose samples all looked like they were inside geometry stayed
+  black; they are now filled from their lit neighbours, as the original tool does in a single process.
 - **Original Halo 2 Vista maps (fixed in 1.0.2).** A `.map` bake of a map made with the original Halo 2 Vista tools, the game's own
   maps included, was refused at the very end, after the bake itself had finished. Such a map now bakes and comes back as a Vista map.
 - **Instanced geometry at the world origin (fixed in 1.0.1).** A `%` object left exactly at position 0, 0, 0 with no rotation and scale 1
@@ -99,8 +101,9 @@ Two numbers are given for every map:
 | high_10 | 98.26% | 96.99% | |
 | mainmenu | 98.39% | 97.11% | |
 
-Super quality, on the author's PC (RTX 4090). The lower rows (needle, high_10, mainmenu) are the maps with the largest
-remaining gap to the CPU. Light probes: the spherical-harmonics light of the triplicate probes matches the CPU super bake at
+Super quality, on the author's PC (RTX 4090), measured with 1.0.x. The lower rows (needle, high_10, mainmenu) are the maps with the largest
+remaining gap to the CPU. Since 1.2.0 the reference farm's black hole texels are filled, as a single tool process does, and the per-texel
+noise differs from the CPU's: Accuracy against the CPU farm reference, Super, one fresh capture per map: headlong 99.73% floored / 98.46% un-floored (1.0.2 on the same capture: 100.00% / 98.73%; 1.2.0 with the farm fill: 99.99% / 98.72%), cyclotron 99.72% / 98.45% (1.0.2: 99.96% / 98.69%; farm fill: 99.96% / 98.69%). Light probes: the spherical-harmonics light of the triplicate probes matches the CPU super bake at
 99.53%.
 
 Ambient occlusion is **not** part of these numbers. It is an artistic layer the CPU lightmapper does not have, so a lightmap
@@ -182,7 +185,8 @@ What to do:
 Start the exe. The H2EK folder and the map are remembered between launches; the bake options go back to their defaults.
 
 1. **Halo 2 Editing Kit.** Pick a detected H2EK or **Browse...**. The status line shows whether its `tool_fast.exe` is
-   supported and any missing prerequisite.
+   supported and any missing prerequisite. The folder's name is shown in large type, and the full path is repeated right above the
+   Bake button, in the window title and in the confirm dialog, so you can see which H2EK a bake writes to.
 2. **Map.** Pick the **Scenario**, then the **BSP**. The BSP list shows every BSP the scenario references; one that lives in
    another folder is labelled with it, for example `01_bsp_1  (from scenarios\solo\01a_tutorial)`. Its lightmap is written beside
    the scenario. Ambient occlusion and light probes work for such a BSP too (0.6.5).

@@ -35,6 +35,11 @@
                 <!-- 1. Halo 2 Editing Kit -->
                 <GroupBox Header="Halo 2 Editing Kit">
                     <StackPanel>
+                        <!-- 1.0.3: the folder this window bakes in, large (it was only the dropdown's small text, and a bake in the wrong H2EK was easy to miss) -->
+                        <DockPanel Margin="0,0,0,5" ToolTip="The H2EK folder this window bakes in">
+                            <TextBlock x:Name="RootBigName" DockPanel.Dock="Left" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text=""/>
+                            <TextBlock x:Name="RootBigParent" Margin="8,0,0,2" VerticalAlignment="Bottom" FontSize="11.5" Foreground="{StaticResource FgDim}" TextTrimming="CharacterEllipsis" Text=""/>
+                        </DockPanel>
                         <DockPanel>
                             <Button x:Name="BrowseBtn" DockPanel.Dock="Right" Content="Browse…" Margin="6,0,0,0" Click="BrowseBtn_Click"
                                     ToolTip="Pick the H2EK folder (the one with tool_fast.exe and tags\)"/>
@@ -256,12 +261,16 @@
         </ScrollViewer>
 
         <!-- ===================================================== 8. buttons -->
-        <DockPanel Grid.Row="1" Margin="0,8,0,6" LastChildFill="False">
-            <Button x:Name="BakeBtn" Style="{StaticResource AccentButton}" Content="Bake" MinWidth="90" Click="BakeBtn_Click"/>
-            <Button x:Name="CancelBtn" Content="Cancel" MinWidth="80" Margin="6,0,0,0" IsEnabled="False" Click="CancelBtn_Click"/>
-            <Button x:Name="RestoreBtn" Content="Restore previous lightmap…" Margin="6,0,0,0" Click="RestoreBtn_Click"/>
-            <Button x:Name="LogsBtn" Content="Open logs" Margin="6,0,0,0" Click="LogsBtn_Click"/>
-        </DockPanel>
+        <StackPanel Grid.Row="1" Margin="0,8,0,6">
+            <!-- 1.0.3: where this bake writes, right above the Bake button (UpdateTargetUi) -->
+            <TextBlock x:Name="TargetLine" Margin="0,0,0,6" FontSize="13.5" TextTrimming="CharacterEllipsis" ToolTipService.ShowDuration="30000"><Run x:Name="TargetLead" Foreground="{StaticResource FgDim}"/><Run x:Name="TargetRoot" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/><Run x:Name="TargetTail" Foreground="{StaticResource FgDim}"/></TextBlock>
+            <DockPanel LastChildFill="False">
+                <Button x:Name="BakeBtn" Style="{StaticResource AccentButton}" Content="Bake" MinWidth="90" Click="BakeBtn_Click"/>
+                <Button x:Name="CancelBtn" Content="Cancel" MinWidth="80" Margin="6,0,0,0" IsEnabled="False" Click="CancelBtn_Click"/>
+                <Button x:Name="RestoreBtn" Content="Restore previous lightmap…" Margin="6,0,0,0" Click="RestoreBtn_Click"/>
+                <Button x:Name="LogsBtn" Content="Open logs" Margin="6,0,0,0" Click="LogsBtn_Click"/>
+            </DockPanel>
+        </StackPanel>
 
         <!-- ===================================================== 9. progress -->
         <StackPanel Grid.Row="2">

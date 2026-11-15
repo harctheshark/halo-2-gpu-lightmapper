@@ -158,6 +158,16 @@ namespace H2GpuLightmapper.Tests
             Assert.Contains(cs, "UpdatePrecisionUi();       // the quality / AO choice can change which engine", "re-evaluated when the quality / AO choice changes the engine");
             Assert.NotContains(cs, "ForceCompat", "--force-compat is not in the window");
             foreach (var b in new[] { "BakeBtn", "CancelBtn", "RestoreBtn", "LogsBtn" }) tag(b);
+            // 1.0.3: the H2EK folder the window bakes in is shown large in its group, right above the Bake button, in both confirm dialogs and in the title
+            Assert.Contains(tag("RootBigName"), "FontSize=\"17\"", "the H2EK folder name, large");
+            Assert.True(x.IndexOf("x:Name=\"RootBigName\"", StringComparison.Ordinal) < x.IndexOf("x:Name=\"RootCombo\"", StringComparison.Ordinal), "the large folder name is above the dropdown");
+            tag("RootBigParent"); tag("TargetLead"); tag("TargetRoot"); tag("TargetTail");
+            Assert.True(x.IndexOf("x:Name=\"TargetLine\"", StringComparison.Ordinal) > x.IndexOf("</ScrollViewer>", StringComparison.Ordinal)
+                        && x.IndexOf("x:Name=\"TargetLine\"", StringComparison.Ordinal) < x.IndexOf("x:Name=\"BakeBtn\"", StringComparison.Ordinal), "the target line is below the options and right above the Bake button");
+            Assert.Contains(cs, "\"?\\n\\nIn the H2EK folder:\\n\" + o.Root + \"\\n\\n\" + o.Summary()", "the scenario confirm dialog names the H2EK folder");
+            Assert.Contains(File.ReadAllText(Path.Combine(C.Project, @"src\H2GpuLightmapper\MainWindow.MapBake.cs")), "\"\\n\\nKit (H2EK folder) used for the bake: \" + o.Root", "the .map confirm dialog names the kit folder");
+            Assert.Contains(cs, "Title = \"H2 GPU Lightmapper \" + _host.AppVersion + (root == null ? \"\" : \"  —  \" + root);", "the window title names the H2EK folder");
+            Assert.Contains(cs, "TargetLead.Text = lead; TargetRoot.Text = root; TargetTail.Text = tail;", "the target line shows the folder");
             Assert.Contains(x, "Reset to 50M / 16", "reset link");
             Assert.Contains(x, "Gather rays (Monte-Carlo samples)", "rays label");
             Assert.NotContains(x.ToLowerInvariant(), "plucker", "the fixes are not shown");

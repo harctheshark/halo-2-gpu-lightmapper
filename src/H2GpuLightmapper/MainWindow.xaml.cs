@@ -269,6 +269,7 @@ namespace H2GpuLightmapper
             foreach (var m in Core.Payload.WorkMigration.TakeMessages()) Log(Palette.Dim, m);      // 0.6.12: GPU Lightmap Work -> GPU Work
             _rt = null; _env = null; _runtimeReady = false; _mapInfo = null; _mapQuery = null;
             WorkBox.Text = _work;
+            UpdateTargetUi();
             TempBox.Text = ShellPaths.TempOf(_work); TempSizeText.Text = "";
             ToolStatus.Text = "Checking " + root + " …";
             ToolStatus.Foreground = Palette.Dim;
@@ -609,6 +610,7 @@ namespace H2GpuLightmapper
         private void BspCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_suppress) return;
+            UpdateTargetUi();
             RefreshMap();
         }
 
@@ -877,7 +879,41 @@ namespace H2GpuLightmapper
             else ModeNotice.Visibility = Visibility.Collapsed;
             if (!_busy) BakeBtn.IsEnabled = _host.HasPayload && _attachRunDir == null && _op == null;
             ApplyMapModeUi();
+            UpdateTargetUi();
             UpdatePrecisionUi();       // the quality / AO choice can change which engine the bake runs: re-read whether it has Compatibility mode
+        }
+
+        /// <summary>1.0.3: the H2EK folder this window bakes in, shown large in its own group, above the Bake button and in the window title. It was
+        /// only the dropdown's small text, and a bake in the wrong H2EK was easy to miss until it had finished.</summary>
+        private void UpdateTargetUi()
+        {
+            if (!IsInitialized || TargetLine == null || _host == null) return;
+            string root = _root;
+            Title = "H2 GPU Lightmapper " + _host.AppVersion + (root == null ? "" : "  —  " + root);
+            if (root == null)
+            {
+                RootBigName.Text = ""; RootBigParent.Text = "";
+                TargetLead.Text = "No H2EK folder picked yet."; TargetRoot.Text = ""; TargetTail.Text = ""; TargetLine.ToolTip = null;
+                return;
+            }
+            string trimmed = root.TrimEnd('\\', '/'), name = null, parent = null;
+            try { name = Path.GetFileName(trimmed); parent = Path.GetDirectoryName(trimmed); } catch (Exception) { }
+            if (string.IsNullOrEmpty(name)) { name = root; parent = null; }          // a drive root
+            RootBigName.Text = name;
+            RootBigParent.Text = string.IsNullOrEmpty(parent) ? "" : "in " + parent;
+            string lead, tail;
+            if (IsMapSource)
+            {
+                lead = "Kit used for this .map bake:  ";
+                tail = _mapPicked == null ? "   ·  pick a .map file" : "   ·  " + Path.GetFileName(_mapPicked) + " is not modified; the result is a copy";
+            }
+            else
+            {
+                lead = StageOnlyCheck.IsChecked == true ? "Stage only, nothing is written to  " : "This bake writes to  ";
+                tail = CurScenario == null ? "   ·  pick a scenario" : "   ·  " + CurScenario + (CurBsp != null ? " / " + CurBsp : "");
+            }
+            TargetLead.Text = lead; TargetRoot.Text = root; TargetTail.Text = tail;
+            TargetLine.ToolTip = lead.Trim() + " " + root + tail.Replace("   ·  ", "\n");
         }
 
         private static void MarkBox(TextBox b, bool bad) { b.BorderBrush = bad ? Palette.Bad : Palette.Edge; }
@@ -919,7 +955,7 @@ namespace H2GpuLightmapper
                 StartMapBake(o);
                 return;
             }
-            if (!o.StageOnly && _g.Snapshot == null && MessageBox.Show(this, "Bake " + o.ScenarioRel + " / " + o.Bsp + "?\n\n" + o.Summary() + "\n\nThe current lightmap is backed up first; Restore previous lightmap puts it back.",
+            if (!o.StageOnly && _g.Snapshot == null && MessageBox.Show(this, "Bake " + o.ScenarioRel + " / " + o.Bsp + "?\n\nIn the H2EK folder:\n" + o.Root + "\n\n" + o.Summary() + "\n\nThe current lightmap is backed up first; Restore previous lightmap puts it back.",
                                                  "H2 GPU Lightmapper", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
             try
             {

@@ -250,7 +250,7 @@ namespace H2GpuLightmapper
             if (_g.Snapshot == null)
             {
                 var skyLines = CubemapModel.Describe(_skyModel);
-                if (MessageBox.Show(this, "Bake " + Path.GetFileName(o.MapPath) + "?\n\n" + o.Summary() + "\n\nOutput: " + o.MapOutPath
+                if (MessageBox.Show(this, "Bake " + Path.GetFileName(o.MapPath) + "?\n\n" + o.Summary() + "\n\nKit (H2EK folder) used for the bake: " + o.Root + "\nOutput: " + o.MapOutPath
                                     + "\nThe map you picked is not modified; the result is a copy with only the lightmap" + (o.Mode == BakeMode.Probes ? " (with its light probes)" : "") + " replaced."
                                     + (o.MapIsVista ? (o.VistaOut ? "\nThis is a Vista map: it is converted to MCC form for the bake and the result is converted back to Vista (a few extra minutes)."
                                                                   : "\nThis is a Vista map: it is converted to MCC form for the bake; the result stays an MCC map (not converted back).") : "")
