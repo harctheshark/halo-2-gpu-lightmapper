@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 (2026-11-15)
+
+Exe SHA-256 `0726156a77d0a70ebee3cfb6b973a11cd5acbaa2f3614f2439cda6eae091ca07` (26,727,936 bytes).
+
+- **New: an app icon.** The app has its own icon (Explorer, the taskbar, Alt-Tab and the window): the Master Chief helmet with Halo 2's lens flares in its visor. It uses assets from Halo 2 under Microsoft's Game Content Usage Rules; the notice is in NOTICES.txt and in the README.
+- **Checks.** The lightmapping engine is 1.2.0's (`engine_v386`): the payload equals the 1.2.0 release's file for file, apart from the version-stamped bake program and NOTICES.txt, so 1.2.0's engine and through-the-app checks carry over. On this exact exe the CPU test suite passed (core 119, shell 131, S1.9 12 incl. determinism, T0/T1 12, DLL slots 31, mapbake / AO / wording checks; the two window tests the suite skips ran on this exe too, 6/6 with the other UI tests), including the window loading with the icon.
+- **First start.** 1.3.0 unpacks its own engine folder (`GPU Work\_runtime\1.3.0-8e1359d1`) once, about 150 MB per H2EK; the 1.2.0 folder next to it can be deleted. The Python runtime folder of 1.0.0 is reused.
+- Nothing else changed: the same engine, lightmaps, options, quality levels, command line and work folders as 1.2.0.
+
 ## 1.2.0 (2026-11-15)
 
 Exe SHA-256 `8def26e4d42b022a36d7910674c33a0f8dc378d0d206b09b1453e4e1d5354c5f` (26,457,088 bytes).

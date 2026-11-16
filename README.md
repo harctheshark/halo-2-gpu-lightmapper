@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.2.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.3.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -446,3 +446,8 @@ checked against real bakes, but treat it as what it is: a fast-moving hobby tool
 The code in this repository is released under the **MIT license** (see [LICENSE](LICENSE)), Copyright (c) 2026 Harc
 (harctheshark). Third-party components (CPython, numpy, the Osoyoos hook DLL and database, and others) keep their
 own licenses; see [THIRD_PARTY_NOTICES](docs/THIRD_PARTY_NOTICES.txt).
+
+The application icon (`src/H2GpuLightmapper/app.ico`, the Master Chief helmet with Halo 2's lens flares in its visor) uses
+assets from Halo 2 and is **not** covered by the MIT license. Halo 2 © Microsoft Corporation. H2 GPU Lightmapper was
+created under Microsoft's "[Game Content Usage Rules](https://www.xbox.com/en-US/developers/rules)" using assets from
+Halo 2, and it is not endorsed by or affiliated with Microsoft.

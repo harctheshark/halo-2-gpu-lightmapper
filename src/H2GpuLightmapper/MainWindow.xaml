@@ -1,7 +1,7 @@
 <Window x:Class="H2GpuLightmapper.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="H2 GPU Lightmapper" Width="760" Height="700" MinWidth="680" MinHeight="600"
+        Title="H2 GPU Lightmapper" Icon="pack://application:,,,/app.ico" Width="760" Height="700" MinWidth="680" MinHeight="600"
         Background="#FF1E1E1E" Foreground="#FFE6E6E6" FontFamily="Segoe UI" FontSize="12.5"
         WindowStartupLocation="CenterScreen" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
     <!-- S2.5: FINAL_DESIGN section 4. 1 Halo 2 Editing Kit, 2 Map, 3 Quality, 4 Mode, 5 Ambient Occlusion, 6 Reuse capture,

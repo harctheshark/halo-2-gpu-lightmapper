@@ -47,6 +47,11 @@ It does NOT carry the Halo 2 Editing Kit (tool_fast.exe, tags, libfbxsdk.dll): t
 The GPU lightmapper engine itself (h2lm-bake.exe, the Python pipeline, gpulm_estimator.dll, fullgpu.exe, H2GpuLightmapper.ToolLoader.exe,
 the tag writer and the drivers) and the shell are the H2 GPU Lightmapper project's own code.
 
+The application icon (the Master Chief helmet with Halo 2's lens flares in its visor) uses assets from Halo 2.
+Halo 2 (c) Microsoft Corporation. H2 GPU Lightmapper was created under Microsoft's "Game Content Usage Rules" using assets
+from Halo 2, and it is not endorsed by or affiliated with Microsoft. https://www.xbox.com/en-US/developers/rules
+The icon is not covered by the MIT license of the project's own code; it is shared free and non-commercially under those rules.
+
 
 ======================================================================================================================
 licenses\CPython\LICENSE.txt
