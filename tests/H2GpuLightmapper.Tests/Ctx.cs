@@ -165,11 +165,14 @@ namespace H2GpuLightmapper.Tests
         /// <param name="aoCompatEngine">the same for the AO engine copy _research/ao/dev_AO; default = compatEngine.</param>
         /// <param name="crossBspEngine">engine 0.6.4 cross-folder BSP (dev_S): the engine_v373 / engine_custom parameter lists name the switches WriterOnly and ToolOverlay (false = an older
         /// engine: the two names are left out). Default false: the default test payload is the 0.6.3 engine for this feature.</param>
+        /// <param name="singleCaptureEngine">1.4.0: engine_v373 / engine_custom name the switches KeepLattice and ReuseLattice and gpu_lightprobes.py carries the marker
+        /// REUSE_LATTICE_SUPPORT = 1: a Standard bake's light probes run on the lightmap bake's own capture. Default false: the default test payload is an older engine
+        /// (the two names are left out of every parameter list, the driver has no marker), so every plan made with it is the two-capture flow.</param>
         /// <param name="splitBspDrivers">0.6.5: which research drivers carry the marker line SPLIT_BSP_SUPPORT = 1 (they read the BSP from the file the scenario's structure_bsps names):
         /// 1 = gpu_ao.py (+ the AO engine copy's parameter list names -WriterOnly / -ToolOverlay), 2 = gpu_lightprobes.py, 3 = both; 0 = a 0.6.4 payload. Use with crossBspEngine.</param>
         public string BuildPayload(string dir, bool? aoFeature = true, bool? probesFeature = null, bool customEngine = false, bool? driveRootFeature = null,
                                    bool sceneryEngine = true, bool customSceneryEngine = true, bool compatEngine = false, bool? customCompatEngine = null, bool? aoCompatEngine = null,
-                                   bool crossBspEngine = false, int splitBspDrivers = 0, bool mapbakeComponent = false, bool? farmsFeature = null)
+                                   bool crossBspEngine = false, int splitBspDrivers = 0, bool mapbakeComponent = false, bool? farmsFeature = null, bool singleCaptureEngine = false)
         {
             bool custCompat = customCompatEngine ?? compatEngine, aoCompat = aoCompatEngine ?? compatEngine;
             // another file set needs another extraction dir name (same length: the DLL slot / path budget must not change)
@@ -192,11 +195,16 @@ namespace H2GpuLightmapper.Tests
             }
             // 0.6.8 bounded temp: the farms in WORK\Temp (safe to delete) (MANIFEST features.farms) + the engine-owned slim list: another file set, another dir name (13)
             if (farmsFeature == true) instDirName = "0.5.0-s25ffff";
+            // 1.4.0 single capture: another file set, another dir name of the same length (13)
+            if (singleCaptureEngine) instDirName = farmsFeature == true ? "0.5.0-s25sngf" : customEngine ? "0.5.0-s25sngc" : "0.5.0-s25sngl";
             Func<byte[], bool, byte[]> mark = (b, on) => on ? b.Concat(new UTF8Encoding(false).GetBytes("\nSPLIT_BSP_SUPPORT = 1\n")).ToArray() : b;
+            Func<byte[], bool, byte[]> markSingle = (b, on) => on ? b.Concat(new UTF8Encoding(false).GetBytes("\nREUSE_LATTICE_SUPPORT = 1\n")).ToArray() : b;
             // One engine folder = the fake bake program + the fake script it runs + its parameter list. The variants (older engines) leave names out of the list.
             Func<string, bool, bool, bool, List<F>> engineFiles = (folder, withScenery, withCrossBsp, withCompat) =>
             {
                 var drop = new List<string>();
+                // 1.4.0: the lightmap engines of a single-capture payload name the two switches; the AO engine copy never does (it is never given them)
+                if (!singleCaptureEngine || folder.StartsWith("_research/", StringComparison.Ordinal)) { drop.Add("KeepLattice"); drop.Add("ReuseLattice"); drop.Add("FillWideHoles"); }
                 if (!withScenery) drop.Add("SceneryOwnPermutationOnly");
                 if (!withCrossBsp) { drop.Add("WriterOnly"); drop.Add("ToolOverlay"); }
                 if (!withCompat) drop.Add("GPULM_COMPAT");
@@ -225,7 +233,7 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "engine_v373/v041-fullgpu/fullgpu.exe", Data = blob(4000) },
                     new F { Path = "_research/ao/gpu_ao.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_ao.py")), (splitBspDrivers & 1) != 0) },
                     new F { Path = "_research/ao/ao_existing.py", Data = File.ReadAllBytes(Fixture("fake_ao_existing.py")) },      // 0.6.8 xc8: AO only
-                    new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = mark(File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")), (splitBspDrivers & 2) != 0) },
+                    new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = markSingle(mark(File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")), (splitBspDrivers & 2) != 0), singleCaptureEngine) },
                     new F { Path = "standalone/sh_stage.py", Data = File.ReadAllBytes(Fixture("fake_sh_stage.py")) },
                     new F { Path = "standalone/scan_scenery_bounds.py", Data = File.ReadAllBytes(Fixture("fake_scan_scenery_bounds.py")) },
                     new F { Path = "v043-tagwriter/lmw_tagio.py", Data = File.ReadAllBytes(FxTagIo) },

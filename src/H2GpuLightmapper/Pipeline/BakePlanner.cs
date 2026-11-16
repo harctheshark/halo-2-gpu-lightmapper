@@ -73,6 +73,10 @@ namespace H2GpuLightmapper.Pipeline
         public string ProbeWarning;
         public bool ReuseLightmap, ReuseProbe;
         public string LightmapReuseNote, ProbeReuseNote;
+        /// <summary>1.4.0 (BakeOptions.ProbeOwnCapture is the opt-out): the light probes of a Standard bake run on the LIGHTMAP worker's capture. The lightmap
+        /// capture is made (or was made: a reuse) with the probes' sky cube, the lightmap gpu_bake gets -KeepLattice, the probe driver gets the lightmap worker
+        /// with --skip-capture --reuse-lattice, and there is no probe worker. Decided by the session (engine-gated).</summary>
+        public bool SingleCapture;
     }
 
     public static class BakePlanner
@@ -123,6 +127,8 @@ namespace H2GpuLightmapper.Pipeline
             // (BakeSession.Prepare refuses otherwise; AppHost.SceneryPermutationFixWhy); the capture and the write-back both need it, so every
             // gpu_bake of the bake (incl. the tool write-back fallback argv) gets it. Unticked = no byte of the argv changes.
             if (o.SceneryPermutationFix) a.Add("-" + BakeOptions.SceneryPermutationFixSwitch);
+            // 1.4.0 "Fill wide dark holes": the engine's opt-in parameter (engine-gated like the switch above). Unticked = no byte of the argv changes.
+            if (o.FillWideHoles) { a.Add("-" + BakeOptions.FillWideHolesParam); a.Add(BakeOptions.FillWideHolesPasses.ToString(CultureInfo.InvariantCulture)); }
             return a;
         }
 
@@ -194,6 +200,14 @@ namespace H2GpuLightmapper.Pipeline
                                    + (NeedsProbes(o, pi.ProbePoints) ? "light probe bake" : "") + " (driver scripts that run their own engine copy and cannot take the switch): "
                                    + "that part still sees every shape of a multi permutation scenery tag, and the combination is untested");
             }
+            if (o.FillWideHoles)
+            {
+                if (o.Mode == BakeMode.Probes || o.Mode == BakeMode.AoOnly)
+                    p.Warnings.Add(BakeOptions.FillWideHolesLabel + " has no effect in this mode: no lightmap is baked");
+                else
+                    p.Notes.Add(BakeOptions.FillWideHolesNote + " (\"" + BakeOptions.FillWideHolesLabel + "\"): every gpu_bake gets -" + BakeOptions.FillWideHolesParam + " "
+                                + BakeOptions.FillWideHolesPasses.ToString(CultureInfo.InvariantCulture) + "; after the tool's two fill passes the holes still open are filled inward with the average of their filled neighbours");
+            }
             string runDir = pi.RunDir;
             string work = rt.Work;
             string py = rt.PyExe;
@@ -235,14 +249,27 @@ namespace H2GpuLightmapper.Pipeline
                 // fallback. Before U3 that plan ran gpu_bake -WriteBack, whose [4b] lmw_install failed the whole run on a held file.
                 bool shellInstallsLightmap = p.Install && !o.Ao && !p.ProbePath;
                 var args = GpuBakeArgs(o, n, false, pi.ReuseLightmap, pi.Limits);
+                // 1.4.0 single capture: the probe pass of this run reuses this bake's photon cast and lattice (only this step's argv gets the switch:
+                // the tool write-back fallback argv ends the run before any probe pass)
+                bool single = pi.SingleCapture && p.ProbePath;
+                p.SingleCapture = single;
+                if (single) args.Add("-" + BakeOptions.SingleCaptureSwitches[0]);
                 var spec = BakeInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);   // refuses -?, -Cleanup, a worker outside 200-299 / 149
                 var g = p.Add(new PlanStep
                 {
                     Id = StepIds.GpuBake, UiStep = pi.ReuseLightmap ? StepId.Derive : StepId.Capture, Kind = PlanStepKind.Process,
-                    Title = "h2lm-bake farm_w" + n.ToString("D2", CultureInfo.InvariantCulture) + (shellInstallsLightmap ? " (stage only; the shell installs its stage)" : " (stage only)"),
+                    Title = "h2lm-bake farm_w" + n.ToString("D2", CultureInfo.InvariantCulture) + (shellInstallsLightmap ? " (stage only; the shell installs its stage)" : " (stage only)")
+                            + (single ? (pi.ReuseLightmap ? "; the capture is probe-ready" : "; the capture is made probe-ready (" + BakeOptions.SkyHiEnvVar + ")") + ", the lattice is kept for the probe pass" : ""),
                     FileName = spec.FileName, Cwd = spec.Cwd, CaptureWorker = n, CaptureOut = outN, FreshCapture = !pi.ReuseLightmap,
+                    SkyHi = single,
                 });
                 g.Args.AddRange(spec.Args);
+                if (single)
+                {
+                    // the capture tool's own switch: one more sky cube (mip 0) beside the gather's; nothing the lightmap reads changes
+                    if (!pi.ReuseLightmap) g.EnvExtra[BakeOptions.SkyHiEnvVar] = "1";
+                    p.Notes.Add(BakeOptions.SingleCaptureNote);
+                }
                 if (shellInstallsLightmap)
                     g.Params.Add("shellInstalls", true)
                             .Add("ifDirectWriterCannotRun", "gpu_bake refuses a stage-only bake up front when the direct writer cannot run at all; the production "
@@ -514,23 +541,28 @@ namespace H2GpuLightmapper.Pipeline
         {
             var o = pi.O;
             var rt = pi.Rt;
-            int m = pi.ProbeWorker ?? throw new InvalidOperationException("no probe worker");
+            // 1.4.0 single capture: the probe pass runs on the lightmap worker's folder (its capture, its kept lattice); there is no probe worker.
+            bool single = p.SingleCapture;
+            int m = single ? (pi.Worker ?? throw new InvalidOperationException("no lightmap worker")) : (pi.ProbeWorker ?? throw new InvalidOperationException("no probe worker"));
             Guards.AssertWorker(m);
             string outM = FarmDir(rt.Farms, m);
             p.OutProbe = outM;
             string pr = Path.Combine(p.RunDir, "probes");
+            bool skip = single || pi.ReuseProbe;
             var s = p.Add(new PlanStep
             {
                 Id = StepIds.ProbeBake, UiStep = StepId.ProbeCapture, Kind = PlanStepKind.Process, ProbeWorker = true,
-                Title = "gpu_lightprobes.py probe worker farm_w" + m.ToString("D2", CultureInfo.InvariantCulture) + (pi.ReuseProbe ? " (probe-ready capture reused)" : " (its own GPULM_SKY_HI capture)"),
+                Title = single ? "gpu_lightprobes.py on the lightmap capture of farm_w" + m.ToString("D2", CultureInfo.InvariantCulture) + " (no second capture; the lightmap bake's photon cast and lattice are reused)"
+                               : "gpu_lightprobes.py probe worker farm_w" + m.ToString("D2", CultureInfo.InvariantCulture) + (pi.ReuseProbe ? " (probe-ready capture reused)" : " (its own GPULM_SKY_HI capture)"),
                 FileName = rt.PyExe, Cwd = rt.Work, SideLog = Path.Combine(pr, "gpu_bake.log"),
-                CaptureWorker = m, CaptureOut = outM, FreshCapture = !pi.ReuseProbe, SkyHi = true,
+                CaptureWorker = m, CaptureOut = outM, FreshCapture = !skip, SkyHi = true,
             });
             s.Args.AddRange(new[] { InstLayout.Full(rt.InstDir, InstLayout.ProbeDriver), "--scenario", o.ScenarioRel, "--bsp", o.Bsp,
                                     "--worker", m.ToString(CultureInfo.InvariantCulture), "--quality", o.QualityToken });
             if (o.Quality == Quality.Custom)
                 s.Args.AddRange(new[] { "--photons", o.Photons.ToString(CultureInfo.InvariantCulture), "--mc-samples", o.Rays.ToString(CultureInfo.InvariantCulture) });
-            if (pi.ReuseProbe) s.Args.Add("--skip-capture");
+            if (skip) s.Args.Add("--skip-capture");
+            if (single) s.Args.Add("--reuse-lattice");
             // 0.6.8: with the farms in Temp the probe driver's --farm is the real farm (P5c checks it against H2LM_FARMS); only the 0.6.7 layout of a
             // .map bake still names the overlay work folder's farm junction (the driver then checks it against H2LM_WORK)
             s.Args.AddRange(new[] { "--stage", engineDir, "--ltmp-src", ltmpSrc, "--out", pr, "--h2-root", rt.Root, "--farm", pi.OverlayWork != null && !rt.FarmsInTemp ? FarmDir(pi.OverlayWork, m) : outM });

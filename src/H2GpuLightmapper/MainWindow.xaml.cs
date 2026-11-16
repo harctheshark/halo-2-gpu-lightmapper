@@ -137,6 +137,7 @@ namespace H2GpuLightmapper
                         case "responsive": ResponsiveCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "exactvertex": ExactVertexCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "sceneryperm": SceneryPermCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
+                        case "widefill": FillWideHolesCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "rebakehint": RebakeHintCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "directsamples": DirectSamplesCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                     }
@@ -779,6 +780,7 @@ namespace H2GpuLightmapper
             o.Responsive = ResponsiveCheck.IsChecked == true;        // X2
             o.ExactVertexLighting = ExactVertexCheck.IsChecked == true;        // W2 (0.6.3): "2004 Exact Vertex Lighting?" -> gpu_bake -ExactVertexLighting
             o.SceneryPermutationFix = SceneryPermCheck.IsChecked == true && SceneryPermCheck.IsEnabled;     // engine-gated: a greyed box is never passed on
+            o.FillWideHoles = FillWideHolesCheck.IsChecked == true && FillWideHolesCheck.IsEnabled;         // 1.4.0, engine-gated the same way
             o.RebakeHint = RebakeHintCheck.IsChecked == true;        // 0.6.8: GPULM_SKY_HINT=1, reuse bakes only (BakePlanner.ApplyRebakeHint)
             // 0.6.12: the opt-in direct sample multiplier (Custom quality only; BakePlanner.ApplyDirectSamples). Unticked = the box is hidden and never read.
             o.DirectSamplesOptIn = DirectSamplesCheck.IsChecked == true;
@@ -795,6 +797,7 @@ namespace H2GpuLightmapper
         private bool _busy;
         private bool _wasAoOnly, _aoBeforeAoOnly;          // 0.6.8 xc8: the AO box before "AO only" fixed it ticked
         private string _sceneryTip;
+        private string _wideTip;
 
         private void UpdateOptionUi()
         {
@@ -826,6 +829,16 @@ namespace H2GpuLightmapper
                     SceneryPermCheck.ToolTip = new ToolTip { Content = new TextBlock { Text = sceneryTip, TextWrapping = TextWrapping.Wrap, MaxWidth = 440 } };
                 }
                 if (sceneryWhy != null && SceneryPermCheck.IsChecked == true) SceneryPermCheck.IsChecked = false;      // a greyed box never stays ticked
+                // 1.4.0 "Fill wide dark holes": the same gating (the bake program this quality would run must name -FillWideHoles)
+                string wideWhy = _host.FillWideHolesWhy(eq);
+                FillWideHolesCheck.IsEnabled = wideWhy == null;
+                string wideTip = wideWhy == null ? BakeOptions.FillWideHolesTip : BakeOptions.FillWideHolesTip + " " + BakeOptions.FillWideHolesNeedsEngine;
+                if (_wideTip != wideTip)
+                {
+                    _wideTip = wideTip;
+                    FillWideHolesCheck.ToolTip = new ToolTip { Content = new TextBlock { Text = wideTip, TextWrapping = TextWrapping.Wrap, MaxWidth = 440 } };
+                }
+                if (wideWhy != null && FillWideHolesCheck.IsChecked == true) FillWideHolesCheck.IsChecked = false;
             }
             // the AO / custom field checks
             List<string> perr;

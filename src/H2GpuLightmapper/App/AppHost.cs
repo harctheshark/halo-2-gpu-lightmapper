@@ -184,6 +184,29 @@ namespace H2GpuLightmapper.App
                    + ") has no -" + BakeOptions.SceneryPermutationFixSwitch + " parameter. " + BakeOptions.SceneryPermutationFixNeedsEngine;
         }
 
+        /// <summary>1.4.0 "Fill wide dark holes": needs an engine whose bake program names -FillWideHoles. Null = this payload's engine for these options has it;
+        /// else the plain reason. Quality matters (Custom runs engine_custom).</summary>
+        public string FillWideHolesWhy(BakeOptions o)
+        {
+            if (Manifest == null) return PayloadError ?? "no payload";
+            if (EngineSwitches.ComponentDeclaresParam(Source, Manifest.InstComponent, InstLayout.ParamsOf(BakePlanner.GpuBakeRel(o, Manifest)), BakeOptions.FillWideHolesParam)) return null;
+            return BakeOptions.FillWideHolesLabel + " is not available: the engine this bake would run (" + BakePlanner.GpuBakeRel(o, Manifest)
+                   + ") has no -" + BakeOptions.FillWideHolesParam + " parameter. " + BakeOptions.FillWideHolesNeedsEngine;
+        }
+
+        /// <summary>1.4.0: can a Standard bake's light probes run on the lightmap bake's own capture (see <see cref="BakeOptions.ProbeOwnCapture"/>)? Null = yes: the bake
+        /// program this bake would run declares -KeepLattice and -ReuseLattice and the payload's probe driver carries the marker. Else the reason (an older engine:
+        /// the probe worker then makes its own capture, exactly as before).</summary>
+        public string SingleCaptureProbesWhy(BakeOptions o)
+        {
+            if (Manifest == null) return PayloadError ?? "no payload";
+            foreach (var sw in BakeOptions.SingleCaptureSwitches)
+                if (!EngineDeclares(o, sw)) return "the bake program (" + BakePlanner.GpuBakeRel(o, Manifest) + ") has no -" + sw + " parameter";
+            if (!EngineSwitches.ComponentHasPyMarker(Source, Manifest.InstComponent, InstLayout.ProbeDriver, BakeOptions.SingleCaptureMarker))
+                return "the light probe driver has no " + BakeOptions.SingleCaptureMarker + " marker";
+            return null;
+        }
+
         /// <summary>The bake programs the bake <paramref name="o"/> would run: the lightmap engine (engine_v373, or engine_custom for Custom when the
         /// payload has it) and, with ambient occlusion, the AO engine copy (dev_AO). The light probe driver runs the lightmap engine's bake program.</summary>
         public System.Collections.Generic.List<string> EngineScripts(BakeOptions o)

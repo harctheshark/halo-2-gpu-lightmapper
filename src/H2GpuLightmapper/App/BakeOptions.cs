@@ -78,6 +78,31 @@ namespace H2GpuLightmapper.App
         /// skychain_hint.txt, kept by the post-bake slim). Placement only: the relay still verifies every photon, and the engine refuses a hint whose
         /// S_cast differs from this capture (it then bakes the normal way). A fresh capture never gets it (there is no previous bake of it).</summary>
         public bool RebakeHint;
+        /// <summary>1.4.0: a Standard bake of a BSP with probe points bakes its light probes ON THE LIGHTMAP BAKE'S OWN CAPTURE: the lightmap capture is made
+        /// with the probes' sky cube (GPULM_SKY_HI=1; the lightmap is identical with it), the lightmap gpu_bake gets -KeepLattice and the probe driver runs on the
+        /// same worker folder with --skip-capture --reuse-lattice, so the probe pass no longer repeats the capture, the photon cast and the radiance-estimate
+        /// lattice. ENGINE-GATED (AppHost.SingleCaptureProbesWhy): the bake program must declare both switches and the probe driver must carry the marker.
+        /// This is the dev opt-out (CLI --probe-own-capture): the probe worker makes its own capture, as before 1.4.0.</summary>
+        public bool ProbeOwnCapture;
+        /// <summary>1.4.0 Advanced settings "Fill wide dark holes" / CLI --fill-wide-holes (default OFF): every lightmap gpu_bake gets -FillWideHoles 16. Texels whose
+        /// samples all look like they are inside geometry get no light of their own; the original tool fills them from their lit neighbours in two passes and
+        /// leaves a cluster wider than that black. With the option the engine goes on after those two passes: the holes still open are filled inward with the
+        /// average of their filled neighbours, up to 16 more passes. NOT the original tool's rule (it leaves them black), so it is an opt-in.
+        /// ENGINE-GATED (AppHost.FillWideHolesWhy): only an engine whose bake program names the parameter is given it.</summary>
+        public bool FillWideHoles;
+        public const string FillWideHolesParam = "FillWideHoles";
+        public const int FillWideHolesPasses = 16;
+        public const string FillWideHolesLabel = "Fill wide dark holes (goes beyond the original tool)";
+        public const string FillWideHolesNote = "wide hole fill on (not the original tool's rule: it leaves these texels black)";
+        public const string FillWideHolesNeedsEngine = "Needs a newer engine than this build carries.";
+        public const string FillWideHolesTip = "Where every sample of a lightmap texel looks like it is inside geometry (creases, where two surfaces meet), the texel gets no light of its own. "
+            + "The original tool fills such texels from their lit neighbours in two passes and leaves a wider patch black. Tick this to keep filling inward (up to 16 more passes, each "
+            + "texel gets the average of its filled neighbours), which removes most remaining dark patches. It is not what the original tool does, so it is off by default. "
+            + "Surfaces with no lit texel at all stay black either way.";
+        public static readonly string[] SingleCaptureSwitches = { "KeepLattice", "ReuseLattice" };
+        public const string SingleCaptureMarker = "REUSE_LATTICE_SUPPORT";
+        public const string SkyHiEnvVar = "GPULM_SKY_HI";
+        public const string SingleCaptureNote = "light probes are baked on the lightmap bake's own capture (one capture; the probe pass reuses its photon cast and lattice)";
         public const string RebakeHintEnvVar = "GPULM_SKY_HINT";
         public const string RebakeHintLabel = "Re-bake speedup: reuse the previous bake's cast offsets (same capture only)";
         public const string RebakeHintNote = "re-bake speedup on (GPULM_SKY_HINT=1: the previous bake's cast offsets of this capture)";
@@ -389,6 +414,7 @@ namespace H2GpuLightmapper.App
                 if (Responsive) m += "   responsive on";
                 if (ExactVertexLighting) m += "   exact vertex lighting on";
                 if (SceneryPermutationFix) m += "   scenery multi permutation fix on";
+                if (FillWideHoles) m += "   wide hole fill on";
                 if (RebakeHint) m += "   re-bake speedup on";
                 if (DirectSamplesEffective > 1) m += "   direct light samples ×" + DirectSamplesEffective.ToString(CultureInfo.InvariantCulture);
                 if (ForceCompat) m += "   compatibility mode (DF64) FORCED";
@@ -405,6 +431,7 @@ namespace H2GpuLightmapper.App
             if (Responsive) s += "   responsive on";
             if (ExactVertexLighting) s += "   exact vertex lighting on";
             if (SceneryPermutationFix) s += "   scenery multi permutation fix on";
+            if (FillWideHoles) s += "   wide hole fill on";
             if (RebakeHint) s += "   re-bake speedup on";
             if (DirectSamplesEffective > 1) s += "   direct light samples ×" + DirectSamplesEffective.ToString(CultureInfo.InvariantCulture);
             if (BspRel != null) s += "   BSP from " + BspFolder(BspRel);

@@ -56,6 +56,15 @@ namespace H2GpuLightmapper.Core.Payload
             return ParseParams(paramsText).TryGetValue(name, out t) && t == "switch";
         }
 
+        /// <summary>1.4.0: does the parameter list name the parameter <paramref name="name"/> at all (a switch or a valued one; not an environment variable)?
+        /// Fails closed: false for an empty list.</summary>
+        public static bool DeclaresParam(string paramsText, string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string t;
+            return ParseParams(paramsText).TryGetValue(name, out t) && t != EnvType;
+        }
+
         /// <summary>Does the parameter list name the environment variable <paramref name="name"/> as one the engine validates? This is the marker
         /// for an engine feature that is an environment variable, not a parameter: engine 0.6.4 and newer validate <c>GPULM_COMPAT</c> (0, 1 or
         /// unset, anything else fails the bake) and report fullgpu's "Compatibility mode" line; an engine whose list does not name it has no such
@@ -115,6 +124,12 @@ namespace H2GpuLightmapper.Core.Payload
         public static bool ComponentDeclares(IPayloadSource src, PayloadComponent c, string paramsRel, string name)
         {
             return Cached(src, c, paramsRel, "sw:" + name, t => DeclaresSwitch(t, name));
+        }
+
+        /// <summary>1.4.0: <see cref="DeclaresParam"/> for the payload's INST parameter list; cached like <see cref="ComponentDeclares"/>.</summary>
+        public static bool ComponentDeclaresParam(IPayloadSource src, PayloadComponent c, string paramsRel, string name)
+        {
+            return Cached(src, c, paramsRel, "par:" + name, t => DeclaresParam(t, name));
         }
 
         /// <summary>Does the payload's INST python file <paramref name="relPath"/> carry the marker line <c>name = 1</c> (see <see cref="HasPyMarker"/>)? Cached like

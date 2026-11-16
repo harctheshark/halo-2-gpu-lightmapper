@@ -240,10 +240,12 @@ namespace H2GpuLightmapper.Cli
             o.ProbesFallback = a.Choice("--probes-fallback", "stop", "stop", "install") == "install" ? AoFallback.InstallWithoutAo : AoFallback.Stop;
             o.Worker = a.GetInt("--worker");
             o.ProbeWorker = a.GetInt("--probe-worker");
+            o.ProbeOwnCapture = a.Has("--probe-own-capture");      // 1.4.0 dev opt-out: the probe worker makes its own capture (the flow before 1.4.0)
             o.Fixes = !a.Has("--dev-no-fixes");
             o.Responsive = a.Has("--responsive");
             o.ExactVertexLighting = a.Has("--exact-vertex-lighting");
             o.SceneryPermutationFix = a.Has("--scenery-permutation-fix");
+            o.FillWideHoles = a.Has("--fill-wide-holes");          // 1.4.0: -FillWideHoles 16 on the lightmap bakes (Advanced "Fill wide dark holes")
             o.RebakeHint = a.Has("--rebake-hint");        // 0.6.8: GPULM_SKY_HINT=1 on reuse bakes (Advanced "Re-bake speedup")
             var ds = a.GetInt("--direct-samples");          // 0.6.12: the opt-in direct sample multiplier (Custom quality only: BakeOptions.Validate refuses it otherwise)
             if (ds.HasValue) { o.DirectSamplesOptIn = true; o.DirectSamplesGiven = true; o.DirectSamples = ds.Value; }
@@ -262,7 +264,7 @@ namespace H2GpuLightmapper.Cli
             var a = ParseFor(args, start + 1,
                 new[] { "--h2ek", "--scenario", "--bsp", "--map", "--map-out", "--vista-out", "--quality", "--photons", "--rays", "--direct-samples", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
                         "--worker", "--probe-worker", "--dev-max-calls", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s", "--dev-simulate-quarantine" },
-                new[] { "--ao", "--force", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--rebake-hint", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp", "--dev-no-stage" },
+                new[] { "--ao", "--force", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--rebake-hint", "--probe-own-capture", "--fill-wide-holes", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp", "--dev-no-stage" },
                 new[] { "--sky-cubemap" });
             var o = BakeOptionsFrom(a);
             var so = new SessionOptions

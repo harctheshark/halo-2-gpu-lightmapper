@@ -14,7 +14,10 @@ ap.add_argument('--sever', default=None); ap.add_argument('--ltmp-src', required
 ap.add_argument('--h2-root', required=True); ap.add_argument('--farm', required=True)      # no --pwsh any more: the bake program is run directly
 ap.add_argument('--plucker-fix', action='store_true'); ap.add_argument('--scenery-fix', action='store_true')
 ap.add_argument('--photons', type=int, default=None); ap.add_argument('--mc-samples', type=int, default=None)
+ap.add_argument('--reuse-lattice', action='store_true')        # 1.4.0 (P5e): -ReuseLattice to the bake program; needs --skip-capture
 a = ap.parse_args()
+if a.reuse_lattice and not a.skip_capture:
+    sys.exit('REFUSED: --reuse-lattice needs --skip-capture')
 W = os.environ.get('H2LM_WORK')
 ctl = {}
 p = os.path.join(W, 'fake_control.txt')
@@ -42,7 +45,7 @@ with open(os.path.join(a.out, 'probes.bin'), 'wb') as f:
         f.write(struct.pack('<3f', float(i), 0.0, 1.0))
 env = dict(os.environ); env['GPULM_PROBES'] = os.path.join(a.out, 'probes.bin'); env['GPULM_SKY_HI'] = '1'; env['H2LM_ROOT'] = a.h2_root
 bake = [os.path.join(a.stage, 'h2lm-bake.exe'), '-Scenario', a.scenario,
-        '-Bsp', a.bsp, '-Worker', str(a.worker), '-Quality', a.quality] + (['-SkipCapture'] if a.skip_capture else [])
+        '-Bsp', a.bsp, '-Worker', str(a.worker), '-Quality', a.quality] + (['-SkipCapture'] if a.skip_capture else []) + (['-ReuseLattice'] if a.reuse_lattice else [])
 bake += (['-PluckerFix'] if a.plucker_fix else []) + (['-SceneryFix'] if a.scenery_fix else []) + (['-Photons', str(a.photons)] if a.photons is not None else []) + (
          ['-MCSamples', str(a.mc_samples)] if a.mc_samples is not None else [])
 t0 = time.time()

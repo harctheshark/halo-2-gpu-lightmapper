@@ -208,6 +208,15 @@ namespace H2GpuLightmapper.Pipeline
             try { return Json.ReadObjFile(PathIn(outDir)); } catch (Exception) { return null; }
         }
 
+        /// <summary>1.4.0: does this worker folder hold a RECORDED capture that was made probe-ready (skyHi) and still has the probe files? A cheap pre-check for
+        /// the single-capture probe flow and for a Lightprobes-mode reuse of a lightmap worker's capture; the reuse gate (Evaluate) still decides.</summary>
+        public static bool IsProbeReadyRecord(string outDir)
+        {
+            if (string.IsNullOrEmpty(outDir) || !Directory.Exists(outDir)) return false;
+            var j = Read(outDir);
+            return j != null && j.Bool("skyHi") == true && ProbeReady(outDir);
+        }
+
         /// <summary>
         /// The reuse gate. <paramref name="tagsNow"/> = the current fingerprint (null: compute it here; pass the same object for
         /// several farms). <paramref name="allowUnrecorded"/> (dev, gate T2-B) accepts a farm with a capture but no record.

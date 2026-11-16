@@ -43,9 +43,11 @@ PARAMS = [
     ('WriteBackMode', 'string', 'tool'), ('SkipCapture', 'switch', False), ('PluckerFix', 'switch', False), ('SceneryFix', 'switch', False),
     ('WriterOnly', 'switch', False), ('ToolOverlay', 'switch', False), ('Responsive', 'switch', False), ('ExactVertexLighting', 'switch', False),
     ('CaptureOnly', 'switch', False), ('SceneryOwnPermutationOnly', 'switch', False), ('Photons', 'int', 0), ('MCSamples', 'int', 0),
+    ('KeepLattice', 'switch', False), ('ReuseLattice', 'switch', False),      # 1.4.0 single capture (light probes on the lightmap bake's own capture)
+    ('FillWideHoles', 'int', 0),                                              # 1.4.0 the opt-in wide hole fill (0 = off)
 ]
 SETS = {'Quality': ('low', 'super', 'custom'), 'WriteBackMode': ('tool', 'direct', 'both')}
-RANGES = {'Photons': (1000000, 100000000), 'MCSamples': (1, 64)}
+RANGES = {'Photons': (1000000, 100000000), 'MCSamples': (1, 64), 'FillWideHoles': (0, 4096)}
 ENV_PARAMS = ['GPULM_COMPAT']
 
 
@@ -251,6 +253,21 @@ def main(argv):
         return 0
     phase(2, 'DERIVE - fake derive')
     phase(3, 'GPU BAKE - fake bake')
+    # 1.4.0 single capture: -ReuseLattice (the probe pass, on the lightmap worker's folder) uses what a -KeepLattice bake left there; every run
+    # that is not a -KeepLattice run removes the kept files, as the real program does at the end of phase 3
+    lk, cc = os.path.join(OUT, 'lattice_keep.txt'), os.path.join(OUT, 'cast_cache.bin')
+    if v['ReuseLattice']:
+        if os.path.isfile(lk) and os.path.isfile(cc):
+            out("      lattice: REUSED from this capture's lightmap bake (fingerprint fake; the pre-pass and the photon cast are skipped)")
+        else:
+            out('      lattice: -ReuseLattice not possible (the bake before this one kept no lattice (no lattice_keep.txt)) -- running the pre-pass')
+    if v['KeepLattice']:
+        set_content(lk, 'LATTICE-KEEP 1')
+        set_content(cc, 'fake cast cache')
+    else:
+        for f in (lk, cc):
+            if os.path.isfile(f):
+                os.remove(f)
     if compat_engine:
         if os.environ.get('GPULM_COMPAT') == '1' or mode == 'nofp64':
             out('      Compatibility mode (no FP64): fake -- the FP32-only double-single kernels')

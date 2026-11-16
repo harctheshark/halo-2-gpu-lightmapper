@@ -1,0 +1,36 @@
+# title: P5e gpu_lightprobes.py: --reuse-lattice (1.4.0: the probe pass on the lightmap bake's own capture; -ReuseLattice to the bake program) + the REUSE_LATTICE_SUPPORT marker
+# source: _research/lightprobes/gpu_lightprobes.py
+# base-md5: de71b68f65dadf2a3f2bdcf92438ac9b
+# result-md5: 935e56894847db4e4f7f02490c6f5e5b
+--- a/_research/lightprobes/gpu_lightprobes.py
++++ b/_research/lightprobes/gpu_lightprobes.py
+@@ -20,6 +20,9 @@
+ # handled by this pipeline as is -- no step opens <scenario folder>\<bsp>.scenario_structure_bsp: lp_probes.py matches the scenario's lighting element by the BSP's leaf name,
+ # gpu_bake.ps1 resolves the tag from the scenario's structure_bsps, the lightmap tag is named after the SCENARIO.
+ SPLIT_BSP_SUPPORT = 1
++# 1.4.0 marker (the exe reads this line from the payload's copy of the script): --reuse-lattice is taken (the probe pass on the lightmap bake's own worker folder;
++# the bake program's -ReuseLattice skips the lattice pre-pass and the photon cast when that bake kept them with -KeepLattice).
++REUSE_LATTICE_SUPPORT = 1
+ ap = argparse.ArgumentParser()
+ ap.add_argument('--scenario', required=True); ap.add_argument('--bsp', required=True); ap.add_argument('--quality', default='low')
+ ap.add_argument('--worker', type=int, required=True); ap.add_argument('--stage', default=os.path.join(HERE, '..', 'v372', 'stage_LP'))
+@@ -33,7 +36,10 @@
+ ap.add_argument('--scenery-fix', action='store_true', help='pass -SceneryFix to gpu_bake (with --skip-capture it must match the capture)')
+ ap.add_argument('--photons', type=int, default=None, metavar='N', help='pass -Photons N to gpu_bake (--quality custom only)')
+ ap.add_argument('--mc-samples', type=int, default=None, metavar='N', help='pass -MCSamples N to gpu_bake (--quality custom only)')
++# P5e (1.4.0): the probe pass on the lightmap bake's own worker folder
++ap.add_argument('--reuse-lattice', action='store_true', help='pass -ReuseLattice to the bake program: skip the lattice pre-pass when the lightmap bake of this capture kept its lattice (-KeepLattice); needs --skip-capture')
+ a = ap.parse_args()
++if a.reuse_lattice and not a.skip_capture: sys.exit('REFUSED: --reuse-lattice needs --skip-capture (the kept lattice belongs to the capture already in the farm)')
+ def _same(p, q): return os.path.normcase(os.path.abspath(p)).rstrip('\\/') == os.path.normcase(os.path.abspath(q)).rstrip('\\/')
+ def _under(p, root): return os.path.normcase(os.path.realpath(p)).startswith(os.path.normcase(os.path.realpath(root)).rstrip('\\/') + os.sep)
+ if a.h2_root:
+@@ -66,7 +72,7 @@
+ if a.h2_root: env['H2LM_ROOT'] = H2
+ # P5d (1.0): the stage's native bake program h2lm-bake.exe (it replaced the bake script; the same arguments)
+ bake = [os.path.join(a.stage, 'h2lm-bake.exe'), '-Scenario', a.scenario, '-Bsp', a.bsp,
+-        '-Worker', str(a.worker), '-Quality', a.quality] + (['-SkipCapture'] if a.skip_capture else []) + (['-Sever', a.sever] if a.sever else [])
++        '-Worker', str(a.worker), '-Quality', a.quality] + (['-SkipCapture'] if a.skip_capture else []) + (['-ReuseLattice'] if a.reuse_lattice else []) + (['-Sever', a.sever] if a.sever else [])
+ bake += (['-PluckerFix'] if a.plucker_fix else []) + (['-SceneryFix'] if a.scenery_fix else []) + (['-Photons', str(a.photons)] if a.photons is not None else []) + (
+          ['-MCSamples', str(a.mc_samples)] if a.mc_samples is not None else [])
+ rc, T['gpu'] = run(bake, 'gpu_bake.log', env)

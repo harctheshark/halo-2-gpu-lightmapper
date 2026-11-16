@@ -119,6 +119,8 @@ namespace H2GpuLightmapper.Pipeline
         public string PrecisionModeToken { get { return Precision == PrecisionMode.Full ? "full-fp64" : Precision == PrecisionMode.Compat ? "compat-df64" : Precision == PrecisionMode.CompatForced ? "compat-df64-forced" : EngineHasCompat ? "automatic" : "full-fp64-required"; } }
         public bool ProbePath, Install;
         public bool ReuseLightmapCapture, ReuseProbeCapture;
+        /// <summary>1.4.0: the light probes run on the lightmap worker's capture (PlanInput.SingleCapture and a probe path): no probe worker.</summary>
+        public bool SingleCapture;
         public string LightmapReuseNote, ProbeReuseNote;
         /// <summary>The stage the SHELL installs (null when stage-only). U3: every install is the shell's (Lightmap Only /
         /// Standard without probes too: OUT\tagw_stage); gpu_bake -WriteBack runs only as the tool write-back fallback.</summary>
@@ -210,7 +212,7 @@ namespace H2GpuLightmapper.Pipeline
                 .Add("options", new JObj().Add("root", o.Root).Add("scenario", o.ScenarioRel).Add("bsp", o.Bsp).Add("bspRel", o.BspRel).Add("quality", o.QualityToken)
                     .Add("photons", o.Quality == Quality.Custom ? (object)o.Photons : null).Add("rays", o.Quality == Quality.Custom ? (object)(long)o.Rays : null)
                     .Add("mode", o.ModeToken).Add("ao", o.Ao).Add("aoStrength", o.AoStrength).Add("aoExponent", o.AoExponent).Add("aoTag", o.Ao ? o.AoTag : null).Add("aoForce", o.AoForce)
-                    .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting).Add("sceneryPermutationFix", o.SceneryPermutationFix).Add("forceCompat", o.ForceCompat)
+                    .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting).Add("sceneryPermutationFix", o.SceneryPermutationFix).Add("fillWideHoles", o.FillWideHoles).Add("forceCompat", o.ForceCompat)
                     .Add("guarded", CustomGuarded.HasValue ? (object)CustomGuarded.Value : null))
                 .Add("root", Root).Add("work", Work).Add("inst", InstDir).Add("slotBase", SlotBase).Add("runDir", RunDir).Add("runDirPredicted", RunDirPredicted)
                 .Add("py", Rt == null ? null : Rt.PyExe).Add("engine", Engine)
@@ -223,7 +225,7 @@ namespace H2GpuLightmapper.Pipeline
                     .Add("rowsFit", Limits.RowsFit).Add("maxCallsPerPart", Limits.MaxCallsPerPart).Add("bufCapMB", (long)Limits.BufCapMB)
                     .Add("otherUseBytes", Limits.OtherUseBytes.HasValue ? (object)Limits.OtherUseBytes.Value : null)
                     .Add("effectiveVramBytes", Limits.EffectiveVramBytes.HasValue ? (object)Limits.EffectiveVramBytes.Value : null))
-                .Add("reuseLightmapCapture", ReuseLightmapCapture).Add("reuseProbeCapture", ReuseProbeCapture)
+                .Add("reuseLightmapCapture", ReuseLightmapCapture).Add("reuseProbeCapture", ReuseProbeCapture).Add("singleCapture", SingleCapture)
                 .Add("lightmapReuseNote", LightmapReuseNote).Add("probeReuseNote", ProbeReuseNote)
                 .Add("install", Install).Add("installStage", InstallStage).Add("finalStage", FinalStage).Add("installBackupDir", InstallBackupDir).Add("lmwInstallPy", LmwInstallPy).Add("marker", Marker)
                 .Add("tagDir", TagDir).Add("ltmp", LtmpName)
@@ -247,7 +249,7 @@ namespace H2GpuLightmapper.Pipeline
             sb.AppendLine("  options   " + o.Summary());
             sb.AppendLine("  precision " + PrecisionLine);
             sb.AppendLine("  workers   " + (Worker.HasValue ? "farm_w" + Worker.Value.ToString("D2", CultureInfo.InvariantCulture) + (WorkerNote != null ? " (" + WorkerNote + ")" : "") : "-")
-                          + "   probe " + (ProbeWorker.HasValue ? "farm_w" + ProbeWorker.Value.ToString("D2", CultureInfo.InvariantCulture) + (ProbeWorkerNote != null ? " (" + ProbeWorkerNote + ")" : "") : "-"));
+                          + "   probe " + (ProbeWorker.HasValue ? "farm_w" + ProbeWorker.Value.ToString("D2", CultureInfo.InvariantCulture) + (ProbeWorkerNote != null ? " (" + ProbeWorkerNote + ")" : "") : SingleCapture ? "the lightmap worker (one capture)" : "-"));
             sb.AppendLine("  probes    " + ProbePoints + " point(s)" + (ProbePointsAssumed ? " ASSUMED (dry run: pass --probe-points N; a real run queries the scenario)" : "")
                           + (ProbePath ? " -> light probes are baked" : " -> no light probes"));
             if (Limits != null && Limits.VramBytes.HasValue)

@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.3.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.4.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -59,6 +59,8 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
 - **Extra direct light samples (0.6.12, opt-in).** In Custom quality the sun, sky-light and surface-light passes can run several
   times and be averaged, which smooths grain in direct light (×4 halves it). Off by default: it is not the original tool's noise
   pattern.
+- **Light probes in seconds (1.4.0).** The probe pass reuses the lightmap bake's capture, photon cast and lattice instead of making its own;
+  the probe values are unchanged.
 - **Bump mapping closer to the CPU tool (0.6.11).** The per-vertex light direction (what drives bump mapping) now matches
   the original tool much more closely, especially on maps with surface lights; lightmap colours are unchanged.
 - **8 GB cards (0.6.10).** Bakes are sized to fit 8 GB and 6 GB graphics cards, with the same lightmap (checked with a pretend
@@ -244,6 +246,12 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
      variant's own pieces get lit instead of rendering black. It differs from the 2004 tool on purpose. Most maps never need
      it: giving each shape its own scenery tag avoids the problem. Ambient occlusion and light probes do not take it. Command
      line: `--scenery-permutation-fix`.
+   - **Fill wide dark holes (goes beyond the original tool)** (1.4.0). Where every sample of a lightmap texel looks like it is
+     inside geometry (creases, where two surfaces meet), the texel gets no light of its own. The original tool fills such
+     texels from their lit neighbours in two passes and leaves a wider patch black, and so does this app by default. Tick this
+     to keep filling inward: up to 16 more passes, each texel gets the average of its filled neighbours. On triplicate it fills
+     6,787 of the 9,749 texels the two passes leave black and changes no lit texel; surfaces with no lit texel at all stay
+     black. It is not what the original tool does, so it is off by default. Command line: `--fill-wide-holes`.
 8. **Bake**, **Cancel**, **Restore previous lightmap...**, **Open logs**.
 
 **Before you bake:** close the map in Sapien and Guerilla. A bake that will install is refused while one of its lightmap files is
@@ -299,7 +307,7 @@ Example: a Super lightmap of cyclotron with AO, written to the tags after the us
 ```
 
 Add `--dry-run` to print every step without starting or writing anything, and `--no-install` to bake into the work folder
-only. The Advanced settings are `--responsive`, `--exact-vertex-lighting`, `--scenery-permutation-fix` and `--direct-samples K`
+only. The Advanced settings are `--responsive`, `--exact-vertex-lighting`, `--scenery-permutation-fix`, `--fill-wide-holes` and `--direct-samples K`
 (1 to 64, Custom quality only); `--force-compat`
 runs the Compatibility mode (DF64) kernels on a GPU that has FP64 (for testing). Exit codes: 0 ok, 2 refused before anything
 was written, 3 failed, 4 cancelled.
@@ -388,6 +396,7 @@ These are open problems in this build.
 10. **Windows Security** may flag an engine file; see [Windows Security (Defender)](#windows-security-defender).
 
 Maps with several cubemap skies (for example 07a_highcharity high_0) are accepted since 0.6.5; that bake was not compared with a CPU bake.
+Light probes on such a map stopped with an error before 1.4.0; they bake now, and their colours have not been compared with a CPU bake either.
 
 Other limits: Custom quality and the Scenery Multi Permutation Fix are Experimental; ambient occlusion is not CPU-faithful; the
 app has not been tested on a clean Windows install, with Smart App Control, or on a second PC or GPU.

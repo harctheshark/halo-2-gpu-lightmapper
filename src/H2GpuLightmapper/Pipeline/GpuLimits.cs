@@ -35,6 +35,9 @@ namespace H2GpuLightmapper.Pipeline
         public const double BaseBytes = 1.39 * 1073741824.0;
         public const double BytesPerCall = 228.0 + 2.5 * 52.0;            // 358
         public const double BytesPerPhoton = 42.0;
+        /// <summary>1.4.0: the engine's fixed share in its own fit test (vram_plan.h kEnvConstB = 2,440 + 256 MiB) and that test's margin (kEnvMargin).</summary>
+        public const double EngineConstBytes = (2440.0 + 256.0) * 1048576.0;
+        public const double EngineFitMargin = 1.03;
         public const long DefaultStoredPhotons = 5000000L;
         /// <summary>0.6.10: 1.5 GiB for Windows, the desktop and a browser -- the same reserve the engine uses (vram_plan.h kDesktopBytes / kHeadroomBytes; 0.6.9: 1 GiB).</summary>
         public const double DesktopReserveBytes = 1.5 * 1073741824.0;
@@ -162,7 +165,19 @@ namespace H2GpuLightmapper.Pipeline
                 g.Notes.Add("parts sized for " + mib + " of VRAM: -MaxCallsPerPart " + g.MaxCallsPerPart.ToString("N0", CultureInfo.InvariantCulture)
                             + " call rows (" + fit.ToString("N0", CultureInfo.InvariantCulture) + " fit, " + (int)Math.Round((1.0 - RowsMargin) * 100) + "% margin; the planner's own cap is "
                             + PlannerCapRows.ToString("N0", CultureInfo.InvariantCulture) + ")");
-                if (rows < TinyRows)
+                // 1.4.0: the engine's own fit test (vram_plan.h part_fits_vram: (rows x 245 + slots x 40 + 2,696 MiB + (photons - 12 M) x 42) x 1.03 against
+                // the card - 1.5 GiB) with NO rows at all: when even that fails (a 4 GB card reporting ~3.9 GiB) nothing can be baked. The engine then stops
+                // in the GPU phase and ITS message advises portals / a BSP split, which cannot help. Say what is true before the bake starts.
+                double engineFixed = (EngineConstBytes + (stored - 12.0e6) * BytesPerPhoton) * EngineFitMargin;
+                if (free <= 0 || v - DesktopReserveBytes < engineFixed)
+                {
+                    double needGiB = (DesktopReserveBytes + Math.Max(engineFixed, BaseBytes + stored * BytesPerPhoton)) / 1073741824.0;
+                    g.Notes.Add("WARNING this graphics card is too small for this bake: " + (v / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB of video memory, and about "
+                                + needGiB.ToString("0.0", CultureInfo.InvariantCulture) + " GiB is needed before the first lightmap texel (1.5 GiB for Windows and the desktop, the rest is the engine's fixed share and the photons). "
+                                + "The bake will most likely stop in the GPU phase with a video-memory message. If that message suggests adding portals or splitting the BSP, ignore it here: "
+                                + "the map is not the problem, the card is. A card with 6 GB or more is needed.");
+                }
+                else if (rows < TinyRows)
                     g.Notes.Add("WARNING this adapter has very little free memory for the main pass: parts of " + g.MaxCallsPerPart.ToString("N0", CultureInfo.InvariantCulture)
                                 + " rows may still be too small for the biggest lightmap charts, and the photon lattice pass (which -MaxCallsPerPart does not size) may not fit");
             }

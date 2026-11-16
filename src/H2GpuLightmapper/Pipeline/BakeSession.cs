@@ -122,6 +122,8 @@ namespace H2GpuLightmapper.Pipeline
         private bool _pointsAssumed;
         private MapInfo _map;
         private bool _reuseN, _reuseM;
+        /// <summary>1.4.0: the light probes of this Standard bake run on the lightmap worker's capture (PlanInput.SingleCapture); no probe worker.</summary>
+        private bool _single;
         private string _reuseNNote, _reuseMNote;
         private Lazy<TagsFingerprint> _tagsNow;
         private TagSet _set;
@@ -360,6 +362,12 @@ namespace H2GpuLightmapper.Pipeline
             {
                 string sw = _host.SceneryPermutationFixWhy(_o);
                 if (sw != null) Refuse(sw);
+            }
+            // 1.4.0 "Fill wide dark holes": the same rule (an engine without -FillWideHoles is never given it)
+            if (_o.FillWideHoles)
+            {
+                string fw = _host.FillWideHolesWhy(_o);
+                if (fw != null) Refuse(fw);
             }
             // Compatibility mode (DF64): the engines this bake runs either all validate GPULM_COMPAT or the GPU must have FP64. --force-compat is
             // refused on an engine without it (dry runs too): GPULM_COMPAT is never passed to an engine that does not validate it.
@@ -616,7 +624,10 @@ namespace H2GpuLightmapper.Pipeline
             // ---- map query: probe points / environments (Standard, Lightprobes)
             // (0.6.4: also run, in any mode, to read the scenario's structure_bsps when the BSP's tag may be in another folder)
             bool needQuery = BakePlanner.NeedsMapQuery(_o);
-            if (needQuery || (_bspFromScenario && !dry))
+            // 1.4.0: a real Lightmap Only bake runs it too, ONLY for the instanced-geometry warning (an object that holds nothing but portal faces: the
+            // map bakes, the portals do not work). There it never refuses: a query that fails just skips the check.
+            bool warnOnly = !needQuery && !_bspFromScenario && !dry && _o.Mode == BakeMode.Lightmap;
+            if (needQuery || (_bspFromScenario && !dry) || warnOnly)
             {
                 if (dry)
                 {
@@ -628,7 +639,8 @@ namespace H2GpuLightmapper.Pipeline
                     var q = BakePlanner.MapQueryStep(_rt, _root, _o);
                     Say("  map query: " + q.CommandLine.Substring(0, Math.Min(160, q.CommandLine.Length)) + " ...");
                     _map = MapQuery.Run(q.FileName, q.Args, q.Cwd, _env);
-                    if (!_map.Ok) Refuse("the map query failed: " + (_map.Error ?? _map.PointsError));
+                    if (!_map.Ok && warnOnly) { Say("  map query: failed (" + (_map.Error ?? _map.PointsError) + ") -- the instanced-geometry check is skipped; the bake goes on"); _map = null; }
+                    else if (!_map.Ok) Refuse("the map query failed: " + (_map.Error ?? _map.PointsError));
                     NoteEmptyInstances(_map);       // 1.0: instanced geometry with no visible geometry: a warning only, the bake goes on
                     if (_bspFromScenario) ResolveBspFromScenario(_map);
                     if (!needQuery) _map = null;        // Lightmap Only: the query only located the BSP; the probe / lightmap facts stay unread as before
@@ -665,6 +677,12 @@ namespace H2GpuLightmapper.Pipeline
             }
             CheckCancel();
 
+            // ---- 1.4.0 single capture: a Standard bake's light probes run on the lightmap bake's own capture (no probe worker, no second capture, the
+            // probe pass reuses the lightmap bake's photon cast and lattice) when the engine has it. Not with the scenery permutation fix (its capture is
+            // the lightmap's alone: the probe pass sees every shape, as before) and not with the dev opt-out. A REUSE bake can only do it on a lightmap
+            // capture that was made probe-ready (decided below, once the lightmap worker is known).
+            _single = probes && _o.Mode == BakeMode.Standard && !_o.ProbeOwnCapture && !_o.SceneryPermutationFix && _host.SingleCaptureProbesWhy(_o) == null;
+
             // ---- workers (200-299; farm_w149 never)
             if (dry)
             {
@@ -675,10 +693,11 @@ namespace H2GpuLightmapper.Pipeline
                     else { _n = WorkerPeek.Peek(_work, rel, _o.Bsp, false, null, out _nNote); }
                     taken.Add(_n.Value);
                 }
-                if (probes)
+                SingleCaptureNeedsProbeReadyReuse();
+                if (probes && !_single)
                 {
                     if (_o.ProbeWorker.HasValue) { _m = _o.ProbeWorker; _mNote = "--probe-worker"; }
-                    else { _m = WorkerPeek.Peek(_work, rel, _o.Bsp, true, taken, out _mNote); }
+                    else { _m = ProbeReadyLightmapWorker(rel) ?? WorkerPeek.Peek(_work, rel, _o.Bsp, true, taken, out _mNote); }
                 }
             }
             else
@@ -687,10 +706,16 @@ namespace H2GpuLightmapper.Pipeline
                 try
                 {
                     if (BakePlanner.NeedsLightmapWorker(_o)) { _n = _o.Worker ?? reg.GetOrAllocate(rel, _o.Bsp, false); _nNote = _o.Worker.HasValue ? "--worker" : "registry"; }
-                    if (probes) { _m = _o.ProbeWorker ?? reg.GetOrAllocate(rel, _o.Bsp, true); _mNote = _o.ProbeWorker.HasValue ? "--probe-worker" : "registry"; }
+                    SingleCaptureNeedsProbeReadyReuse();
+                    if (probes && !_single)
+                    {
+                        if (_o.ProbeWorker.HasValue) { _m = _o.ProbeWorker; _mNote = "--probe-worker"; }
+                        else { _m = ProbeReadyLightmapWorker(rel) ?? reg.GetOrAllocate(rel, _o.Bsp, true); if (_mNote == null) _mNote = "registry"; }
+                    }
                 }
                 catch (SafetyException e) { Refuse(e.Message); }
             }
+            if (_single) Say("  light probes: baked on the lightmap worker's capture (one capture; the probe pass reuses the lightmap bake's photon cast and lattice)");
             if (_n.HasValue) Guards.AssertWorker(_n.Value);
             if (_m.HasValue) Guards.AssertWorker(_m.Value);
             if (_n.HasValue && _m.HasValue && _n.Value == _m.Value) Refuse("the probe worker must differ from the lightmap worker");
@@ -827,6 +852,29 @@ namespace H2GpuLightmapper.Pipeline
             }
         }
 
+        /// <summary>1.4.0: with "Reuse existing capture" the single-capture probe flow needs the lightmap worker's capture to be probe-ready (made by a
+        /// single-capture bake). An older capture, made for the lightmap alone, keeps the probe worker flow: its own capture, or its probe-ready one.</summary>
+        private void SingleCaptureNeedsProbeReadyReuse()
+        {
+            if (!_single || !_o.ReuseCapture) return;
+            if (_n.HasValue && CaptureRecord.IsProbeReadyRecord(BakePlanner.FarmDir(Farms, _n.Value))) return;
+            _single = false;
+        }
+
+        /// <summary>1.4.0, Lightprobes mode with "Reuse existing capture": a single-capture Standard bake left its probe-ready capture in the LIGHTMAP worker's
+        /// folder. When the probe worker has no probe-ready capture of its own, that folder is this bake's probe worker (the reuse gate still checks it; the
+        /// probe driver runs -SkipCapture on it). Null = the registered probe worker, as before.</summary>
+        private int? ProbeReadyLightmapWorker(string rel)
+        {
+            if (_o.Mode != BakeMode.Probes || !_o.ReuseCapture) return null;
+            int? pm = WorkerPeek.Registered(_work, rel, _o.Bsp, true);
+            if (pm.HasValue && CaptureRecord.IsProbeReadyRecord(BakePlanner.FarmDir(Farms, pm.Value))) return null;
+            int? ln = _o.Worker ?? WorkerPeek.Registered(_work, rel, _o.Bsp, false);       // --worker names the lightmap worker's folder here too
+            if (!ln.HasValue || !CaptureRecord.IsProbeReadyRecord(BakePlanner.FarmDir(Farms, ln.Value))) return null;
+            _mNote = "the lightmap worker's probe-ready capture";
+            return ln;
+        }
+
         /// <summary>AO only: the lightmap set must be installed (it is what AO is added to) and the install record must not say it already has AO (a second AO would darken the
         /// same places twice). An unrecorded set is allowed -- the program can only know about AO it added itself -- and the log says so. --force (or "Yes" in the window)
         /// adds AO again. ao_existing.py repeats these checks (and the checks that need the capture) when it runs.</summary>
@@ -927,6 +975,7 @@ namespace H2GpuLightmapper.Pipeline
                 ProbePoints = _points, ProbePointsAssumed = _pointsAssumed, ReuseLightmap = _reuseN, ReuseProbe = _reuseM,
                 Limits = _limits, ProbeWarning = _probeWarning, Precision = _precision, EngineHasCompat = _engineHasCompat,
                 LightmapReuseNote = _o.ReuseCapture ? _reuseNNote : null, ProbeReuseNote = _reuseMNote,
+                SingleCapture = _single,
             });
         }
 
@@ -1293,7 +1342,7 @@ namespace H2GpuLightmapper.Pipeline
             var oc = RunStepProcess(s);
             if (oc.Cancelled) throw new OperationCanceledException("cancelled during gpu_bake");
             bool captured = s.FreshCapture && (oc.Ok || oc.Parser.PhasesSeen.Any(ph => ph != "1"));
-            if (captured) WriteCaptureRecord(s, false);
+            if (captured) WriteCaptureRecord(s, s.SkyHi);       // 1.4.0: a single-capture bake's lightmap capture is probe-ready
             if (!oc.Ok)
             {
                 if (plan.Install && s.Params.Has("shellInstalls") && DirectWriterCannotRun(oc))
@@ -1669,6 +1718,16 @@ namespace H2GpuLightmapper.Pipeline
         {
             if (s.FreshCapture)
                 foreach (var m in CaptureRecord.SupersedeExisting(s.CaptureOut, DateTime.Now)) Run.Shell("the earlier probe capture record was renamed aside: " + m);
+            if (s.Args.Contains("--reuse-lattice"))
+            {
+                // 1.4.0 single capture: the probe pass runs in the lightmap worker's folder and writes its own gpu_bake.log there. The lightmap
+                // bake's engine logs are set aside under another name first, so the run's log bundle (RUN\farm_logs) keeps both.
+                foreach (var n in new[] { "gpu_bake.log", "gpu_bake_lattice.log" })
+                {
+                    try { string f = Path.Combine(s.CaptureOut, n); if (File.Exists(f)) File.Copy(f, Path.Combine(s.CaptureOut, "lightmap_" + n), true); }
+                    catch (Exception e) when (e is IOException || e is UnauthorizedAccessException) { Run.Shell("the lightmap bake's " + n + " was not set aside (" + e.Message + ")"); }
+                }
+            }
             _sideSawPhase2 = false;
             var oc = RunStepProcess(s);
             if (oc.Cancelled) throw new OperationCanceledException("cancelled during the light probe bake");

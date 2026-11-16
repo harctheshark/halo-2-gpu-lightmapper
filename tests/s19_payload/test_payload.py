@@ -57,7 +57,7 @@ EXPECT_POST = {
     '_research/ao/dev_AO/gpu_bake.ps1': ('c15a00ddc67ec81dd049ac16bfbf9cd4', '888dccb7f3a29449af9489d6abb458ff'),   # 0.6.12 rc0612: P17 / P14 re-made on c15a00dd (0.6.11: 57152089 -> 282af452); 0.6.11 rc0611: P17 / P14 re-made on 57152089 (0.6.10: 14e8ee1b -> 9a202fb3); 0.6.10 rc0610: P17 / P14 re-made on 14e8ee1b (0.6.9: ff8de832 -> 8b0e2904); 0.6.9 rc069_a3: P17 / P14 re-made on ff8de832 (rc069_a2: b34c221e -> 4adb7566)
 }
 EXPECT_PATCHED = {
-    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', 'de71b68f65dadf2a3f2bdcf92438ac9b'),   # 1.0: + P5d (starts the stage's h2lm-bake.exe; --pwsh gone; P5..P5c = 21958cbd)
+    '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '935e56894847db4e4f7f02490c6f5e5b'),   # 1.4.0: + P5e (--reuse-lattice; P5..P5d = de71b68f); 1.0: + P5d (starts the stage's h2lm-bake.exe; --pwsh gone; P5..P5c = 21958cbd)
     # (0.6.8 entry follows)   # 0.6.8: + P5c (--farm under H2LM_FARMS; P5 + P5b = 3634172b); P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
     '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', '83513a379cca63ad1eef0d51e9b93f6b'),   # 1.0: + P6e (trace starts the engine's h2lm-bake.exe; P6..P6d = d73740c3)
     # (0.6.12b entry follows)   # P6 + P6b + P6c + P6d (0.6.12b: stage via the production native tag writer; P6..P6c = a8914dc8) (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
