@@ -38,6 +38,10 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>1.4.0: the engine's fixed share in its own fit test (vram_plan.h kEnvConstB = 2,440 + 256 MiB) and that test's margin (kEnvMargin).</summary>
         public const double EngineConstBytes = (2440.0 + 256.0) * 1048576.0;
         public const double EngineFitMargin = 1.03;
+        /// <summary>1.4.1: the engine's per-row / per-work-slot shares in that fit test (kEnvRowB / kEnvSlotB) and its small-card reserve (v388: kSmallFloorB / kSmallSafetyB).</summary>
+        public const double SmallFitRowBytes = 245.0, SmallFitSlotBytes = 40.0, SmallFloorBytes = 256.0 * 1048576.0, SmallSafetyBytes = 128.0 * 1048576.0;
+        /// <summary>1.4.1: the adapter is a small card in the engine's sense (see <see cref="Compute"/>): parts are cut to what the OS leaves free.</summary>
+        public bool SmallCard;
         public const long DefaultStoredPhotons = 5000000L;
         /// <summary>0.6.10: 1.5 GiB for Windows, the desktop and a browser -- the same reserve the engine uses (vram_plan.h kDesktopBytes / kHeadroomBytes; 0.6.9: 1 GiB).</summary>
         public const double DesktopReserveBytes = 1.5 * 1073741824.0;
@@ -169,7 +173,26 @@ namespace H2GpuLightmapper.Pipeline
                 // the card - 1.5 GiB) with NO rows at all: when even that fails (a 4 GB card reporting ~3.9 GiB) nothing can be baked. The engine then stops
                 // in the GPU phase and ITS message advises portals / a BSP split, which cannot help. Say what is true before the bake starts.
                 double engineFixed = (EngineConstBytes + (stored - 12.0e6) * BytesPerPhoton) * EngineFitMargin;
-                if (free <= 0 || v - DesktopReserveBytes < engineFixed)
+                // 1.4.1 (engine v388, vram_plan.h small_card): a card on which that rule cannot even fit a 1 M-row part is a SMALL CARD. The engine then takes the
+                // reserve for Windows and the desktop from what the OS really leaves (min(card - 256 MiB, the DXGI budget) - 128 MiB), not the flat 1.5 GiB, and
+                // cuts its parts to what fits. What this class can know beforehand is the same figure from the measured use of other programs.
+                bool smallCard = (1.0e6 * SmallFitRowBytes + 2.5e6 * SmallFitSlotBytes + EngineConstBytes) * EngineFitMargin > dedicated - DesktopReserveBytes;
+                if (smallCard)
+                {
+                    g.SmallCard = true;
+                    double usable = Math.Min(dedicated - SmallFloorBytes, dedicated - (double)(otherUseBytes ?? 0L)) - SmallSafetyBytes;
+                    double need = (1.0e6 * SmallFitRowBytes + 2.5e6 * SmallFitSlotBytes + EngineConstBytes + Math.Max(0.0, stored - 12.0e6) * BytesPerPhoton) * EngineFitMargin;
+                    string cardGiB = (dedicated / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB";
+                    if (usable < need)
+                        g.Notes.Add("WARNING this graphics card has too little free video memory for this bake: " + cardGiB + ", about "
+                                    + (Math.Max(0.0, usable) / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB of it free for the bake, and about "
+                                    + (need / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB is needed. Close other programs that use the graphics card (a browser, a game, a video player) and try again; "
+                                    + "if nothing else is using it, a card with more video memory is needed. The map is not the problem: portals or a BSP split do not help here.");
+                    else
+                        g.Notes.Add("WARNING small graphics card (" + cardGiB + " of video memory): the bake runs in many small parts and takes longer than on a larger card. "
+                                    + "Keep other programs that use the graphics card closed while it runs.");
+                }
+                else if (free <= 0 || v - DesktopReserveBytes < engineFixed)
                 {
                     double needGiB = (DesktopReserveBytes + Math.Max(engineFixed, BaseBytes + stored * BytesPerPhoton)) / 1073741824.0;
                     g.Notes.Add("WARNING this graphics card is too small for this bake: " + (v / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB of video memory, and about "

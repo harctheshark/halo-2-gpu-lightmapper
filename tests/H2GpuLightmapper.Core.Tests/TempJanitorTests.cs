@@ -26,7 +26,7 @@ namespace H2GpuLightmapper.Core.Tests
             yield return T("temp: reparse-safe delete: a junction to a sentinel folder is never followed (refuse / tripwire / unlink-only), the sentinel survives", JunctionSentinel);
             yield return T("temp: a .map run folder whose skeleton links point inside it is removed whole; a long (> 260 chars) tree is removed", MapRunInternalLinksAndLongPath);
             yield return T("temp: after a successful bake the farm is slimmed to its capture (engine product list), the logs go to RUN\\farm_logs; a map farm is deleted whole", AfterBakeSlim);
-            yield return T("temp: a failed bake keeps its stage in RUN\\failed; failed-run bundles are kept for the newest 3 runs only; tagbak for the newest 10 per map", FailedRunsKeep3);
+            yield return T("temp: a failed bake keeps its stage in RUN\\failed; failed-run bundles are kept for the newest 3 runs only; tagbak and final_stage for the newest 3 per map, the log bundle for the newest 10", FailedRunsKeep3);
             yield return T("temp: the capture cache keeps the newest 3 captures; the cap evicts the oldest first and never a live folder", CaptureCacheAndCap);
             yield return T("temp: start-up sweep: an orphan .lock goes at once, a live one stays; lock-less .map > 24 h / query > 1 h / farm without record > 24 h go; younger stay; a live GPU lock skips the sweep", SweepRules);
             yield return T("temp: Clean now empties Temp but keeps a live folder and the READ ME", CleanNowKeepsLive);
@@ -304,18 +304,33 @@ namespace H2GpuLightmapper.Core.Tests
             Assert.Eq(3, with.Count, "failed bundles are kept for 3 runs");
             Assert.Seq(dirs.Skip(2).ToList(), with, "the newest 3");
             Assert.True(dirs.All(d => File.Exists(Path.Combine(d, "status.json"))), "status.json always stays");
-            // tagbak: newest 10 per map label
+            // 1.4.1: per map label the copies of the lightmap (tagbak, final_stage) stay for the newest 3 runs, the log bundle for the newest 10
             for (int i = 0; i < 12; i++)
             {
                 string run = Path.Combine(runs, "202611" + i.ToString("D2") + "_010000_tb_y");
                 Directory.CreateDirectory(Path.Combine(run, RunFolder.BackupDirName));
                 File.WriteAllText(Path.Combine(run, RunFolder.BackupDirName, "a.bitmap"), "b");
+                Directory.CreateDirectory(Path.Combine(run, "final_stage"));
+                File.WriteAllText(Path.Combine(run, "final_stage", "a.bitmap"), "s");
+                Directory.CreateDirectory(Path.Combine(run, TempJanitor.FarmLogsDir, "farm_w256"));
+                File.WriteAllText(Path.Combine(run, TempJanitor.FarmLogsDir, "farm_w256", "gpu_bake.log"), "l");
+                File.WriteAllText(Path.Combine(run, "bake.log"), "log");
                 Final(run);
             }
+            // another map's runs are counted on their own
+            string other = Path.Combine(runs, "20261101_020000_tb_z");
+            Directory.CreateDirectory(Path.Combine(other, "final_stage"));
+            File.WriteAllText(Path.Combine(other, "final_stage", "a.bitmap"), "s");
+            Final(other);
             TempJanitor.PruneRuns(work);
-            var tb = Directory.GetDirectories(runs, "*_tb_y").Where(d => Directory.Exists(Path.Combine(d, RunFolder.BackupDirName))).ToList();
-            Assert.Eq(10, tb.Count, "tagbak kept for the newest 10 runs of the map");
+            Func<string, List<string>> with2 = sub => Directory.GetDirectories(runs, "*_tb_y").Where(d => Directory.Exists(Path.Combine(d, sub))).Select(d => Path.GetFileName(d)).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            var newest3 = new List<string> { "20261109_010000_tb_y", "20261110_010000_tb_y", "20261111_010000_tb_y" };
+            Assert.Seq(newest3, with2(RunFolder.BackupDirName), "tagbak kept for the newest 3 runs of the map");
+            Assert.Seq(newest3, with2("final_stage"), "final_stage kept for the newest 3 runs of the map");
+            Assert.Eq(10, with2(TempJanitor.FarmLogsDir).Count, "the log bundle kept for the newest 10 runs of the map");
             Assert.True(!Directory.Exists(Path.Combine(runs, "20261100_010000_tb_y", RunFolder.BackupDirName)), "the oldest lost its tagbak");
+            Assert.True(Directory.GetDirectories(runs, "*_tb_y").All(d => File.Exists(Path.Combine(d, "bake.log")) && File.Exists(Path.Combine(d, "status.json"))), "bake.log and status.json always stay");
+            Assert.True(Directory.Exists(Path.Combine(other, "final_stage")), "the only run of another map keeps its final_stage");
         }
 
         private static void CaptureCacheAndCap()

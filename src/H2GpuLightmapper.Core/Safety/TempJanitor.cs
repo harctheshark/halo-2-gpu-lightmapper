@@ -188,7 +188,10 @@ namespace H2GpuLightmapper.Core.Safety
 
     public static class TempJanitor
     {
-        public const int FailedBundlesKeep = 3, RunTagbakKeep = 10, UiKeepNewest = 5, AutoKeepNewest = 3;
+        /// <summary>1.4.1: the copies of the baked lightmap a run folder holds (its install backup tagbak\ and its staging folders, final_stage\
+        /// above all) are kept for the newest 3 runs of a map label (10 before: about 260 MB per run on a large map); the run's small log
+        /// bundle (farm_logs\) stays for the newest 10. _TAGBAK_ui (the original + the newest 5) is what Restore previous lightmap uses.</summary>
+        public const int FailedBundlesKeep = 3, RunTagbakKeep = 3, RunStageKeep = 3, RunLogsKeep = 10, UiKeepNewest = 5, AutoKeepNewest = 3;
         public const double OrphanMapHours = 24, OrphanQueryHours = 1, LeftoverFarmHours = 24;
         public const long MinFreeBytes = 8L << 30, DefaultFarmNeedBytes = 3L << 30;
         public const long LogFileCap = 5L << 20, LogTotalCap = 20L << 20;
@@ -619,8 +622,9 @@ namespace H2GpuLightmapper.Core.Safety
         // ================================================================== KEEP-side bounds: run bundles (5.3 / 5.6)
 
         /// <summary>
-        /// The run folders (WORK\standalone\runs\&lt;ts&gt;_&lt;label&gt;): the install backup (tagbak) and the heavy staging folders are kept for the
-        /// newest 10 runs of each map label; failed-run bundles (failed\) for the newest 3 runs that have one. bake.log / status.json always
+        /// The run folders (WORK\standalone\runs\&lt;ts&gt;_&lt;label&gt;): the install backup (tagbak) and the heavy staging folders (final_stage
+        /// and the probe folders: copies of the baked lightmap) are kept for the newest 3 runs of each map label, the log bundle (farm_logs)
+        /// for the newest 10; failed-run bundles (failed\) for the newest 3 runs that have one. bake.log / status.json always
         /// stay. A run that is not final, or whose backup an unfinished install marker names, is never touched.
         /// </summary>
         public static JanitorReport PruneRuns(string work)
@@ -634,18 +638,30 @@ namespace H2GpuLightmapper.Core.Safety
             {
                 try { var st = RunStatus.Load(d); return st == null || st.IsFinal; } catch (Exception) { return false; }
             };
-            var heavy = new[] { RunFolder.BackupDirName, RunFolder.LegacyBackupDirName, "final_stage", "probes", "probe_stage", "probe_stage_check", "live_ltmp", FarmLogsDir };
+            // 1.4.1: how many of a label's newest runs keep each heavy subfolder (10 for all of them before)
+            var heavy = new[]
+            {
+                new KeyValuePair<string, int>(RunFolder.BackupDirName, RunTagbakKeep), new KeyValuePair<string, int>(RunFolder.LegacyBackupDirName, RunTagbakKeep),
+                new KeyValuePair<string, int>("final_stage", RunStageKeep), new KeyValuePair<string, int>("probes", RunStageKeep),
+                new KeyValuePair<string, int>("probe_stage", RunStageKeep), new KeyValuePair<string, int>("probe_stage_check", RunStageKeep),
+                new KeyValuePair<string, int>("live_ltmp", RunStageKeep), new KeyValuePair<string, int>(FarmLogsDir, RunLogsKeep),
+            };
             foreach (var g in dirs.GroupBy(d => LabelOf(Path.GetFileName(d)), StringComparer.OrdinalIgnoreCase))
-                foreach (var d in g.Skip(RunTagbakKeep))
+            {
+                int idx = 0;
+                foreach (var d in g)
                 {
-                    if (!final(d)) continue;
+                    int i = idx++;
+                    if (i < Math.Min(RunTagbakKeep, Math.Min(RunStageKeep, RunLogsKeep)) || !final(d)) continue;
                     foreach (var h in heavy)
                     {
-                        string p = Path.Combine(d, h);
+                        if (i < h.Value) continue;
+                        string p = Path.Combine(d, h.Key);
                         if (!Directory.Exists(p) || spare.Contains(SafeFs.Norm(p))) continue;
-                        RemoveKeepSub(p, d, rep, "older than the newest " + RunTagbakKeep + " runs of " + g.Key);
+                        RemoveKeepSub(p, d, rep, "older than the newest " + h.Value + " runs of " + g.Key);
                     }
                 }
+            }
             foreach (var d in dirs.Where(d => Directory.Exists(Path.Combine(d, FailedDir))).Skip(FailedBundlesKeep))
                 if (final(d)) RemoveKeepSub(Path.Combine(d, FailedDir), d, rep, "failed-run bundles are kept for the newest " + FailedBundlesKeep + " runs");
             return rep;

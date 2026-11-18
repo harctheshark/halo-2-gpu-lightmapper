@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.4.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.4.1** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -59,6 +59,10 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
 - **Extra direct light samples (0.6.12, opt-in).** In Custom quality the sun, sky-light and surface-light passes can run several
   times and be averaged, which smooths grain in direct light (×4 halves it). Off by default: it is not the original tool's noise
   pattern.
+- **A much faster photon cast (1.4.1).** The step that casts the photons of sky and surface lights the way the original tool does takes
+  about 10 s on the test maps (it took 25-60 s), and a map with thousands of lights bakes in minutes (one with 6,485 lights: 1,288 s of
+  cast down to 82 s). Which triangle a photon hits now follows the original tool's own rules more closely.
+- **Cards with about 4 GB (1.4.1).** A 4 GB card used to be refused; it now bakes in more, smaller parts (checked with a pretend card only).
 - **Light probes in seconds (1.4.0).** The probe pass reuses the lightmap bake's capture, photon cast and lattice instead of making its own;
   the probe values are unchanged.
 - **Bump mapping closer to the CPU tool (0.6.11).** The per-vertex light direction (what drives bump mapping) now matches
@@ -375,7 +379,8 @@ These are open problems in this build.
    (it used to need 6-14 GB) and the main pass is cut into parts that fit, with 1.5 GiB kept free for Windows. With a pretend 8 GB
    or 6 GB card on the RTX 4090 every tested map baked with the same lightmap, but no real 6, 8 or 12 GB card has run it. Still
    needing more memory: a very large lightmap chart that cannot be split, and Custom quality above what the card holds (refused
-   before the bake, with the number of photons that fits). Cards under 6 GB are untested.
+   before the bake, with the number of photons that fits). Since 1.4.1 a card with about 4 GB is planned for as well (more,
+   smaller parts), checked with a pretend 3,935 MiB card only; no real card under 6 GB has run a bake.
 3. **Compatibility mode (DF64) is new and experimental.** GPUs without FP64 now run the engine's FP32 kernels instead of being
    refused. They matched full precision in testing, but only on an RTX 4090 with the mode forced on: **no real Intel or
    Qualcomm GPU and no Windows on ARM PC has run it**, and it may be slower. Please report what you see.

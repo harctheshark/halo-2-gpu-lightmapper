@@ -21,7 +21,7 @@ namespace H2GpuLightmapper.Tests
             yield return T("single 1.4.0 dry: Standard + probes on an engine with -KeepLattice / -ReuseLattice: ONE capture (SKY_HI on the lightmap bake), -KeepLattice last, the probe driver on worker N with --skip-capture --reuse-lattice, no probe worker; the opt-outs and the older engine keep two captures", DryPlan);
             yield return T("single 1.4.0 e2e: Standard on triplicate bakes with one capture (the probe bake reuses the kept lattice), installs the SH tag; the reuse bake does it again on the probe-ready capture; Lightprobes only + reuse takes the lightmap worker's capture", EndToEnd);
             yield return T("wide fill 1.4.0 dry: --fill-wide-holes = -FillWideHoles 16 on the lightmap bake (before -KeepLattice), the note and the option in the plan; refused on an engine without the parameter; no effect (a warning) in Lightprobes mode; unticked plans never mention it", WideFill);
-            yield return T("small card 1.4.0 dry: a card under the engine's fixed need (3,935 MiB) gets the plain 'too small' warning, 4 GB the tight-memory one, 8 GB neither", SmallCard);
+            yield return T("small card 1.4.1 dry: a 4 GB card (3,935 / 4,096 MiB) is a small card baked in small parts; 3,000 MiB is told the card has too little free memory; 6 and 8 GB get neither", SmallCard);
         }
 
         private const string Cyc = @"scenarios\multi\cyclotron\cyclotron";
@@ -154,12 +154,16 @@ namespace H2GpuLightmapper.Tests
             var r = C.NewRoot();
             Func<string, List<string>> warn = mb => C.DryJson(r, "--scenario", Cyc, "--bsp", "cyclotron", "--mode", "lightmap", "--assume-vram-mb", mb).Json().Arr("warnings").Cast<string>().ToList();
             var w39 = warn("3935");
-            Assert.True(w39.Any(w => w.Contains("too small for this bake") && w.Contains("ignore it here")), "3,935 MiB: the plain warning: " + string.Join(" | ", w39));
-            Assert.True(!w39.Any(w => w.Contains("very little free memory")), "3,935 MiB: not the tight-memory wording as well");
+            Assert.True(w39.Any(w => w.Contains("small graphics card") && w.Contains("many small parts")), "3,935 MiB (1.4.1): a small card is baked in small parts, and the plan says so: " + string.Join(" | ", w39));
+            Assert.True(!w39.Any(w => w.Contains("too small for this bake") || w.Contains("too little free video memory") || w.Contains("very little free memory")), "3,935 MiB: no refusal wording");
             var w40 = warn("4096");
-            Assert.True(!w40.Any(w => w.Contains("too small for this bake")) && w40.Any(w => w.Contains("very little free memory")), "4,096 MiB: the engine's fit test passes with no rows to spare: the tight-memory warning: " + string.Join(" | ", w40));
+            Assert.True(w40.Any(w => w.Contains("small graphics card")) && !w40.Any(w => w.Contains("too little free video memory")), "4,096 MiB: the same: " + string.Join(" | ", w40));
+            var w30 = warn("3000");
+            Assert.True(w30.Any(w => w.Contains("too little free video memory") && w.Contains("portals or a BSP split do not help")), "3,000 MiB: the engine alone does not fit: " + string.Join(" | ", w30));
+            var w60 = warn("6144");
+            Assert.True(!w60.Any(w => w.Contains("small graphics card") || w.Contains("too little free video memory") || w.Contains("too small for this bake")), "6 GB: not a small card: " + string.Join(" | ", w60));
             var w80 = warn("8192");
-            Assert.True(!w80.Any(w => w.Contains("too small for this bake") || w.Contains("very little free memory")), "8 GB: neither");
+            Assert.True(!w80.Any(w => w.Contains("small graphics card") || w.Contains("too small for this bake") || w.Contains("very little free memory")), "8 GB: none of them");
         }
 
         private static void EndToEnd()
