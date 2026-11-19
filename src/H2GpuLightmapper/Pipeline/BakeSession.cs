@@ -209,6 +209,19 @@ namespace H2GpuLightmapper.Pipeline
             lock (_lock) { if (_emptyInst != null) return; _emptyInst = m; }
             Say("  WARNING: " + m.EmptyInstanceWarning());
         }
+        /// <summary>1.4.2: the scenario's structure-bsp entry references a lightmap under another name or folder than the one this bake writes; the tag
+        /// writer repoints it (engine_v390), so the bake's backup takes the .scenario too.</summary>
+        private bool _scenarioRepoint;
+
+        private void NoteLightmapRef(MapInfo m)
+        {
+            // a .map bake's inner bake (Overlay): the overlay is not installed anywhere; MapBakeSession says what happens to the map's own lightmap tag
+            if (m == null || _set == null || _scenarioRepoint || _so.Overlay != null) return;
+            string note = m.LightmapRepointNote(_set.ScenarioRel, _set.Bsp);
+            if (note == null) return;
+            _scenarioRepoint = true;
+            Say("  NOTE: " + note);
+        }
         /// <summary>The live tags were written by this run (the shell's install, or gpu_bake -WriteBack's [4b] / [4]).</summary>
         private bool _installed;
         // 0.6.8 bounded temp: this bake's hold on its Temp farm folders (.lock + sentinel); a vanished folder fails the run with
@@ -643,7 +656,8 @@ namespace H2GpuLightmapper.Pipeline
                     else if (!_map.Ok) Refuse("the map query failed: " + (_map.Error ?? _map.PointsError));
                     NoteEmptyInstances(_map);       // 1.0: instanced geometry with no visible geometry: a warning only, the bake goes on
                     if (_bspFromScenario) ResolveBspFromScenario(_map);
-                    if (!needQuery) _map = null;        // Lightmap Only: the query only located the BSP; the probe / lightmap facts stay unread as before
+                    NoteLightmapRef(_map);          // 1.4.2: a lightmap reference to another name / folder is repointed by the bake: say so, back the scenario up
+                    if (!needQuery) _map = null;       // Lightmap Only: the query only located the BSP; the probe / lightmap facts stay unread as before
                 }
                 if (needQuery && !dry)
                 {
@@ -1320,7 +1334,7 @@ namespace H2GpuLightmapper.Pipeline
         private void DoBackup(PlanStep s)
         {
             var kind = s.Params.Str("kind") == "LtmpOnly" ? BackupKind.LtmpOnly : BackupKind.LightmapSet;
-            try { _backup = TagBackup.Create(_work, _set, kind, _so.Now ?? DateTime.Now); }
+            try { _backup = TagBackup.Create(_work, _set, kind, _so.Now ?? DateTime.Now, null, _scenarioRepoint); }
             catch (IOException e) when (IsSharingViolation(e))
             {
                 // R1 fix (V6 finding H1): a set file opened by another program between the preflight check and the backup gave a
@@ -1329,7 +1343,8 @@ namespace H2GpuLightmapper.Pipeline
             }
             Run.Status.BackupDir = _backup.Dir;
             Run.SetStep(StepId.Backup);
-            Run.Shell("backed up " + _backup.Files.Count + " file(s) to " + _backup.Dir + (_backup.FirstBake ? " (first bake of this BSP: the .scenario is included)" : "")
+            Run.Shell("backed up " + _backup.Files.Count + " file(s) to " + _backup.Dir + (_backup.FirstBake ? " (first bake of this BSP: the .scenario is included)"
+                                                                                               : _backup.ScenarioIncluded ? " (the .scenario is included: its lightmap reference will be repointed)" : "")
                       + (_backup.RadianceMd5.Count > 0 ? "; " + _backup.RadianceMd5.Count + " radiance bitmap md5(s) recorded" : ""));
         }
 
@@ -1901,7 +1916,7 @@ namespace H2GpuLightmapper.Pipeline
             {
                 string dirRel = Path.GetDirectoryName(_set.ScenarioRel) ?? "";
                 var rels = written.Where(n => !n.StartsWith(_set.Prefix, StringComparison.OrdinalIgnoreCase)).Select(n => Path.Combine(dirRel, n)).ToList();
-                if (_backup != null && _backup.FirstBake && !rels.Any()) rels.Add(_set.ScenarioRel + ".scenario");
+                if (_backup != null && (_backup.FirstBake || _backup.ScenarioIncluded) && !rels.Any()) rels.Add(_set.ScenarioRel + ".scenario");
                 if (rels.Count > 0)
                     foreach (var w in new[] { plan.Worker, plan.ProbeWorker }.Where(x => x.HasValue))
                         if (CaptureRecord.RestampFiles(BakePlanner.FarmDir(Farms, w.Value), _root, rels))

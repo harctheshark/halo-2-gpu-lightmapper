@@ -59,6 +59,8 @@ namespace H2GpuLightmapper.Core.Safety
         public string Dir;
         public BackupKind Kind;
         public bool FirstBake;
+        /// <summary>1.4.2: the .scenario is one of <see cref="Files"/> (a first bake, or a bake that repoints the scenario's lightmap reference).</summary>
+        public bool ScenarioIncluded;
         public List<KeyValuePair<string, string>> Files = new List<KeyValuePair<string, string>>();   // name -> md5
         public Dictionary<string, string> RadianceMd5 = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // full path -> md5
         public List<string> ExistedNames = new List<string>();
@@ -74,8 +76,11 @@ namespace H2GpuLightmapper.Core.Safety
         /// Backs up the set before a bake. LightmapSet: every non-radiance set file (+ the .scenario when the BSP has no
         /// lightmap yet = first bake; the install will add the lightmap reference to it). LtmpOnly (Lightprobes mode): the
         /// .scenario_structure_lightmap only. Throws (nothing baked) when any copy does not verify.
+        /// 1.4.2: <paramref name="scenarioWillChange"/> = the bake will also rewrite the .scenario although the BSP has a lightmap here already (its
+        /// structure-bsp entry references a lightmap under another name or folder, which the tag writer repoints): the .scenario joins a LightmapSet
+        /// backup then too, so "Restore previous lightmap" puts the old reference back with the old files.
         /// </summary>
-        public static BackupResult Create(string work, TagSet set, BackupKind kind, DateTime now, IEnumerable<string> explicitNames = null)
+        public static BackupResult Create(string work, TagSet set, BackupKind kind, DateTime now, IEnumerable<string> explicitNames = null, bool scenarioWillChange = false)
         {
             var present = set.PresentNames();
             var res = new BackupResult { Kind = kind, ExistedNames = present };
@@ -85,8 +90,9 @@ namespace H2GpuLightmapper.Core.Safety
             if (explicitNames != null) copy.AddRange(explicitNames.Where(n => File.Exists(Path.Combine(set.TagDir, n))).Distinct(StringComparer.OrdinalIgnoreCase));
             else if (kind == BackupKind.LtmpOnly) copy.AddRange(present.Where(n => string.Equals(n, set.LtmpName, StringComparison.OrdinalIgnoreCase)));
             else copy.AddRange(present.Where(n => !TagSet.IsRadiance(n)));
-            bool withScenario = explicitNames == null && kind == BackupKind.LightmapSet && res.FirstBake && File.Exists(set.ScenarioFile);
+            bool withScenario = explicitNames == null && kind == BackupKind.LightmapSet && (res.FirstBake || scenarioWillChange) && File.Exists(set.ScenarioFile);
             if (withScenario) copy.Add(Path.GetFileName(set.ScenarioFile));
+            res.ScenarioIncluded = withScenario;
             string ts = now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
             string leafName = set.Leaf + "_" + set.Bsp + "_" + (kind == BackupKind.BeforeRestore ? "before_restore_" : "") + ts;
             Directory.CreateDirectory(UiRoot(work));

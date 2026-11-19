@@ -254,6 +254,19 @@ namespace H2GpuLightmapper.Core.Tests
             var g = FakeTags.Make("bk2");
             var l = TagBackup.Create(g.Work, g.Set, BackupKind.LtmpOnly, DateTime.Now);
             Assert.Eq("fake_fake_lightmap.scenario_structure_lightmap", l.Files.Single().Key, "LtmpOnly");
+            // 1.4.2: a bake that will repoint the scenario's lightmap reference backs the .scenario up although the BSP has a lightmap here already
+            Assert.True(b.ScenarioIncluded, "first bake: ScenarioIncluded");
+            Assert.True(!l.ScenarioIncluded, "LtmpOnly: no scenario");
+            var h = FakeTags.Make("bk3");
+            var plain = TagBackup.Create(h.Work, h.Set, BackupKind.LightmapSet, new DateTime(2026, 11, 18, 9, 0, 0));
+            Assert.True(!plain.FirstBake && !plain.ScenarioIncluded && !plain.Files.Any(x => x.Key == "fake.scenario"), "a rebake: the scenario is not copied");
+            var rp = TagBackup.Create(h.Work, h.Set, BackupKind.LightmapSet, new DateTime(2026, 11, 18, 9, 1, 0), null, true);
+            Assert.True(!rp.FirstBake && rp.ScenarioIncluded, "repoint: not a first bake, the scenario is included");
+            Assert.Eq("fake.scenario,fake_fake_lightmap.scenario_structure_lightmap,fake_fake_lightmap_bitmaps.bitmap,fake_fake_lightmap_truecolor_bitmaps.bitmap",
+                string.Join(",", rp.Files.Select(x => x.Key).OrderBy(x => x, StringComparer.Ordinal)), "repoint: the set + the scenario");
+            Assert.Eq(h.Md5("fake.scenario"), SafeFs.Md5File(Path.Combine(rp.Dir, "fake.scenario")), "the scenario copy is verified");
+            var lo = TagBackup.Create(h.Work, h.Set, BackupKind.LtmpOnly, new DateTime(2026, 11, 18, 9, 2, 0), null, true);
+            Assert.True(!lo.ScenarioIncluded && lo.Files.Count == 1, "LtmpOnly never takes the scenario");
         }
 
         // ------------------------------------------------------------------ install

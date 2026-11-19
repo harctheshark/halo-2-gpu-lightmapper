@@ -48,7 +48,45 @@ namespace H2GpuLightmapper.Pipeline
         public int? Clusters;
         /// <summary>1.0: why the selected BSP could not be read for the empty-instance check (null when it was, or when no BSP was asked about).</summary>
         public string BspError;
+        /// <summary>1.4.2: per structure_bsps entry of the scenario that names a BSP, in order: the BSP's tag path and the lightmap tag path the entry
+        /// references now ("" = none yet). Two lists of the same length; both empty for an older payload's query.</summary>
+        public List<string> LtmpBsps = new List<string>(), LtmpRefs = new List<string>();
         public bool Ok { get { return Error == null && PointsError == null; } }
+
+        /// <summary>1.4.2: the lightmap tag path the scenario references for the BSP named <paramref name="bsp"/> (its tag's leaf name, case ignored):
+        /// "" when the entry has no lightmap yet, null when the scenario has no such entry, more than one, or the query did not report it.</summary>
+        public string LightmapRefOf(string bsp)
+        {
+            if (string.IsNullOrEmpty(bsp) || LtmpBsps == null || LtmpRefs == null || LtmpBsps.Count != LtmpRefs.Count) return null;
+            var hit = Enumerable.Range(0, LtmpBsps.Count)
+                .Where(i => string.Equals(LtmpBsps[i].Replace('/', '\\').Split('\\').Last(), bsp, StringComparison.OrdinalIgnoreCase)).ToList();
+            return hit.Count == 1 ? LtmpRefs[hit[0]] : null;
+        }
+
+        /// <summary>1.4.2: the lightmap tag path a bake of this scenario and BSP writes: the scenario's folder + "&lt;scenario&gt;_&lt;bsp&gt;_lightmap"
+        /// (the original tool's own naming).</summary>
+        public static string BakedLightmapRef(string scenarioRel, string bsp)
+        {
+            string s = (scenarioRel ?? "").Replace('/', '\\').Trim('\\');
+            int k = s.LastIndexOf('\\');
+            string leaf = k < 0 ? s : s.Substring(k + 1);
+            return (k < 0 ? "" : s.Substring(0, k + 1)) + leaf + "_" + bsp + "_lightmap";
+        }
+
+        /// <summary>1.4.2: what a bake says when the scenario's entry for this BSP references a lightmap under ANOTHER name or folder than the one the
+        /// bake writes (a scenario copied from another map; a lightmap made under an older name): the bake points the scenario at the new lightmap, as
+        /// the original tool's own write-back does, and leaves the old lightmap tag alone. null = nothing to say (no reference yet, the same
+        /// reference, or not known).</summary>
+        public string LightmapRepointNote(string scenarioRel, string bsp)
+        {
+            string cur = LightmapRefOf(bsp);
+            if (string.IsNullOrEmpty(cur)) return null;
+            string want = BakedLightmapRef(scenarioRel, bsp);
+            if (string.Equals(cur.Replace('/', '\\').Trim('\\'), want, StringComparison.OrdinalIgnoreCase)) return null;
+            return "the scenario's lightmap reference for this BSP points at " + cur + ", not at the lightmap this bake writes (" + want
+                 + "). The bake points the scenario at the new lightmap, as the original tool does; the old lightmap tag is left as it is, and the "
+                 + "scenario is part of this bake's backup";
+        }
 
         public const int EmptyInstanceNamesShown = 5;
 
@@ -92,7 +130,7 @@ namespace H2GpuLightmapper.Pipeline
             "sys.dont_write_bytecode = True",
             "tagio, scen, bsp, ltmp = sys.argv[1:5]",
             "sys.path.insert(0, tagio)",
-            "out = {'bsps': [], 'bspRefs': [], 'points': None, 'pointsError': None, 'ltmpExists': os.path.exists(ltmp), 'envs': None, 'groups': None, 'envsError': None, 'emptyInstances': None, 'clusters': None, 'bspError': None}",
+            "out = {'bsps': [], 'bspRefs': [], 'points': None, 'pointsError': None, 'ltmpExists': os.path.exists(ltmp), 'envs': None, 'groups': None, 'envsError': None, 'emptyInstances': None, 'clusters': None, 'bspError': None, 'ltmpBsps': [], 'ltmpRefs': []}",
             "try:",
             "    import lmw_tagio as T",
             "except Exception as e:",
@@ -114,6 +152,19 @@ namespace H2GpuLightmapper.Pipeline
             "        out['points'] = sum(1 for p, o, t, s in W.fields if pat.match(p))",
             "except Exception as e:",
             "    out['pointsError'] = '%s: %s' % (type(e).__name__, e)",
+            // 1.4.2: the lightmap each structure_bsps entry references now (two lists of the same length: the entry's BSP tag path and its lightmap
+            // tag path, '' when it has none yet), read the way the tag writer reads it; never fails the query
+            "try:",
+            "    by = {}",
+            "    for r in W.tagrefs:",
+            "        q = T.npath(r.path)",
+            "        if '.' in q: by.setdefault(q.rsplit('.', 1)[0], {})[q.rsplit('.', 1)[1]] = r",
+            "    for f in by.values():",
+            "        if 'structure bsp' in f and 'structure lightmap' in f and f['structure bsp'].name:",
+            "            out['ltmpBsps'].append(f['structure bsp'].name.replace('/', chr(92)))",
+            "            out['ltmpRefs'].append((f['structure lightmap'].name or '').replace('/', chr(92)))",
+            "except Exception as e:",
+            "    out['ltmpBsps'] = []; out['ltmpRefs'] = []",
             "if out['ltmpExists']:",
             "    try:",
             "        L = T.Walk(open(ltmp, 'rb').read(), 'ltmp', keep_fields=True)",
@@ -196,6 +247,14 @@ namespace H2GpuLightmapper.Pipeline
             if (ei != null) mi.EmptyInstances = ei.OfType<string>().ToList();
             mi.Clusters = j.Int("clusters");
             mi.BspError = j.Str("bspError");
+            // 1.4.2: absent in an older payload's result (empty lists)
+            var lb = j.Arr("ltmpBsps");
+            var lr = j.Arr("ltmpRefs");
+            if (lb != null && lr != null && lb.Count == lr.Count)
+            {
+                mi.LtmpBsps = lb.Select(x => x as string ?? "").ToList();
+                mi.LtmpRefs = lr.Select(x => x as string ?? "").ToList();
+            }
             return mi;
         }
 

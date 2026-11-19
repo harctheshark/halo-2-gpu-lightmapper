@@ -581,6 +581,15 @@ namespace H2GpuLightmapper.Pipeline
             // 1.0: instanced geometry with no visible geometry (a % object holding only +portal faces): a warning only, the bake goes on
             string emptyWarn = mq.EmptyInstanceWarning();
             if (emptyWarn != null) Say("  WARNING: " + emptyWarn);
+            // 1.4.2: the lightmap tag the map's scenario pairs with this BSP. A map can only have an existing lightmap REPLACED (tag indices are kept), so when
+            // the map names it differently from the bake (another folder: 03b_newmombasa's earthcity_cine_intro_bsp uses 03a_oldmombasa's lightmap), the
+            // baked lightmap is injected under the map's own name (mapbake inject --map-lightmap). The overlay's scenario reference is the bake's business.
+            string mapLtmp = mq.Ok ? mq.LightmapRefOf(_bsp) : null;
+            string ownLtmp = MapInfo.BakedLightmapRef(_scenarioRel, _bsp);
+            if (!string.IsNullOrEmpty(mapLtmp) && !string.Equals(mapLtmp.Replace('/', '\\').Trim('\\'), ownLtmp, StringComparison.OrdinalIgnoreCase))
+                Say("  lightmap tag: the map names this BSP's lightmap " + mapLtmp + " (a bake of the scenario would name it " + ownLtmp + "): the baked lightmap replaces "
+                    + "the map's tag under its own name");
+            else mapLtmp = null;
             bool probeWorker = BakePlanner.NeedsProbes(_o, points);
             Say("  light probes: the BSP has " + points + " probe point(s)" + (_o.Mode == BakeMode.Lightmap && points > 0 ? " -- Lightmap Only RESETS them to zero in the output map (as `tool lightmaps` does)" :
                 points > 0 && probeWorker ? " -- baked as for a scenario" : ""));
@@ -662,6 +671,7 @@ namespace H2GpuLightmapper.Pipeline
             Phased(_vista && _o.VistaOut ? "Injecting the lightmap, validating, and converting the result back to Vista (a few minutes) ..." : "Injecting the lightmap into a copy of the map and validating it ...");
             var ia = new List<string> { "--map", _mapPath, "--run", _runDir, "--stage", stage, "--scenario", _scenarioRel, "--bsp", _bsp, "--out", _outPath, "--report", Path.Combine(logs, "inject_result.json") };
             if (_bspRel != null) { ia.Add("--bsp-rel"); ia.Add(_bspRel); }
+            if (mapLtmp != null) { ia.Add("--map-lightmap"); ia.Add(mapLtmp); }
             if (_o.Mode == BakeMode.Probes) ia.Add("--ltmp-only");
             if (_vista) { ia.Add("--vista-out"); ia.Add(_o.VistaOut ? "yes" : "no"); }
             var ir2 = RunMapbake("inject", ia, InjectTimeoutMs);
@@ -696,7 +706,15 @@ namespace H2GpuLightmapper.Pipeline
             if (bnp != null) Refuse(bnp);
             string scen = _query.Scenario ?? "";
             if (!string.Equals(BakeOptions.BspFolder(_bspRel), BakeOptions.BspFolder(scen), StringComparison.OrdinalIgnoreCase))
-                Refuse("this map's BSP '" + _bsp + "' lives in another folder than its scenario (" + BakeOptions.BspFolder(_bspRel) + "); that layout is not supported for a .map bake yet");
+            {
+                // 1.4.2: a BSP in another folder than the scenario (03b_newmombasa -> 03a_oldmombasa\earthcity_cine_intro_bsp) bakes as it does for a scenario
+                // (0.6.4 cross-folder BSP: the overlay holds the map's BSP tag at its own path, gpu_bake resolves it from the scenario's structure_bsps); the
+                // injection replaces the map's BSP tag at that path (mapbake inject --bsp-rel). It was refused before.
+                string why = _host.CrossFolderBspWhy(_o);
+                if (why != null) Refuse("this map's BSP '" + _bsp + "' lives in another folder than its scenario (" + BakeOptions.BspFolder(_bspRel) + "): " + why);
+                Say("  BSP tag: " + _bspRel + " -- in another folder than the scenario (" + BakeOptions.BspFolder(scen) + "), as the map has it");
+                return;
+            }
             _bspRel = null;      // beside the scenario: the plain name is all gpu_bake needs
         }
 

@@ -772,8 +772,16 @@ def cmd_inject(a):
     src_bsp = os.path.join(run, 'tags_x', bsp_rel + '.scenario_structure_bsp')
     if not os.path.isfile(lp(src_bsp)):
         raise MapbakeError('the structure bsp %s read from the map is missing' % src_bsp)
+    # 1.4.2: the lightmap tag the map pairs with this BSP may have another name / folder than the bake's (03b_newmombasa's earthcity_cine_intro_bsp uses
+    # 03a_oldmombasa\03a_oldmombasa_earthcity_cine_intro_bsp_lightmap). A map's lightmap can only be REPLACED (the injector keeps tag indices), so the
+    # baked lightmap is injected under the map's own name (--map-lightmap, from the app's query of the map's scenario); its true-colour bitmap keeps
+    # the bake's name (added when the map has no tag of that name).
+    own_lm = (folder + BS if folder else '') + lm_base
+    lm_tag = (a.map_lightmap or '').replace('/', BS).strip(BS) or own_lm
+    if lm_tag.lower() != own_lm.lower():
+        say('the map names this BSP\'s lightmap %s: the baked lightmap (%s) replaces it under that name' % (lm_tag, own_lm))
     files = {bsp_rel + '.scenario_structure_bsp': src_bsp,
-             (folder + BS if folder else '') + ltmp_name: os.path.join(stage, ltmp_name)}
+             lm_tag + '.scenario_structure_lightmap': os.path.join(stage, ltmp_name)}
     if not ltmp_only:
         files[(folder + BS if folder else '') + tc_name] = os.path.join(stage, tc_name)
     for rel, src in files.items():
@@ -786,7 +794,7 @@ def cmd_inject(a):
         os.remove(out_tmp)
     rep_json = os.path.join(logs, 'write_report.json')
     fw = lambda p: p.replace(BS, '/')                                              # noqa: E731  (h2conv takes tag paths with forward slashes from a shell)
-    args = [a.map, inj, out_tmp, '--bsp', fw(bsp_rel), '--lightmap', fw((folder + BS if folder else '') + lm_base), '--scnr-clusters', 'keep', '--shift-align', '0',
+    args = [a.map, inj, out_tmp, '--bsp', fw(bsp_rel), '--lightmap', fw(lm_tag), '--scnr-clusters', 'keep', '--shift-align', '0',
             '--report', rep_json, '--overwrite', '--force-output-dir']      # the run folder lives under the work folder inside the H2EK: h2conv refuses that by default
     if vista_in:
         args += ['--work-dir', os.path.join(run, 'h2work')]                        # the reverse conversion (Vista -> MCC) already made is reused from here
@@ -1091,6 +1099,7 @@ def main(argv=None):
     p = sub.add_parser('inject')
     p.add_argument('--map', required=True); p.add_argument('--run', required=True); p.add_argument('--stage', required=True)
     p.add_argument('--scenario', required=True); p.add_argument('--bsp', required=True); p.add_argument('--bsp-rel'); p.add_argument('--out', required=True); p.add_argument('--report')
+    p.add_argument('--map-lightmap', help='the lightmap tag the map pairs with the BSP when it is not <scenario folder>\\<scenario>_<bsp>_lightmap (1.4.2)')
     p.add_argument('--ltmp-only', action='store_true'); p.add_argument('--vista-out', choices=('yes', 'no'), default='no'); p.add_argument('--vista-name')
     p.set_defaults(fn=cmd_inject)
     p = sub.add_parser('validate')

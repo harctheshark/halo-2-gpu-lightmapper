@@ -1225,6 +1225,24 @@ namespace H2GpuLightmapper.Tests
             var bad = MapQuery.Parse(new[] { "Traceback..." }, 1, "boom");
             Assert.True(!bad.Ok && bad.Error.Contains("boom"), "no result line");
             Assert.True(MapQuery.Code.IndexOf('"') < 0, "the snippet has no double quote (argv-safe)");
+            // 1.4.2: the lightmap each structure_bsps entry references; a reference to another name / folder is repointed by the bake
+            Assert.True(mi.LtmpBsps.Count == 0 && mi.LightmapRefOf("a") == null && mi.LightmapRepointNote(@"scenarios\multi\a\a", "a") == null, "an old-format result: not known, no note");
+            Assert.Eq(@"scenarios\custom\gpu\bm\bm_bm_lightmap", MapInfo.BakedLightmapRef(@"scenarios/custom/gpu/bm/bm.scenario".Replace(".scenario", ""), "bm"), "the baked lightmap's tag path");
+            Assert.Eq("s_b_lightmap", MapInfo.BakedLightmapRef("s", "b"), "a scenario at the tags root");
+            Func<string, string, MapInfo> lm = (bsps, refs) => MapQuery.Parse(new[] { "MAPQUERY {\"bsps\": [], \"points\": 0, \"pointsError\": null, \"ltmpExists\": false, \"ltmpBsps\": [" + bsps + "], \"ltmpRefs\": [" + refs + "]}" }, 0, "");
+            var other = lm("\"scenarios\\\\custom\\\\gpu\\\\bm\\\\bm\", \"scenarios\\\\custom\\\\gpu\\\\bm\\\\bm_b\"", "\"scenarios\\\\multi\\\\bm\\\\bm_bm_lightmap\", \"\"");
+            Assert.Eq(@"scenarios\multi\bm\bm_bm_lightmap", other.LightmapRefOf("BM"), "the entry's reference (BSP name: case ignored)");
+            Assert.Eq("", other.LightmapRefOf("bm_b"), "an entry without a lightmap yet");
+            Assert.True(other.LightmapRefOf("nope") == null && other.LightmapRefOf("") == null, "no such entry / no BSP");
+            string note = other.LightmapRepointNote(@"scenarios\custom\gpu\bm\bm", "bm");
+            Assert.True(note != null && note.Contains(@"scenarios\multi\bm\bm_bm_lightmap") && note.Contains(@"scenarios\custom\gpu\bm\bm_bm_lightmap") && note.Contains("as the original tool does"), "another folder: the note names both paths: " + note);
+            Assert.True(other.LightmapRepointNote(@"scenarios\custom\gpu\bm\bm", "bm_b") == null, "no lightmap yet (a first bake): no note");
+            var same = lm("\"scenarios\\\\multi\\\\bm\\\\bm\"", "\"SCENARIOS\\\\multi\\\\BM\\\\bm_bm_lightmap\"");
+            Assert.True(same.LightmapRepointNote(@"scenarios\multi\bm\bm", "bm") == null, "the same reference (case ignored): no note");
+            var twice = lm("\"a\\\\bm\", \"b\\\\bm\"", "\"x\", \"y\"");
+            Assert.True(twice.LightmapRefOf("bm") == null && twice.LightmapRepointNote("a\\s", "bm") == null, "two entries name the BSP: not decided here");
+            Assert.True(lm("\"a\\\\bm\"", "").LtmpBsps.Count == 0, "lists of different length are not taken");
+            Assert.Contains(MapQuery.Code, "out['ltmpRefs'].append", "the snippet collects the lightmap references");
         }
 
         // ------------------------------------------------------------------ 1.0: empty instanced geometry (a % object holding only +portal faces)
@@ -1309,6 +1327,16 @@ namespace H2GpuLightmapper.Tests
             Assert.Eq(0, mi.EmptyInstances.Count, "no empty instanced geometry");
             Assert.True(mi.Clusters.HasValue && mi.Clusters.Value > 1, "clusters counted: " + mi.Clusters);
             Assert.True(mi.EmptyInstanceWarning() == null, "no warning");
+            // 1.4.2: the query reports the lightmap the scenario's entry references; a baked production map references the lightmap a bake writes
+            Assert.True(mi.LtmpBsps.Count >= 1 && mi.LtmpBsps.Count == mi.LtmpRefs.Count, "lightmap references reported: " + mi.LtmpBsps.Count);
+            string lref = mi.LightmapRefOf("cyclotron");
+            Assert.True(lref != null, "the cyclotron entry's lightmap reference was read");
+            if (lref.Length > 0)
+            {
+                Assert.Eq(MapInfo.BakedLightmapRef(@"scenarios\multi\cyclotron\cyclotron", "cyclotron").ToLowerInvariant(), lref.ToLowerInvariant(), "it is the lightmap a bake writes");
+                Assert.True(mi.LightmapRepointNote(@"scenarios\multi\cyclotron\cyclotron", "cyclotron") == null, "no repoint note");
+                Assert.True(mi.LightmapRepointNote(@"scenarios\custom\copy\cyclotron", "cyclotron") != null, "seen from a copy in another folder: the note");
+            }
             // a BSP the scenario does not reference: an error string, the query still ok
             var other = RunMq(scen, "no_such_bsp");
             Assert.True(other.Ok && other.BspError != null && other.EmptyInstances.Count == 0 && other.Clusters == null, "unknown BSP: error string, ok: " + other.BspError);

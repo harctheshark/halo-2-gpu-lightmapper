@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.4.1** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.4.2** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -59,6 +59,10 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
 - **Extra direct light samples (0.6.12, opt-in).** In Custom quality the sun, sky-light and surface-light passes can run several
   times and be averaged, which smooths grain in direct light (×4 halves it). Off by default: it is not the original tool's noise
   pattern.
+- **Ambient occlusion with a copied scenario (1.4.2).** A scenario whose lightmap reference still names another map's lightmap is
+  repointed to the new lightmap (as the original tool does) instead of losing ambient occlusion and light probes; restore puts it back.
+- **Photons on scenery as the original tool casts them (1.4.2).** On the test maps the photon cast now matches the original tool's
+  own cast photon for photon.
 - **A much faster photon cast (1.4.1).** The step that casts the photons of sky and surface lights the way the original tool does takes
   about 10 s on the test maps (it took 25-60 s), and a map with thousands of lights bakes in minutes (one with 6,485 lights: 1,288 s of
   cast down to 82 s). Which triangle a photon hits now follows the original tool's own rules more closely.
