@@ -89,7 +89,7 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>Does it use the lightmap worker N? (everything but Probes mode)</summary>
         public static bool NeedsLightmapWorker(BakeOptions o) { return o.Mode != BakeMode.Probes; }
         /// <summary>Does it need the map query (probe points / environments)? (Standard and Probes)</summary>
-        public static bool NeedsMapQuery(BakeOptions o) { return o.Mode != BakeMode.Lightmap && o.Mode != BakeMode.AoOnly; }
+        public static bool NeedsMapQuery(BakeOptions o) { return o.Mode != BakeMode.Lightmap && o.Mode != BakeMode.AoOnly && o.Mode != BakeMode.SeamStitch; }
 
         /// <summary>INST-relative bake program (h2lm-bake.exe) for the quality: Custom uses engine_custom (N3 guarded fullgpu) when the payload has it.</summary>
         public static string GpuBakeRel(BakeOptions o, PayloadManifest m)
@@ -123,6 +123,9 @@ namespace H2GpuLightmapper.Pipeline
             // W2 (0.6.3): "2004 Exact Vertex Lighting?": the engine's opt-in switch (lm_tagwriter --exact-vertex-lighting). Every gpu_bake the plan
             // builds writes the direct-writer stage, so every one gets it; unticked = no byte of the argv changes.
             if (o.ExactVertexLighting) a.Add("-ExactVertexLighting");
+            // 1.5 "Stitch lightmap seams (Experimental)": the engine's opt-in switch (lm_tagwriter --stitch-seams). Every gpu_bake writes the direct-writer
+            // stage, so every one gets it; unticked = no byte of the argv changes. (Seam stitch only runs no gpu_bake that writes a lightmap.)
+            if (o.StitchSeams && o.Mode != BakeMode.SeamStitch) a.Add("-" + BakeOptions.StitchSeamsSwitch);
             // "Scenery Multi Permutation Fix (Experimental Improvement)": the engine's opt-in switch. Only ever reached for an engine that declares it
             // (BakeSession.Prepare refuses otherwise; AppHost.SceneryPermutationFixWhy); the capture and the write-back both need it, so every
             // gpu_bake of the bake (incl. the tool write-back fallback argv) gets it. Unticked = no byte of the argv changes.
@@ -202,11 +205,19 @@ namespace H2GpuLightmapper.Pipeline
             }
             if (o.FillWideHoles)
             {
-                if (o.Mode == BakeMode.Probes || o.Mode == BakeMode.AoOnly)
+                if (o.Mode == BakeMode.Probes || o.Mode == BakeMode.AoOnly || o.Mode == BakeMode.SeamStitch)
                     p.Warnings.Add(BakeOptions.FillWideHolesLabel + " has no effect in this mode: no lightmap is baked");
                 else
                     p.Notes.Add(BakeOptions.FillWideHolesNote + " (\"" + BakeOptions.FillWideHolesLabel + "\"): every gpu_bake gets -" + BakeOptions.FillWideHolesParam + " "
                                 + BakeOptions.FillWideHolesPasses.ToString(CultureInfo.InvariantCulture) + "; after the tool's two fill passes the holes still open are filled inward with the average of their filled neighbours");
+            }
+            if (o.StitchSeams && o.Mode != BakeMode.SeamStitch)
+            {
+                if (o.Mode == BakeMode.Probes || o.Mode == BakeMode.AoOnly)
+                    p.Warnings.Add(BakeOptions.StitchSeamsLabel + " has no effect in this mode: no lightmap is written (the mode \"Seam stitch only\" stitches the lightmap that is installed)");
+                else
+                    p.Notes.Add(BakeOptions.StitchSeamsNote + " (\"" + BakeOptions.StitchSeamsLabel + "\"): every gpu_bake gets -" + BakeOptions.StitchSeamsSwitch
+                                + (o.Ao ? "; the AO layer's stage (gpu_ao stage) gets --stitch-seams" : "") + "; a tool write-back fallback is not stitched");
             }
             string runDir = pi.RunDir;
             string work = rt.Work;
@@ -219,6 +230,7 @@ namespace H2GpuLightmapper.Pipeline
                 p.Notes.Add("Lightmap Only on a probe BSP: this resets the BSP's " + pi.ProbePoints + " light probes to zero, as `tool lightmaps` does");
 
             if (o.Mode == BakeMode.AoOnly) AddAoPrecheck(p, pi);
+            if (o.Mode == BakeMode.SeamStitch) AddStitchPrecheck(p, pi, set, engineDir);
             if (p.Install)
             {
                 var b = p.Add(new PlanStep { Id = StepIds.Backup, UiStep = StepId.Backup, Kind = PlanStepKind.Shell, Title = "back up the live lightmap set to _TAGBAK_ui (md5-verified)" });
@@ -230,6 +242,18 @@ namespace H2GpuLightmapper.Pipeline
             if (o.Mode == BakeMode.AoOnly)
             {
                 rest = AddAoOnly(p, pi, set, engineDir);
+                p.FinalStage = rest;
+                if (p.Install)
+                {
+                    p.InstallStage = rest;
+                    p.Marker = StartupRecovery.InstallMarkerPath(work, pi.Worker.Value);
+                    p.InstallBackupDir = Path.Combine(runDir, RunFolder.BackupDirName);
+                    p.LmwInstallPy = rt.LmwInstallPy;
+                }
+            }
+            else if (o.Mode == BakeMode.SeamStitch)
+            {
+                rest = AddSeamStitch(p, pi, set, engineDir);
                 p.FinalStage = rest;
                 if (p.Install)
                 {
@@ -319,6 +343,7 @@ namespace H2GpuLightmapper.Pipeline
                     var st = p.Add(new PlanStep { Id = StepIds.AoStage, UiStep = StepId.AO, Kind = PlanStepKind.Process, Title = "gpu_ao stage (lm_tagwriter + lmw_validate -> OUT\\ao\\" + o.AoTag + "\\tagw_stage)", FileName = py, Cwd = work });
                     st.Args.Add(drv); st.Args.Add("stage"); st.Args.AddRange(common); st.Args.AddRange(new[] { "--tag", o.AoTag, "--overwrite" });
                     if (o.ExactVertexLighting) st.Args.Add("--exact-vertex-lighting");        // W2 (0.6.3): the AO layer final stage is written by gpu_ao stage (P6b), not by gpu_bake
+                    if (o.StitchSeams) st.Args.Add("--stitch-seams");                         // 1.5: likewise the seam stitch (P6f)
                     rest = Path.Combine(outN, "ao", o.AoTag, "tagw_stage");
                     p.Notes.Add("ambient occlusion is an artistic layer, not CPU-faithful");
                 }
@@ -487,6 +512,7 @@ namespace H2GpuLightmapper.Pipeline
             {
                 var args = GpuBakeArgs(o, n, false, false, pi.Limits);
                 args.Remove("-ExactVertexLighting");               // no tag writer runs in AO only
+                args.Remove("-" + BakeOptions.StitchSeamsSwitch);   // 1.5: likewise
                 args.Add("-CaptureOnly");
                 var spec = BakeInvocation.GpuBake(WithScript(rt, p.Engine), pi.Env, args);
                 var g = p.Add(new PlanStep
@@ -521,6 +547,54 @@ namespace H2GpuLightmapper.Pipeline
             var cp = p.Add(new PlanStep { Id = StepIds.CopyFinalStage, UiStep = StepId.TagWriter, Kind = PlanStepKind.Shell, Title = "copy the final stage to RUN\\final_stage (the files tagw_report.json lists, md5-verified; the farm is temporary)" });
             string fin = Path.Combine(p.RunDir, "final_stage");
             cp.Params.Add("from", Path.Combine(outN, "aoonly", o.AoTag, "stage")).Add("to", fin);
+            return fin;
+        }
+
+        /// <summary>1.5 Seam stitch only: the arguments seam_stitch.py precheck / stage share (the installed set, its BSP, the engine folder whose
+        /// v043-tagwriter holds lmw_stitch.py and lmw_validate.py, and the tool for the field-definition pin).</summary>
+        private static List<string> StitchArgs(PlanInput pi, TagSet set, string engineDir)
+        {
+            return new List<string> { "--tag-dir", set.TagDir, "--prefix", set.Prefix, "--bsp-file", pi.O.BspTagFile(set.TagDir), "--engine", engineDir,
+                                      "--tool", Path.Combine(pi.Rt.Root, "tool_fast.exe") };
+        }
+
+        /// <summary>1.5 Seam stitch only, first step: seam_stitch.py precheck (read-only: the installed lightmap exists, parses and belongs to this BSP).
+        /// A refusal here costs no backup.</summary>
+        private static void AddStitchPrecheck(BakePlan p, PlanInput pi, TagSet set, string engineDir)
+        {
+            var s = p.Add(new PlanStep
+            {
+                Id = StepIds.StitchPrecheck, UiStep = StepId.Preflight, Kind = PlanStepKind.Process, FileName = pi.Rt.PyExe, Cwd = pi.Rt.Work,
+                Title = "seam_stitch precheck (read-only): the installed lightmap exists and belongs to this BSP",
+            });
+            s.Args.Add(InstLayout.Full(pi.Rt.InstDir, InstLayout.SeamStitch)); s.Args.Add("precheck");
+            s.Args.AddRange(StitchArgs(pi, set, engineDir));
+        }
+
+        /// <summary>1.5 Seam stitch only (EXPERIMENTAL): no capture, no GPU. seam_stitch.py stage stitches the seams of the lightmap that is installed
+        /// now (only the RGB of texels next to seams changes, in both bitmaps; the lightmap tag is copied as it is) and validates the stage
+        /// (lmw_validate --check-set); the stage then leaves the farm for RUN\final_stage and is installed like any other (backup first).</summary>
+        private static string AddSeamStitch(BakePlan p, PlanInput pi, TagSet set, string engineDir)
+        {
+            var rt = pi.Rt;
+            int n = pi.Worker ?? throw new InvalidOperationException("no lightmap worker");
+            string outN = FarmDir(rt.Farms, n);
+            p.Out = outN;
+            string so = Path.Combine(outN, "seamstitch");
+            var s = p.Add(new PlanStep
+            {
+                Id = StepIds.SeamStitch, UiStep = StepId.TagWriter, Kind = PlanStepKind.Process, FileName = rt.PyExe, Cwd = rt.Work,
+                Title = "seam_stitch stage: stitch the seams of the installed lightmap -> OUT\\seamstitch\\stage (nothing installed)",
+            });
+            s.Args.Add(InstLayout.Full(rt.InstDir, InstLayout.SeamStitch)); s.Args.Add("stage");
+            s.Args.AddRange(StitchArgs(pi, set, engineDir));
+            s.Args.AddRange(new[] { "--out", so, "--overwrite" });
+            p.Notes.Add("Seam stitch only (EXPERIMENTAL): no lighting is baked -- the lightmap installed now (ours, the stock tool's or Bungie's) keeps its light; the texels "
+                        + "next to its seams are changed so both sides of every seam on a flat or gently curved surface agree. Not the original tool's output.");
+            p.Notes.Add("Seam stitch only changes the two lightmap bitmaps (truecolor + P8) and nothing else; the lightmap tag, its UVs and palettes are kept");
+            var cp = p.Add(new PlanStep { Id = StepIds.CopyFinalStage, UiStep = StepId.TagWriter, Kind = PlanStepKind.Shell, Title = "copy the final stage to RUN\\final_stage (the files tagw_report.json lists, md5-verified; the farm is temporary)" });
+            string fin = Path.Combine(p.RunDir, "final_stage");
+            cp.Params.Add("from", Path.Combine(so, "stage")).Add("to", fin);
             return fin;
         }
 

@@ -42,6 +42,10 @@ namespace H2GpuLightmapper.Pipeline
         public const string AoExisting = "ao-existing";
         /// <summary>AO only: ao_existing.py precheck = the gates that need no capture, run BEFORE any backup or GPU time (no lightmap, AO already in it, not this BSP's).</summary>
         public const string AoPrecheck = "ao-precheck";
+        /// <summary>1.5 Seam stitch only: seam_stitch.py precheck (the installed lightmap exists, parses, belongs to this BSP), BEFORE any backup.</summary>
+        public const string StitchPrecheck = "seam-stitch-precheck";
+        /// <summary>1.5 Seam stitch only: seam_stitch.py stage = the installed lightmap with its seams stitched -> OUT\seamstitch\stage (nothing installed).</summary>
+        public const string SeamStitch = "seam-stitch";
         public const string CopyFinalStage = "copy-final-stage";
         public const string CopyLiveLtmp = "copy-live-ltmp";
         public const string ProbeBake = "probe-bake";
@@ -212,7 +216,7 @@ namespace H2GpuLightmapper.Pipeline
                 .Add("options", new JObj().Add("root", o.Root).Add("scenario", o.ScenarioRel).Add("bsp", o.Bsp).Add("bspRel", o.BspRel).Add("quality", o.QualityToken)
                     .Add("photons", o.Quality == Quality.Custom ? (object)o.Photons : null).Add("rays", o.Quality == Quality.Custom ? (object)(long)o.Rays : null)
                     .Add("mode", o.ModeToken).Add("ao", o.Ao).Add("aoStrength", o.AoStrength).Add("aoExponent", o.AoExponent).Add("aoTag", o.Ao ? o.AoTag : null).Add("aoForce", o.AoForce)
-                    .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting).Add("sceneryPermutationFix", o.SceneryPermutationFix).Add("fillWideHoles", o.FillWideHoles).Add("forceCompat", o.ForceCompat)
+                    .Add("reuseCapture", o.ReuseCapture).Add("install", !o.StageOnly).Add("fixes", o.Fixes).Add("responsive", o.Responsive).Add("exactVertexLighting", o.ExactVertexLighting).Add("stitchSeams", o.StitchSeams).Add("sceneryPermutationFix", o.SceneryPermutationFix).Add("fillWideHoles", o.FillWideHoles).Add("forceCompat", o.ForceCompat)
                     .Add("guarded", CustomGuarded.HasValue ? (object)CustomGuarded.Value : null))
                 .Add("root", Root).Add("work", Work).Add("inst", InstDir).Add("slotBase", SlotBase).Add("runDir", RunDir).Add("runDirPredicted", RunDirPredicted)
                 .Add("py", Rt == null ? null : Rt.PyExe).Add("engine", Engine)

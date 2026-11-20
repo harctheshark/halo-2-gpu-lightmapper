@@ -55,6 +55,7 @@ namespace H2GpuLightmapper.Tests
             tests.AddRange(AoOnlyTests.All());          // 0.6.8 xc8: AO only (--mode ao)
             tests.AddRange(ProgressTests.All());        // 0.6.12: the live progress bar / time left
             tests.AddRange(SingleCaptureTests.All());   // 1.4.0: light probes on the lightmap bake's own capture
+            tests.AddRange(SeamStitchTests.All());      // 1.5: the EXPERIMENTAL seam stitch (switch + mode)
 
             int pass = 0, fail = 0, skip = 0;
             var sw = Stopwatch.StartNew();

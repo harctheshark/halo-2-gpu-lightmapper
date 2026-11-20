@@ -235,6 +235,7 @@ namespace H2GpuLightmapper.Tests
                     new F { Path = "_research/ao/ao_existing.py", Data = File.ReadAllBytes(Fixture("fake_ao_existing.py")) },      // 0.6.8 xc8: AO only
                     new F { Path = "_research/lightprobes/gpu_lightprobes.py", Data = markSingle(mark(File.ReadAllBytes(Fixture("fake_gpu_lightprobes.py")), (splitBspDrivers & 2) != 0), singleCaptureEngine) },
                     new F { Path = "standalone/sh_stage.py", Data = File.ReadAllBytes(Fixture("fake_sh_stage.py")) },
+                    new F { Path = "standalone/seam_stitch.py", Data = File.ReadAllBytes(Fixture("fake_seam_stitch.py")) },      // 1.5: Seam stitch only
                     new F { Path = "standalone/scan_scenery_bounds.py", Data = File.ReadAllBytes(Fixture("fake_scan_scenery_bounds.py")) },
                     new F { Path = "v043-tagwriter/lmw_tagio.py", Data = File.ReadAllBytes(FxTagIo) },
                     new F { Path = "v043-tagwriter/lmw_defs.json", Data = File.ReadAllBytes(FxTagDefs) },

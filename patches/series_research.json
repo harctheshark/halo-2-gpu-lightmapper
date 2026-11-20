@@ -1,6 +1,6 @@
 {
  "format": "h2lm-patch-series/1",
- "comment": "S1.4 research-driver patches (P5 gpu_lightprobes.py, P6 gpu_ao.py; 0.6.5 split-BSP task: + P5b probe driver marker, P6c AO driver cross-folder BSP). Applied to COPIES of production by tools/patch_series.py (or tools/strict_patch.py apply). No build-time tokens. Pristine bases: patches/base/. 0.6.8 (2026-10-29): + P5c (the probe driver accepts a --farm under H2LM_FARMS, gpu_bake P13; unset = unchanged). 1.0 (2026-11-11): + P5d / P6e (both drivers start the engine folder's h2lm-bake.exe, the native bake program, with the same arguments; the probe driver's --pwsh option is gone). 1.4.0 (2026-11-16): + P5e (the probe driver takes --reuse-lattice and carries the REUSE_LATTICE_SUPPORT marker: light probes on the lightmap bake's own capture).",
+ "comment": "S1.4 research-driver patches (P5 gpu_lightprobes.py, P6 gpu_ao.py; 0.6.5 split-BSP task: + P5b probe driver marker, P6c AO driver cross-folder BSP). Applied to COPIES of production by tools/patch_series.py (or tools/strict_patch.py apply). No build-time tokens. Pristine bases: patches/base/. 0.6.8 (2026-10-29): + P5c (the probe driver accepts a --farm under H2LM_FARMS, gpu_bake P13; unset = unchanged). 1.0 (2026-11-11): + P5d / P6e (both drivers start the engine folder's h2lm-bake.exe, the native bake program, with the same arguments; the probe driver's --pwsh option is gone). 1.4.0 (2026-11-16): + P5e (the probe driver takes --reuse-lattice and carries the REUSE_LATTICE_SUPPORT marker: light probes on the lightmap bake's own capture). 1.5 (2026-11-20): + P6f (gpu_ao stage --stitch-seams passes the EXPERIMENTAL opt-in seam stitch to lm_tagwriter).",
  "tokens": {},
  "targets": [
   {
@@ -23,7 +23,8 @@
     "P6b_gpu_ao_exactvl.patch",
     "P6c_gpu_ao_splitbsp.patch",
     "P6d_gpu_ao_nativetw.patch",
-    "P6e_gpu_ao_bakeexe.patch"
+    "P6e_gpu_ao_bakeexe.patch",
+    "P6f_gpu_ao_stitch.patch"
    ],
    "tokens": []
   }

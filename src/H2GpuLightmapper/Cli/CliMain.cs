@@ -31,14 +31,14 @@ namespace H2GpuLightmapper.Cli
 @"H2 GPU Lightmapper -- command line (the same exe as the window; no window opens)
 
   ""H2 GPU Lightmapper.exe"" --cli bake --h2ek DIR --scenario S --bsp B
-        [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap|ao]
+        [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap|ao|stitch]
         [--ao [--ao-strength X] [--ao-exponent Y]] [--force] [--reuse-capture] [--no-install] [--yes]
         [--ao-fallback stop|install] [--probes-fallback stop|install] [--install-retries N [--install-retry-wait-s S]]
-        [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix]
+        [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix] [--stitch-seams]
         [--dry-run [--json] [--probe-points N] [--assume-vram-mb N [--assume-other-vram-mb N]]]
   ""H2 GPU Lightmapper.exe"" --cli bake --h2ek DIR --map FILE.map [--bsp B] [--map-out OUT.map] [--vista-out yes|no] [--sky-cubemap SKY=BITMAP|none|auto ...]
         [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap] [--ao [--ao-strength X --ao-exponent Y]]
-        [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix] [--dry-run [--json]]
+        [--responsive] [--exact-vertex-lighting] [--scenery-permutation-fix] [--stitch-seams] [--dry-run [--json]]
         --direct-samples K (1-64, Custom quality only, opt-in): each sun, sky-light and surface-light pass runs K times with different random numbers and
         the results are averaged, which smooths grain in direct light (K = 4 halves it; those passes take K times as long). Same lighting, less grain;
         not the 2004 tool's exact noise pattern.
@@ -72,6 +72,10 @@ namespace H2GpuLightmapper.Cli
   lightmap's pixels (truecolor, P8 regenerated, vertex-lit records) and installs the result like any bake (the current set is backed up first). It stops, in words and
   without writing anything, when the scenario / BSP has no lightmap yet, the lightmap does not belong to the BSP or its pixels do not match the geometry, or when the
   install record says AO is in it already (a second AO would darken the same places twice): --force adds it again anyway. Not for a .map bake.
+  --mode stitch = Seam stitch only (EXPERIMENTAL): no lighting is baked and no capture is made. The seams of the lightmap that is ALREADY in the tags are
+  stitched (the texels next to its seams change so both sides of every seam on a flat or gently curved surface agree; only the two lightmap bitmaps
+  change) and the result is installed like any bake (the current set is backed up first). It stops, in words and without writing anything, when the
+  scenario / BSP has no lightmap yet or the lightmap does not belong to the BSP. Not the original tool's output; not for a .map bake.
   Defaults (reset every launch): --quality super, --mode standard, AO off (strength 1.0, exponent 0.5), a new capture, install.
   AO and light probes need the direct tag writer's stage; when a map falls back to the tool writer the bake stops (exit 3),
   or with --ao-fallback install (AO) / --probes-fallback install (light probes: they are RESET to zero, like tool lightmaps)
@@ -102,6 +106,10 @@ namespace H2GpuLightmapper.Cli
   --exact-vertex-lighting = the window's Advanced settings ""2004 Exact Vertex Lighting?"": every gpu_bake of the bake gets -ExactVertexLighting
   (the tag writer re-runs the CPU's 7-probe per-vertex visibility gate, so the vertex-lit records match the 2004 tool more closely; the tag writer takes
   about 2 minutes longer on cyclotron; the lightmap bitmaps are unchanged). Off = the argv is exactly what it was before the option existed.
+  --stitch-seams = the window's Advanced settings ""Stitch lightmap seams (Experimental)"": every gpu_bake of the bake gets -StitchSeams and the AO
+  layer's stage gets --stitch-seams: the tag writer changes the texels next to lightmap seams so both sides agree, which removes the hard straight lines
+  a coarse lightmap shows where two lightmap patches meet on a flat surface (shadows elsewhere keep their sharpness). Not the original tool's output.
+  Off = the argv is exactly what it was before the option existed.
   --scenery-permutation-fix = the window's Advanced settings ""Scenery Multi Permutation Fix (Experimental Improvement)"": every gpu_bake of the bake gets
   -SceneryOwnPermutationOnly (a fallback for scenery that draws more than one shape from one tag: only the shape the game draws casts shadows, ground hidden
   inside scenery is filled from its surroundings, a variant's own pieces get lit; it differs from the 2004 tool on purpose, and a capture is reusable only by a
@@ -224,8 +232,8 @@ namespace H2GpuLightmapper.Cli
             if ((p.HasValue || r.HasValue) && o.Quality != Quality.Custom) a.Errors.Add("--photons / --rays are only valid with --quality custom");
             if (p.HasValue) o.Photons = p.Value;
             if (r.HasValue) o.Rays = r.Value;
-            string m = a.Choice("--mode", "standard", "standard", "probes", "lightmap", "ao");
-            o.Mode = m == "probes" ? BakeMode.Probes : m == "lightmap" ? BakeMode.Lightmap : m == "ao" ? BakeMode.AoOnly : BakeMode.Standard;
+            string m = a.Choice("--mode", "standard", "standard", "probes", "lightmap", "ao", "stitch");
+            o.Mode = m == "probes" ? BakeMode.Probes : m == "lightmap" ? BakeMode.Lightmap : m == "ao" ? BakeMode.AoOnly : m == "stitch" ? BakeMode.SeamStitch : BakeMode.Standard;
             o.Ao = a.Has("--ao") || o.Mode == BakeMode.AoOnly;          // AO only is AO: --ao is implied (and may be given)
             o.AoForce = a.Has("--force");
             var s = a.GetDouble("--ao-strength");
@@ -245,6 +253,7 @@ namespace H2GpuLightmapper.Cli
             o.Responsive = a.Has("--responsive");
             o.ExactVertexLighting = a.Has("--exact-vertex-lighting");
             o.SceneryPermutationFix = a.Has("--scenery-permutation-fix");
+            o.StitchSeams = a.Has("--stitch-seams");             // 1.5: -StitchSeams on the lightmap bakes (Advanced "Stitch lightmap seams (Experimental)")
             o.FillWideHoles = a.Has("--fill-wide-holes");          // 1.4.0: -FillWideHoles 16 on the lightmap bakes (Advanced "Fill wide dark holes")
             o.RebakeHint = a.Has("--rebake-hint");        // 0.6.8: GPULM_SKY_HINT=1 on reuse bakes (Advanced "Re-bake speedup")
             var ds = a.GetInt("--direct-samples");          // 0.6.12: the opt-in direct sample multiplier (Custom quality only: BakeOptions.Validate refuses it otherwise)
@@ -264,7 +273,7 @@ namespace H2GpuLightmapper.Cli
             var a = ParseFor(args, start + 1,
                 new[] { "--h2ek", "--scenario", "--bsp", "--map", "--map-out", "--vista-out", "--quality", "--photons", "--rays", "--direct-samples", "--mode", "--ao-strength", "--ao-exponent", "--ao-fallback", "--probes-fallback",
                         "--worker", "--probe-worker", "--dev-max-calls", "--probe-points", "--assume-vram-mb", "--assume-other-vram-mb", "--lock-wait-min", "--lock-poll-s", "--cancel-file", "--install-retries", "--install-retry-wait-s", "--dev-simulate-quarantine" },
-                new[] { "--ao", "--force", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--rebake-hint", "--probe-own-capture", "--fill-wide-holes", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp", "--dev-no-stage" },
+                new[] { "--ao", "--force", "--reuse-capture", "--no-install", "--yes", "--responsive", "--exact-vertex-lighting", "--scenery-permutation-fix", "--stitch-seams", "--rebake-hint", "--probe-own-capture", "--fill-wide-holes", "--force-compat", "--assume-no-fp64", "--dry-run", "--json", "--dev-no-fixes", "--dev-skip-preflight", "--dev-skip-gpucheck", "--reuse-unrecorded", "--dev-keep-mapbake-temp", "--dev-no-stage" },
                 new[] { "--sky-cubemap" });
             var o = BakeOptionsFrom(a);
             var so = new SessionOptions

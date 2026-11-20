@@ -13,8 +13,10 @@ namespace H2GpuLightmapper.App
     /// <summary>Standard = lightmaps + light probes when the BSP has probe points (the default); Probes = light probes only;
     /// Lightmap = lightmaps only (on a probe BSP its N probes are reset to zero, as `tool lightmaps` does).
     /// AoOnly (0.6.8 xc8) = no lighting is baked: the lightmap that is ALREADY in the tags (ours, the stock tool's or Bungie's) gets ambient occlusion added
-    /// (capture for the geometry + the AO trace + ao_existing.py), then it is installed like any other bake (backup first).</summary>
-    public enum BakeMode { Standard, Probes, Lightmap, AoOnly }
+    /// (capture for the geometry + the AO trace + ao_existing.py), then it is installed like any other bake (backup first).
+    /// SeamStitch (1.5, EXPERIMENTAL) = no lighting is baked: the seams of the lightmap that is ALREADY in the tags are stitched (seam_stitch.py: no capture,
+    /// no GPU), then it is installed like any other bake (backup first).</summary>
+    public enum BakeMode { Standard, Probes, Lightmap, AoOnly, SeamStitch }
 
     /// <summary>What to do when AO was asked for but the bake fell back to the tool writer (no stage to apply AO to).</summary>
     public enum AoFallback { Stop, InstallWithoutAo }
@@ -66,6 +68,15 @@ namespace H2GpuLightmapper.App
         public const string ExactVertexLightingNote = "exact vertex lighting on (slower tag writer)";
         public const string ExactVertexLightingLabel = "2004 Exact Vertex Lighting?";
         public const string ExactVertexLightingTip = "You likely don't need this, this is just to shut Harcs brain up";
+        /// <summary>1.5 Advanced settings "Stitch lightmap seams (Experimental)" / CLI --stitch-seams: every gpu_bake that writes the tags gets -StitchSeams and
+        /// the AO layer's stage (gpu_ao stage) gets --stitch-seams: the tag writer changes the texels next to lightmap seams (where two lightmap patches meet
+        /// on a flat or gently curved surface) so both sides agree -- the hard straight lines a coarse lightmap shows there go away; shadows elsewhere keep
+        /// their sharpness. Differs from the original tool on purpose. Default off: the argv is then byte-identical to before.</summary>
+        public bool StitchSeams;
+        public const string StitchSeamsSwitch = "StitchSeams";
+        public const string StitchSeamsLabel = "Stitch lightmap seams (Experimental)";
+        public const string StitchSeamsTip = "Removes the hard straight lines where two lightmap patches meet on a flat surface by evening out the texels along the seam. Not the original tool's output.";
+        public const string StitchSeamsNote = "seam stitch on (EXPERIMENTAL: the texels next to lightmap seams are changed so both sides agree; not the original tool's output)";
         /// <summary>Advanced settings "Scenery Multi Permutation Fix (Experimental Improvement)" / CLI --scenery-permutation-fix: every gpu_bake the plan builds
         /// gets -SceneryOwnPermutationOnly (scenery that draws more than one shape from one tag: only the shape the game draws casts shadows, ground hidden
         /// inside scenery is filled from its surroundings, a variant's own pieces get lit). Differs from the 2004 tool on purpose. Default off: the argv is then
@@ -242,8 +253,9 @@ namespace H2GpuLightmapper.App
         }
 
         public string QualityToken { get { return Quality.ToString().ToLowerInvariant(); } }
-        public string ModeToken { get { return Mode == BakeMode.Probes ? "probes" : Mode == BakeMode.Lightmap ? "lightmap" : Mode == BakeMode.AoOnly ? "ao" : "standard"; } }
+        public string ModeToken { get { return Mode == BakeMode.Probes ? "probes" : Mode == BakeMode.Lightmap ? "lightmap" : Mode == BakeMode.AoOnly ? "ao" : Mode == BakeMode.SeamStitch ? "stitch" : "standard"; } }
         public bool IsAoOnly { get { return Mode == BakeMode.AoOnly; } }
+        public bool IsSeamStitchOnly { get { return Mode == BakeMode.SeamStitch; } }
 
         /// <summary>The trace quality P6's `gpu_ao trace --quality` takes: low -> low, super / custom -> super (ssN 4 = super's cells).</summary>
         public string AoTraceQuality { get { return Quality == Quality.Low ? "low" : "super"; } }
@@ -348,6 +360,8 @@ namespace H2GpuLightmapper.App
             else if (DirectSamplesGiven) e.Add(DirectSamplesNeedsCustom);
             if (Mode == BakeMode.AoOnly && !Ao) e.Add("AO only adds ambient occlusion: AO must be on");
             if (AoForce && Mode != BakeMode.AoOnly) e.Add("--force is only for --mode ao (apply AO again to a lightmap that already has it)");
+            if (Mode == BakeMode.SeamStitch && Ao) e.Add("Seam stitch only changes the seams of the lightmap that is already in the tags: ambient occlusion cannot be added in the same run (run AO only separately)");
+            if (Mode == BakeMode.SeamStitch && ReuseCapture) e.Add("Seam stitch only makes no capture: --reuse-capture does not apply");
             if (Ao)
             {
                 if (Mode == BakeMode.Probes) e.Add("ambient occlusion is a lightmap layer: it is not available in Lightprobes mode");
@@ -379,6 +393,7 @@ namespace H2GpuLightmapper.App
             }
             if (!string.IsNullOrWhiteSpace(Bsp) && (Bsp.IndexOfAny(new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' }) >= 0 || Bsp.Trim() != Bsp)) e.Add("the BSP name '" + Bsp + "' is not a plain tag name");
             if (Mode == BakeMode.AoOnly) e.Add("AO only changes the lightmap that is already in the tags: it is not available for a .map bake (bake the map with AO on instead)");
+            if (Mode == BakeMode.SeamStitch) e.Add("Seam stitch only changes the lightmap that is already in the tags: it is not available for a .map bake (bake the map with \"" + StitchSeamsLabel + "\" on instead)");
             if (Ao && Mode == BakeMode.Probes) e.Add("ambient occlusion is a lightmap layer: it is not available in Lightprobes mode");
             if (Ao)
             {
@@ -413,6 +428,7 @@ namespace H2GpuLightmapper.App
                 m += "   output " + Path.GetFileName(MapOutPath);
                 if (Responsive) m += "   responsive on";
                 if (ExactVertexLighting) m += "   exact vertex lighting on";
+                if (StitchSeams) m += "   seam stitch on (experimental)";
                 if (SceneryPermutationFix) m += "   scenery multi permutation fix on";
                 if (FillWideHoles) m += "   wide hole fill on";
                 if (RebakeHint) m += "   re-bake speedup on";
@@ -423,13 +439,14 @@ namespace H2GpuLightmapper.App
             }
             var s = "quality " + QualityToken;
             if (Quality == Quality.Custom) s += string.Format(CultureInfo.InvariantCulture, " (Experimental: {0:N0} photons, MC {1} = {2:N0} rays per gather call)", Photons, Rays, RaysPerCall(Rays));
-            s += "   mode " + ModeToken + (IsAoOnly ? " (AO added to the installed lightmap; no lighting is baked)" : "");
+            s += "   mode " + ModeToken + (IsAoOnly ? " (AO added to the installed lightmap; no lighting is baked)" : IsSeamStitchOnly ? " (the installed lightmap's seams stitched; no lighting is baked)" : "");
             s += "   AO " + (Ao ? string.Format(CultureInfo.InvariantCulture, "on (strength {0}, exponent {1})", AoStrength, AoExponent) : "off");
             if (AoForce) s += " (again: forced)";
             s += "   capture " + (ReuseCapture ? "reuse" : "new");
             s += "   " + (StageOnly ? "stage only (no tags written)" : "install");
             if (Responsive) s += "   responsive on";
             if (ExactVertexLighting) s += "   exact vertex lighting on";
+            if (StitchSeams && !IsSeamStitchOnly) s += "   seam stitch on (experimental)";
             if (SceneryPermutationFix) s += "   scenery multi permutation fix on";
             if (FillWideHoles) s += "   wide hole fill on";
             if (RebakeHint) s += "   re-bake speedup on";

@@ -169,6 +169,9 @@
                         <RadioButton x:Name="MLightmap" GroupName="M" Checked="Option_Changed" Content="Lightmap Only"/>
                         <RadioButton x:Name="MAoOnly" GroupName="M" Checked="Option_Changed"
                                      Content="AO only — add ambient occlusion to the lightmap already in the tags (no lighting is baked)"/>
+                        <!-- 1.5: EXPERIMENTAL; seam_stitch.py on the installed lightmap (no capture, no GPU) -->
+                        <RadioButton x:Name="MSeamStitch" GroupName="M" Checked="Option_Changed"
+                                     Content="Seam stitch only — stitch the seams of the lightmap already in the tags (experimental; no lighting is baked)"/>
                         <TextBlock x:Name="ModeNotice" Margin="20,2,0,0" Style="{StaticResource Dim}" Foreground="{StaticResource Warn}" Visibility="Collapsed"/>
                     </StackPanel>
                 </GroupBox>
@@ -206,6 +209,8 @@
                                           ToolTip="Splits the GPU work into short pieces so your desktop, videos and games stay smooth while it bakes. The lightmap is identical; the bake takes longer."/>
                                 <CheckBox x:Name="ExactVertexCheck" Content="2004 Exact Vertex Lighting?" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
                                           ToolTip="You likely don't need this, this is just to shut Harcs brain up"/>
+                                <!-- 1.5: EXPERIMENTAL; gpu_bake -StitchSeams (the tag writer stitch-seams switch); the tooltip is set in code-behind (BakeOptions.StitchSeamsTip) -->
+                                <CheckBox x:Name="StitchSeamsCheck" Content="Stitch lightmap seams (Experimental)" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"/>
                                 <!-- engine-gated: greyed (code-behind, UpdateOptionUi) unless the engine's bake program takes -SceneryOwnPermutationOnly; the tooltip then ends "Needs engine 0.6.4 or newer." -->
                                 <CheckBox x:Name="SceneryPermCheck" Content="Scenery Multi Permutation Fix (Experimental Improvement)" Margin="0,4,0,0" Checked="Option_Changed" Unchecked="Option_Changed"
                                           ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="30000"

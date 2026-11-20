@@ -80,6 +80,8 @@ namespace H2GpuLightmapper
             MStandard.IsEnabled = MProbes.IsEnabled = MLightmap.IsEnabled = free;
             MAoOnly.IsEnabled = free && !map;          // AO only changes the lightmap already in the tags: not for a .map bake
             if (map && MAoOnly.IsChecked == true) { _suppress = true; MStandard.IsChecked = true; _suppress = false; }
+            MSeamStitch.IsEnabled = free && !map;      // 1.5: Seam stitch only changes the lightmap already in the tags: not for a .map bake
+            if (map && MSeamStitch.IsChecked == true) { _suppress = true; MStandard.IsChecked = true; _suppress = false; }
             if (map) { ReuseCheck.IsEnabled = false; ReuseReason.Text = "Not used when baking from a .map (every .map bake makes its own capture)."; }
             StageOnlyCheck.IsEnabled = !map && free;
             VistaOutCheck.IsEnabled = free;

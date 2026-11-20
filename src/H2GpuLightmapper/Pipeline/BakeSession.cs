@@ -393,6 +393,9 @@ namespace H2GpuLightmapper.Pipeline
             // 0.6.8 xc8: AO only needs the payload's ao_existing.py (an older payload has none)
             if (_o.Mode == BakeMode.AoOnly && !_host.Manifest.InstComponent.Has(InstLayout.AoExisting))
                 Refuse("AO only is not available in this build (its payload has no " + InstLayout.AoExisting + ")");
+            // 1.5: Seam stitch only needs the payload's seam_stitch.py
+            if (_o.Mode == BakeMode.SeamStitch && !_host.Manifest.InstComponent.Has(InstLayout.SeamStitch))
+                Refuse("Seam stitch only is not available in this build (its payload has no " + InstLayout.SeamStitch + ")");
 
             // ---- root / scenario / BSP
             string full = null;
@@ -792,6 +795,7 @@ namespace H2GpuLightmapper.Pipeline
 
             // ---- AO only (0.6.8 xc8): the installed lightmap must exist and must not carry AO already -- decided BEFORE any capture, GPU time or backup
             if (_o.Mode == BakeMode.AoOnly) CheckAoOnlyStart(dry);
+            if (_o.Mode == BakeMode.SeamStitch) CheckSeamStitchStart();          // 1.5: the installed lightmap must exist -- before any backup
             CheckCancel();
 
             // ---- capture reuse gate (section 7)
@@ -892,6 +896,15 @@ namespace H2GpuLightmapper.Pipeline
         /// <summary>AO only: the lightmap set must be installed (it is what AO is added to) and the install record must not say it already has AO (a second AO would darken the
         /// same places twice). An unrecorded set is allowed -- the program can only know about AO it added itself -- and the log says so. --force (or "Yes" in the window)
         /// adds AO again. ao_existing.py repeats these checks (and the checks that need the capture) when it runs.</summary>
+        /// <summary>1.5 Seam stitch only: the installed lightmap set must exist (the read-only precheck step checks the rest: parses, belongs to this BSP).</summary>
+        private void CheckSeamStitchStart()
+        {
+            var miss = new[] { _set.LtmpName, _set.Prefix + "_truecolor_bitmaps.bitmap", _set.Prefix + "_bitmaps.bitmap" }.Where(n => !File.Exists(Path.Combine(_set.TagDir, n))).ToList();
+            if (miss.Count > 0)
+                Refuse("Seam stitch only stitches a lightmap that is already in the tags, and this scenario / BSP has none yet (missing: " + string.Join(", ", miss)
+                       + "). Bake the lightmap first, then run Seam stitch only. Nothing was changed.");
+        }
+
         private void CheckAoOnlyStart(bool dry)
         {
             var miss = new[] { _set.LtmpName, _set.Prefix + "_truecolor_bitmaps.bitmap", _set.Prefix + "_bitmaps.bitmap" }.Where(n => !File.Exists(Path.Combine(_set.TagDir, n))).ToList();
@@ -1318,6 +1331,7 @@ namespace H2GpuLightmapper.Pipeline
                 case StepIds.StageOrToolFallback: return DoStageOrToolFallback(plan, s);
                 case StepIds.AoTrace: case StepIds.AoApply: case StepIds.AoStage: DoSimple(s, "gpu_ao " + s.Args[1]); return true;
                 case StepIds.AoPrecheck: case StepIds.AoExisting: DoAoExisting(s); return true;
+                case StepIds.StitchPrecheck: case StepIds.SeamStitch: DoSeamStitch(s); return true;
                 case StepIds.CopyFinalStage: DoCopyFinalStage(s); return true;
                 case StepIds.CopyLiveLtmp: DoCopyLiveLtmp(s); return true;
                 case StepIds.ProbeBake: DoProbeBake(s); return true;
@@ -1530,6 +1544,18 @@ namespace H2GpuLightmapper.Pipeline
             if (oc.Ok) return;
             if (refusal != null) throw new StepFailedException(refusal);
             throw FailedStep("AO only (" + s.Args[1] + ") failed (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
+        }
+
+        /// <summary>1.5 Seam stitch only: seam_stitch.py. Exit 2 with a line "Seam stitch: REFUSED -- ..." is a refusal in plain words (nothing was written); the line
+        /// becomes the run's reason.</summary>
+        private void DoSeamStitch(PlanStep s)
+        {
+            string refusal = null;
+            var oc = RunStepProcess(s, l => { if (l.StartsWith("Seam stitch: REFUSED", StringComparison.Ordinal)) refusal = l.Trim(); });
+            if (oc.Cancelled) throw new OperationCanceledException("cancelled during Seam stitch only");
+            if (oc.Ok) return;
+            if (refusal != null) throw new StepFailedException(refusal);
+            throw FailedStep("Seam stitch only (" + s.Args[1] + ") failed (exit " + ProcessRunner.FormatExit(oc.ExitCode) + "): " + (oc.FailureReason ?? "?"), oc);
         }
 
         /// <summary>After an installed + verified lightmap WITH ambient occlusion (a full bake with AO, or AO only): the install record that stops a second AO on the same set.</summary>

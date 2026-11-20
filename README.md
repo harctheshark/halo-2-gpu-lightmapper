@@ -8,7 +8,7 @@ Python or other runtime to install, and no PowerShell.
 > is not affiliated with or endorsed by them. See [Credits and thanks](#credits-and-thanks) and
 > [Transparency](#transparency-this-project-was-vibecoded).
 
-**Release status: release 1.4.2** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
+**Release status: release 1.5.0** (what changed in each version: [CHANGELOG.md](CHANGELOG.md)). It is validated on one PC (an RTX 4090 with 24 GB), on the author's own H2EK and on
 the unmodified tags of a Steam H2EK. It is not code-signed and has not been run on a clean Windows install. Read
 [Known issues](#known-issues-fix-in-progress) and [Limits](#limits) before you bake a big map. What changed in each version is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -59,6 +59,9 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
 - **Extra direct light samples (0.6.12, opt-in).** In Custom quality the sun, sky-light and surface-light passes can run several
   times and be averaged, which smooths grain in direct light (×4 halves it). Off by default: it is not the original tool's noise
   pattern.
+- **Seam stitch (1.5.0, experimental, opt-in).** Removes the hard straight lines a coarse lightmap shows where two lightmap patches meet on a
+  flat surface, without making shadows sharper: "Stitch lightmap seams" for a bake, or the mode "Seam stitch only" for the lightmap already
+  in your tags. Not the original tool's output.
 - **Ambient occlusion with a copied scenario (1.4.2).** A scenario whose lightmap reference still names another map's lightmap is
   repointed to the new lightmap (as the original tool does) instead of losing ambient occlusion and light probes; restore puts it back.
 - **Photons on scenery as the original tool casts them (1.4.2).** On the test maps the photon cast now matches the original tool's
@@ -74,7 +77,8 @@ the unmodified tags of a Steam H2EK. It is not code-signed and has not been run 
 - **8 GB cards (0.6.10).** Bakes are sized to fit 8 GB and 6 GB graphics cards, with the same lightmap (checked with a pretend
   smaller card; see [Limits](#limits)).
 - **Modes:** Lightmap Standard (lightmaps, plus light probes on a BSP that has probe points), Lightmap Lightprobes (probes
-  only), Lightmap Only, and AO only (0.6.8: adds ambient occlusion to the lightmap already in your tags).
+  only), Lightmap Only, AO only (0.6.8: adds ambient occlusion to the lightmap already in your tags), and Seam stitch only (1.5.0,
+  experimental: stitches the seams of the lightmap already in your tags).
 - **Any GPU with Direct3D 11.** NVIDIA and AMD cards bake at full FP64 precision; a GPU without FP64 (Intel, Qualcomm Adreno)
   switches to Compatibility mode (DF64) by itself (new in 0.6.4, experimental).
 - **Hard to time out.** The default path asks the GPU for small, measured pieces of work (photons that can pause and resume, tiny
@@ -219,6 +223,9 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
    - **AO only** (0.6.8): adds ambient occlusion to the lightmap that is already in your tags (made by this program, the stock tool
      or Bungie) without baking the lighting again. The layout is kept; the current lightmap is backed up first. It stops, writing
      nothing, when the lightmap does not match the geometry or already has AO (`--force` adds it again). Not available for a `.map` bake.
+   - **Seam stitch only** (1.5.0, experimental): evens out the texels along the seams of the lightmap that is already in your tags, so
+     the hard straight lines where two lightmap patches meet on a flat surface go away. No capture and no GPU; only the two lightmap
+     bitmaps change, and the current lightmap is backed up first. Not available for a `.map` bake. Command line: `--mode stitch`.
 5. **Ambient Occlusion** (off by default). **Strength** (default 1.0) and **Exponent** (default 0.5). This is an artistic
    layer and is *not* CPU-faithful. The author's favourite look is strength 1.25, exponent 0.5.
 6. **Reuse existing capture** (off by default = make a new capture). Offered only when the map's last capture matches the
@@ -248,6 +255,9 @@ Start the exe. The H2EK folder and the map are remembered between launches; the 
      Steam cyclotron this moves the vertex-lit records from about 85% to about 98% bit-exact. The lightmap pixels do not
      change; the tag-writing step takes about 2 minutes longer. You likely don't need it. Command line:
      `--exact-vertex-lighting`.
+   - **Stitch lightmap seams (Experimental)** (1.5.0, off by default). The same seam stitch as the mode "Seam stitch only", run on the
+     lightmap this bake writes (the ambient occlusion layer too). Shadows elsewhere keep their sharpness; with it off, the lightmap is
+     exactly what it was. Not the original tool's output. Command line: `--stitch-seams`.
    - **Scenery Multi Permutation Fix (Experimental Improvement).** A fallback for scenery that draws more than one shape from
      one tag, for example a rock whose shape changes when you move it, or a lifepod placed with a named variant like "crashed".
      Only the shape the game actually draws casts shadows, ground buried inside scenery is filled from its surroundings, and a
@@ -297,7 +307,7 @@ The same exe works from a terminal, and no window opens.
 
 ```
 "H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --scenario S --bsp B
-      [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap|ao]
+      [--quality low|super|custom] [--photons N --rays M [--direct-samples K]] [--mode standard|probes|lightmap|ao|stitch]
       [--ao [--ao-strength X] [--ao-exponent Y]] [--reuse-capture [--rebake-hint]] [--yes] [--no-install]
 "H2 GPU Lightmapper.exe" --cli bake --h2ek DIR --map FILE.map [--map-out OUT.map] [--bsp B]
       [--sky-cubemap SKY=BITMAP|none|auto] [--vista-out yes|no] [same quality / mode / AO options]

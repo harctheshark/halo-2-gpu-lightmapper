@@ -23,6 +23,8 @@ namespace H2GpuLightmapper.Pipeline
         public const string AoEngineDir = "_research/ao/dev_AO";
         /// <summary>0.6.8 xc8: AO only (adds ambient occlusion to the lightmap that is already installed; ships beside gpu_ao.py).</summary>
         public const string AoExisting = "_research/ao/ao_existing.py";
+        /// <summary>1.5 Seam stitch only (EXPERIMENTAL): stitches the seams of the lightmap that is already installed (no capture, no GPU).</summary>
+        public const string SeamStitch = "standalone/seam_stitch.py";
         public const string AoGpuBake = "_research/ao/dev_AO/h2lm-bake.exe";
         /// <summary>The parameter list (bake_params.txt) beside a bake program, e.g. engine_v373/h2lm-bake.exe -> engine_v373/bake_params.txt.</summary>
         public static string ParamsOf(string bakeRel) { return EngineSwitches.ParamsFileOf(bakeRel); }

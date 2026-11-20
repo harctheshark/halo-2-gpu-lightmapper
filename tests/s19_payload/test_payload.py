@@ -59,7 +59,8 @@ EXPECT_POST = {
 EXPECT_PATCHED = {
     '_research/lightprobes/gpu_lightprobes.py': ('0668095dc7425a6a195a77a226d30ca7', '935e56894847db4e4f7f02490c6f5e5b'),   # 1.4.0: + P5e (--reuse-lattice; P5..P5d = de71b68f); 1.0: + P5d (starts the stage's h2lm-bake.exe; --pwsh gone; P5..P5c = 21958cbd)
     # (0.6.8 entry follows)   # 0.6.8: + P5c (--farm under H2LM_FARMS; P5 + P5b = 3634172b); P5 + P5b (0.6.5 split-BSP marker; P5 alone = ffb288d4)
-    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', '83513a379cca63ad1eef0d51e9b93f6b'),   # 1.0: + P6e (trace starts the engine's h2lm-bake.exe; P6..P6d = d73740c3)
+    '_research/ao/gpu_ao.py': ('04b171cabd16084eff3190de48722f89', '8fedff64a2ae47c6938fe66233fc127e'),   # 1.5: + P6f (stage --stitch-seams; P6..P6e = 83513a37)
+    # was:   # 1.0: + P6e (trace starts the engine's h2lm-bake.exe; P6..P6d = d73740c3)
     # (0.6.12b entry follows)   # P6 + P6b + P6c + P6d (0.6.12b: stage via the production native tag writer; P6..P6c = a8914dc8) (0.6.5 split-BSP; P6+P6b = 56eba64d) (A1 2026-10-15: re-made on the AO-noise workflow's gpu_ao.py; + stage --tool) + P6b (W2 0.6.3: stage --exact-vertex-lighting; P6 alone = c4a0277f)
     '_research/ao/ao_seamfix.py': ('93c2fe8c5ce812358b58b7c2073da030', '94e85d76a4acc7abda904fab5caab8cb'),   # 0.6.12b: + the dense neighbour table (7b239011 before);   # N4 (A1 re-make: + stacked-layer rule)
     '_research/ao/ao_denoise.py': ('5da70c2fe14fbb2decd78ce8902b418a', '70522fac1d61f372e6c5af358592e7cf'),   # N4 (A1: ao_denoise.bilateral_raw without scipy)
@@ -75,7 +76,8 @@ EXPECT_BUILT = {'osoyoos/osoy_launch.exe': 'e2dba7afcaf6967a900ade1d59d01f5d',
                 'engine_v373/v043-tagwriter/bin/tw_native.exe': '2d54c5de1eee23026f62f2dd84a25b1e'}   # 0.6.11: rebuilt from engine_v377's tw_native.cpp (73c6c598, tier-1-only instance lookup); 0.6.9 / 0.6.10: 6178da9a
 EXPECT_NEW = {'_research/ao/ao_ballgrid.py': '1ef5e617bfd2ab11d3366e018a0259e6', 'standalone/sh_stage.py': None,
               'standalone/farm_products.json': 'PROJ:src/standalone/farm_products.json',
-              '_research/ao/ao_existing.py': 'PROJ:src/standalone/ao_existing.py'}      # 0.6.8 xc8: AO only      # 0.6.8: the engine-owned product list (shipped from the project tree)      # ao_ballgrid: A1 (+ ball_blocks)
+              '_research/ao/ao_existing.py': 'PROJ:src/standalone/ao_existing.py',
+              'standalone/seam_stitch.py': 'PROJ:src/standalone/seam_stitch.py'}      # 1.5: Seam stitch only      # 0.6.8 xc8: AO only      # 0.6.8: the engine-owned product list (shipped from the project tree)      # ao_ballgrid: A1 (+ ball_blocks)
 SHELL_NEEDS = ['engine_v373/h2lm-bake.exe', 'engine_v373/bake_params.txt', '_research/ao/dev_AO/bake_params.txt', 'engine_v373/v043-tagwriter/lmw_install.py', 'engine_v373/v014-inject-estimator/gpulm_estimator.dll',
                'engine_v373/v041-fullgpu/fullgpu.exe', '_research/ao/gpu_ao.py', '_research/ao/dev_AO/h2lm-bake.exe',
                '_research/lightprobes/gpu_lightprobes.py', 'standalone/sh_stage.py', 'v043-tagwriter/lmw_tagio.py',

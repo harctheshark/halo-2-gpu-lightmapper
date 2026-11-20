@@ -133,9 +133,11 @@ namespace H2GpuLightmapper
                         case "probes": if (MProbes.Visibility == Visibility.Visible) MProbes.IsChecked = true; break;
                         case "lightmap": MLightmap.IsChecked = true; break;
                         case "aoonly": MAoOnly.IsChecked = true; break;
+                        case "seamstitch": MSeamStitch.IsChecked = true; break;
                         case "stageonly": StageOnlyCheck.IsChecked = true; break;
                         case "responsive": ResponsiveCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "exactvertex": ExactVertexCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
+                        case "stitchseams": StitchSeamsCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "sceneryperm": SceneryPermCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "widefill": FillWideHolesCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
                         case "rebakehint": RebakeHintCheck.IsChecked = true; AdvancedExpander.IsExpanded = true; break;
@@ -718,12 +720,13 @@ namespace H2GpuLightmapper
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (ver != _reuseVersion) return;
-                    bool ok = v != null && v.Allowed;
+                    bool stitch = o.Mode == BakeMode.SeamStitch;          // 1.5 Seam stitch only makes no capture
+                    bool ok = v != null && v.Allowed && !stitch;
                     _suppress = true;
                     ReuseCheck.IsEnabled = ok && !_busy;
                     if (!ok) ReuseCheck.IsChecked = false;
                     _suppress = false;
-                    ReuseReason.Text = v == null ? "No capture of this map yet (a new one is made)." : ok ? v.Describe().Replace("reusable: ", "Reusable: ") + (extra != null ? "; " + extra : "") : "Not reusable: " + v.Reason;
+                    ReuseReason.Text = stitch ? "Not used by Seam stitch only (no capture is made)." : v == null ? "No capture of this map yet (a new one is made)." : ok ? v.Describe().Replace("reusable: ", "Reusable: ") + (extra != null ? "; " + extra : "") : "Not reusable: " + v.Reason;
                     ReuseReason.Foreground = ok && v.TagsChanged ? Palette.Warn : Palette.Dim;
                 }));
             });
@@ -735,7 +738,7 @@ namespace H2GpuLightmapper
         {
             if (!IsInitialized) return;
             UpdateOptionUi();
-            if (!_suppress && (sender == QLow || sender == QSuper || sender == QCustom || sender == MStandard || sender == MProbes || sender == MLightmap || sender == MAoOnly)) RefreshReuse();
+            if (!_suppress && (sender == QLow || sender == QSuper || sender == QCustom || sender == MStandard || sender == MProbes || sender == MLightmap || sender == MAoOnly || sender == MSeamStitch)) RefreshReuse();
         }
 
         private void Number_Changed(object sender, TextChangedEventArgs e)
@@ -769,16 +772,18 @@ namespace H2GpuLightmapper
             else if (o.Quality == Quality.Custom) { errors.Add("photons: not a whole number"); o.Photons = -1; }
             if (int.TryParse((RaysBox.Text ?? "").Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out r)) o.Rays = r;
             else if (o.Quality == Quality.Custom) { errors.Add("gather rays: not a whole number"); o.Rays = -1; }
-            o.Mode = MProbes.IsChecked == true ? BakeMode.Probes : MLightmap.IsChecked == true ? BakeMode.Lightmap : MAoOnly.IsChecked == true && !IsMapSource ? BakeMode.AoOnly : BakeMode.Standard;
-            o.Ao = (AoCheck.IsChecked == true || o.Mode == BakeMode.AoOnly) && o.Mode != BakeMode.Probes;
+            o.Mode = MProbes.IsChecked == true ? BakeMode.Probes : MLightmap.IsChecked == true ? BakeMode.Lightmap : MAoOnly.IsChecked == true && !IsMapSource ? BakeMode.AoOnly
+                   : MSeamStitch.IsChecked == true && !IsMapSource ? BakeMode.SeamStitch : BakeMode.Standard;
+            o.Ao = (AoCheck.IsChecked == true || o.Mode == BakeMode.AoOnly) && o.Mode != BakeMode.Probes && o.Mode != BakeMode.SeamStitch;
             if (double.TryParse((AoStrengthBox.Text ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) o.AoStrength = d;
             else if (o.Ao) { errors.Add("AO strength: not a number"); o.AoStrength = double.NaN; }
             if (double.TryParse((AoExponentBox.Text ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) o.AoExponent = d;
             else if (o.Ao) { errors.Add("AO exponent: not a number"); o.AoExponent = double.NaN; }
-            o.ReuseCapture = ReuseCheck.IsChecked == true && ReuseCheck.IsEnabled;
+            o.ReuseCapture = ReuseCheck.IsChecked == true && ReuseCheck.IsEnabled && o.Mode != BakeMode.SeamStitch;     // 1.5: Seam stitch only makes no capture
             o.StageOnly = StageOnlyCheck.IsChecked == true;
             o.Responsive = ResponsiveCheck.IsChecked == true;        // X2
             o.ExactVertexLighting = ExactVertexCheck.IsChecked == true;        // W2 (0.6.3): "2004 Exact Vertex Lighting?" -> gpu_bake -ExactVertexLighting
+            o.StitchSeams = StitchSeamsCheck.IsChecked == true;                // 1.5: "Stitch lightmap seams (Experimental)" -> gpu_bake -StitchSeams
             o.SceneryPermutationFix = SceneryPermCheck.IsChecked == true && SceneryPermCheck.IsEnabled;     // engine-gated: a greyed box is never passed on
             o.FillWideHoles = FillWideHolesCheck.IsChecked == true && FillWideHolesCheck.IsEnabled;         // 1.4.0, engine-gated the same way
             o.RebakeHint = RebakeHintCheck.IsChecked == true;        // 0.6.8: GPULM_SKY_HINT=1, reuse bakes only (BakePlanner.ApplyRebakeHint)
@@ -806,13 +811,17 @@ namespace H2GpuLightmapper
             CustomPanel.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
             bool probesMode = MProbes.IsChecked == true;
             bool aoOnlyMode = MAoOnly.IsChecked == true && !IsMapSource;
+            bool stitchMode = MSeamStitch.IsChecked == true && !IsMapSource;      // 1.5 Seam stitch only: no AO, no capture
+            if (StitchSeamsCheck.ToolTip == null)
+                StitchSeamsCheck.ToolTip = new ToolTip { Content = new TextBlock { Text = BakeOptions.StitchSeamsTip, TextWrapping = TextWrapping.Wrap, MaxWidth = 440 } };
             // AO only IS the AO layer: the box is ticked and fixed while the mode is on, and comes back as the user had it when the mode is left
             if (aoOnlyMode && !_wasAoOnly) { _aoBeforeAoOnly = AoCheck.IsChecked == true; _wasAoOnly = true; }
             if (!aoOnlyMode && _wasAoOnly) { _wasAoOnly = false; _suppress = true; AoCheck.IsChecked = _aoBeforeAoOnly; _suppress = false; }
             if (aoOnlyMode && AoCheck.IsChecked != true) { _suppress = true; AoCheck.IsChecked = true; _suppress = false; }
-            AoCheck.IsEnabled = !probesMode && !aoOnlyMode && !_busy && _aoAvailable;
-            AoPanel.IsEnabled = (AoCheck.IsChecked == true || aoOnlyMode) && !probesMode && !_busy && _aoAvailable;
+            AoCheck.IsEnabled = !probesMode && !aoOnlyMode && !stitchMode && !_busy && _aoAvailable;
+            AoPanel.IsEnabled = (AoCheck.IsChecked == true || aoOnlyMode) && !probesMode && !stitchMode && !_busy && _aoAvailable;
             AoNote.Text = !_aoAvailable ? "Not available in this build (its AO engine is out of date for the lightmap engine)." : probesMode ? "Not available in Lightprobes mode."
+                        : stitchMode ? "Not used by Seam stitch only (run AO only separately)."
                         : aoOnlyMode ? "AO only: added once to the lightmap that is installed now (backed up first). An artistic layer, not CPU-faithful." : "An artistic layer, not CPU-faithful.";
             AoNote.ToolTip = !_aoAvailable ? _aoWhy : null;
             // "Scenery Multi Permutation Fix": enabled only when the engine this quality would run declares -SceneryOwnPermutationOnly
@@ -879,7 +888,8 @@ namespace H2GpuLightmapper
                 var sp = _mapQuery != null && _mapQuery.Ok ? _mapQuery.SingleBspProbePoints : null;
                 pts = sp ?? 0; ptsKnown = sp.HasValue;
             }
-            if (aoOnlyMode) { ModeNotice.Text = "AO only: no lighting is baked. The lightmap that is installed now (ours, the stock tool's or Bungie's) gets ambient occlusion added; if AO is already in it the program asks first."; ModeNotice.Visibility = Visibility.Visible; }
+            if (stitchMode) { ModeNotice.Text = "Seam stitch only (experimental): no lighting is baked and no capture is made. The seams of the lightmap that is installed now (ours, the stock tool's or Bungie's) are stitched, then it is installed (backed up first). Not the original tool's output."; ModeNotice.Visibility = Visibility.Visible; }
+            else if (aoOnlyMode) { ModeNotice.Text = "AO only: no lighting is baked. The lightmap that is installed now (ours, the stock tool's or Bungie's) gets ambient occlusion added; if AO is already in it the program asks first."; ModeNotice.Visibility = Visibility.Visible; }
             else if (MLightmap.IsChecked == true && pts > 0) { ModeNotice.Text = "Resets this BSP's " + pts + " light probes to zero, as `tool lightmaps` does."; ModeNotice.Visibility = Visibility.Visible; }
             else if (MProbes.IsChecked == true && ptsKnown && pts == 0) { ModeNotice.Text = "This BSP has no light probe points."; ModeNotice.Visibility = Visibility.Visible; }
             else if (MStandard.IsChecked == true && pts > 0 && !_host.ProbesEnabled)
