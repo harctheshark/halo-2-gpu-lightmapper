@@ -101,9 +101,9 @@
    {"to": "vertdir_fast.exe", "from": "GLW:engine_v373/vertdir_fast.exe", "role": "vertdir_native", "label": "0.6.12 native vertex-direction builder",
     "expect_md5": "7b1e8cba3c8c2d383ebf9462b2784b98",
     "comment": "0.6.12: build_vertdir.py runs this first (beside it in the INST root) for its default construction; byte-identical vertdir.bin (native/vertdir_fast, built twice identical by build_vertdir_fast.py); any exit other than 0 / 2 runs the Python builder."},
-   {"to": "build_vertdir.py", "from": "GLW:engine_v373/build_vertdir.py", "role": "vertdir", "label": "0.6.11 vertex-direction builder",
-    "expect_md5": "4310233869ceaf768139153f633619ad",
-    "comment": "0.6.11: the INST-root build_vertdir.py is the engine_v377 builder (engine_v373/build_vertdir.py of the GLW root; the per-vertex direction splat reads the per-sample record vdsamp.bin the engine writes and falls back to an offline 17-candidate search; --centre-splat = the 0.6.10 builder). Before 0.6.11 the GLW-root file (1ecba020) shipped."},
+   {"to": "build_vertdir.py", "from": "GLW:engine_v373/build_vertdir.py", "role": "vertdir", "label": "1.5.1 vertex-direction builder",
+    "expect_md5": "915229cbcf69add4c21553faea9f5f40",
+    "comment": "0.6.11: the INST-root build_vertdir.py is the engine_v377 builder (engine_v373/build_vertdir.py of the GLW root; the per-vertex direction splat reads the per-sample record vdsamp.bin the engine writes and falls back to an offline 17-candidate search; --centre-splat = the 0.6.10 builder). Before 0.6.11 the GLW-root file (1ecba020) shipped. 1.5.1 (engine_v392, build/rc151_glw, native/vertdir_fast/patch_build_vertdir_ssn.py; 43102338 -> 915229cb): without --ssn the builder takes the bake's own ssN (the vdsamp.bin header, else raster_globals.bin / GPULM_SS_N / 1) instead of 4, so a Low bake's vdsamp.bin is no longer refused by vertdir_fast.exe (exit 3) and by the Python builder's offline N=4 search."},
    {"to": "standalone/h2v_scenery_bounds.db", "from": "PROJ:tools/payload/data/h2v_scenery_bounds.db", "role": "boundsdb", "label": "design 1 (bounds DB hole)",
     "expect_md5": "6814f29a8210aaa3871b68e8ea659c93",
     "comment": "copied into ROOT by the shell only if ROOT has none (never overwritten). W1 2026-10-20: the source is now a project copy (tools/payload/data, md5 6814f29a = the Osoyoos original, the first timestamped backup the scenery scanner made of the live file): the live H2ROOT:h2v_scenery_bounds.db is now extended by the scanner (53767e0b) and must not be what ships"}
